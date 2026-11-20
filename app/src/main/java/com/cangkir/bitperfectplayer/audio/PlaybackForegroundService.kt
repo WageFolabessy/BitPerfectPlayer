@@ -10,6 +10,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.graphics.Bitmap
 import android.graphics.drawable.Icon
 import android.media.MediaMetadata
 import android.media.session.MediaSession
@@ -21,8 +22,10 @@ import androidx.core.content.ContextCompat
 import com.cangkir.bitperfectplayer.BitPerfectApplication
 import com.cangkir.bitperfectplayer.MainActivity
 import com.cangkir.bitperfectplayer.R
+import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
@@ -30,22 +33,27 @@ import kotlinx.coroutines.launch
 /**
  * Foreground media playback service (`foregroundServiceType="mediaPlayback"`) exposing system
  * `Notification.MediaStyle` and platform `android.media.session.MediaSession` controls
- * (`Play`, `Pause`, `Next`, `Previous`, `Seek`) with zero network dependencies.
+ * (`Play`, `Pause`, `Next`, `Previous`, `Seek`) with local offline artwork and zero network dependencies.
  */
 class PlaybackForegroundService : Service() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     private lateinit var playbackController: PlaybackController
+    private lateinit var albumArtworkLoader: AlbumArtworkLoader
     private lateinit var notificationManager: NotificationManager
     private lateinit var mediaSession: MediaSession
 
     private var isForegroundActive = false
+    private var artworkTrackUri: String? = null
+    private var artworkBitmap: Bitmap? = null
+    private var artworkLoadJob: Job? = null
 
     override fun onCreate() {
         super.onCreate()
         val app = application as BitPerfectApplication
         playbackController = app.container.playbackController
+        albumArtworkLoader = app.container.albumArtworkLoader
         notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
         createNotificationChannel()
@@ -85,6 +93,7 @@ class PlaybackForegroundService : Service() {
 
     override fun onDestroy() {
         playbackController.persistCurrentPositionNow()
+        artworkLoadJob?.cancel()
         serviceScope.cancel()
         runCatching {
             mediaSession.isActive = false
@@ -131,11 +140,41 @@ class PlaybackForegroundService : Service() {
     private fun observePlaybackState() {
         serviceScope.launch {
             playbackController.state.collect { state ->
+                syncArtworkForTrack(state.activeTrack)
                 updateMediaSession(state)
                 if (state.isPlaying) {
                     promoteToForeground(state)
                 } else if (isForegroundActive) {
                     updateNotification(state)
+                }
+            }
+        }
+    }
+
+    private fun syncArtworkForTrack(track: PlaybackTrack?) {
+        val nextUri = track?.uriString
+        if (nextUri == artworkTrackUri) return
+
+        artworkTrackUri = nextUri
+        artworkLoadJob?.cancel()
+
+        if (track == null) {
+            artworkBitmap = null
+            return
+        }
+
+        val cached = albumArtworkLoader.getCachedFromMemory(track, AlbumArtworkLoader.HERO_SIZE_PX)
+        artworkBitmap = cached
+        if (cached != null) return
+
+        artworkLoadJob = serviceScope.launch {
+            val loaded = albumArtworkLoader.loadArtwork(track, AlbumArtworkLoader.HERO_SIZE_PX)
+            if (artworkTrackUri == track.uriString) {
+                artworkBitmap = loaded
+                val latestState = playbackController.state.value
+                updateMediaSession(latestState)
+                if (isForegroundActive) {
+                    updateNotification(latestState)
                 }
             }
         }
@@ -148,6 +187,10 @@ class PlaybackForegroundService : Service() {
             .putString(MediaMetadata.METADATA_KEY_ARTIST, track?.artist ?: "Offline Bit-Perfect Audio")
             .putString(MediaMetadata.METADATA_KEY_ALBUM, track?.album ?: "")
             .putLong(MediaMetadata.METADATA_KEY_DURATION, state.durationMs)
+        val currentArtwork = if (track != null && track.uriString == artworkTrackUri) artworkBitmap else null
+        if (currentArtwork != null && !currentArtwork.isRecycled) {
+            metadataBuilder.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, currentArtwork)
+        }
         mediaSession.setMetadata(metadataBuilder.build())
 
         val sessionState = when (state.engineState.status) {
@@ -258,7 +301,7 @@ class PlaybackForegroundService : Service() {
             .setMediaSession(mediaSession.sessionToken)
             .setShowActionsInCompactView(0, 1, 2)
 
-        return Notification.Builder(this, CHANNEL_ID)
+        val builder = Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_notif_music)
             .setContentTitle(title)
             .setContentText(subtitle)
@@ -270,7 +313,13 @@ class PlaybackForegroundService : Service() {
             .addAction(playPauseAction)
             .addAction(nextAction)
             .setStyle(style)
-            .build()
+
+        val currentArtwork = if (track != null && track.uriString == artworkTrackUri) artworkBitmap else null
+        if (currentArtwork != null && !currentArtwork.isRecycled) {
+            builder.setLargeIcon(currentArtwork)
+        }
+
+        return builder.build()
     }
 
     private fun createServicePendingIntent(action: String, requestCode: Int): PendingIntent {

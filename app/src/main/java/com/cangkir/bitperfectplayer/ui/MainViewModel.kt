@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.cangkir.bitperfectplayer.AppContainer
 import com.cangkir.bitperfectplayer.audio.PlaybackControllerState
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
+import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
 import com.cangkir.bitperfectplayer.library.LibrarySnapshot
 import com.cangkir.bitperfectplayer.lyrics.TrackLyricsState
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -36,6 +37,7 @@ class MainViewModel(
 
     val libraryState: StateFlow<LibrarySnapshot> = container.libraryRepository.librarySnapshot
     val playbackState: StateFlow<PlaybackControllerState> = container.playbackController.state
+    val albumArtworkLoader: AlbumArtworkLoader = container.albumArtworkLoader
 
     /**
      * Single reactive source of truth for favorited track URIs (Room Flow + instant optimistic
@@ -84,6 +86,7 @@ class MainViewModel(
     }
 
     fun refreshLibrary() {
+        container.albumArtworkLoader.clearNegativeCache()
         viewModelScope.launch {
             container.libraryRepository.refreshLibrary()
         }
