@@ -6,7 +6,7 @@ Execute unchecked `[ ]` items sequentially from top to bottom following `AGENTS.
 
 ## Milestone 0: Build Environment Verification & Project Setup
 
-- [ ] **T0.1 — Audit Build Environment & Verify Fresh Project Baseline**
+- [x] **T0.1 — Audit Build Environment & Verify Fresh Project Baseline**
   - Inspect `gradle/gradle-daemon-jvm.properties`, `gradle.properties`, `gradle/libs.versions.toml`, `settings.gradle.kts`, `build.gradle.kts`, `app/build.gradle.kts`, and `app/src/main/keepRules/rules.keep`.
   - Check available JDK(s) and Android SDK environment (`ANDROID_HOME` / `ANDROID_SDK_ROOT`, installed platforms—specifically checking for SDK 37 matching `compileSdk { version = release(37) }`). If `platforms;android-37` is missing and `sdkmanager` is available, attempt to provision it cleanly without modifying `compileSdk`/`targetSdk`. Ensure `local.properties` is never staged or committed.
   - Run `./gradlew testDebugUnitTest` and `./gradlew assembleDebug` on the untouched baseline project.
