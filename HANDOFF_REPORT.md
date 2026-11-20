@@ -100,6 +100,7 @@ Every library added or upgraded in `gradle/libs.versions.toml` uses a permissive
 | `com.google.devtools.ksp` (Gradle Plugin) | `2.3.14` | Kotlin Symbol Processing for Room DAO/Database code generation | Apache 2.0 |
 | `org.jetbrains.kotlinx:kotlinx-coroutines-android` | `1.10.2` | Structured concurrency for audio/library/lyrics I/O | Apache 2.0 |
 | `org.jetbrains.kotlinx:kotlinx-coroutines-test` | `1.10.2` | Deterministic JVM coroutine & DataStore unit testing | Apache 2.0 |
+| `org.robolectric:robolectric` (`testImplementation` only) | `4.18.1` | Headless JVM Compose UI behavioral test execution pinned to API 34 (`@Config(sdk = [34])`) | MIT / Apache 2.0 |
 
 *Media Controls Note:* System media notification (`Notification.MediaStyle`) and `MediaSession` use Android platform APIs (`android.media.session.MediaSession`, `android.app.Notification.MediaStyle`) built into API 26+, adding zero external dependencies.
 
@@ -384,8 +385,26 @@ Implemented metadata disc/track extraction (zero scan regression), scoped contex
   3. Opening `QueueScreen` from inside an Album/Folder/Playlist while idle (auto-prepared paused) vs. while another context plays (non-intrusive one-tap `"Load Queue"` banner) and `Add Track to Queue` search + scope toggle.
   4. Independent sorting across tabs/details (e.g., sorting All Songs by Hi-Res while Album Detail stays `Track # ↑`) with smooth 120 Hz scrolling.
 
+---
 
+## 12. Automated Headless Compose UI Behavioral Tests (`Robolectric 4.18.1` + `@Config(sdk = [34])`)
 
+### Delivered Setup & Behavioral Test Suite
+1. **Robolectric + Compose UI Test Setup (`gradle/libs.versions.toml`, `app/build.gradle.kts`):**
+   - Added `org.robolectric:robolectric:4.18.1` (MIT / Apache 2.0 permissive license) exclusively to `testImplementation`, alongside `testImplementation(platform(libs.androidx.compose.bom))` and `testImplementation(libs.androidx.compose.ui.test.junit4)`.
+   - Configured `testOptions { unitTests { isIncludeAndroidResources = true } }` in `app/build.gradle.kts`.
+   - Pinned Robolectric tests explicitly to `@Config(sdk = [34], application = Application::class)` so they execute deterministically on Android 14 (API 34) under JDK 25 + AGP `9.5.1` + `compileSdk = 37` without requiring an Android emulator or KVM.
+2. **Headless Behavioral UI Test Suite (`app/src/test/java/com/cangkir/bitperfectplayer/ui/BitPerfectUiBehaviorTest.kt` — 6 / 6 passing):**
+   - `hearingSafetyWarningDialog_displaysMandatoryGateAndInvokesExactCallbacks`: Renders `NowPlayingScreen` with `isPendingSafetyWarning = true`, asserts `"Hearing Safety Warning"`, `"Stay in Safe Mode"`, and `"Enable Bit-Perfect"` are displayed, and verifies clicking each button invokes its exact callback (`onDismissSafetyWarning` / `onConfirmBitPerfectWarning`).
+   - `libraryScreen_favoriteHeartTogglePropagatesImmediatelyWhenStateUpdates`: Renders `LibraryScreen`, clicks the favorite heart icon (`"Add Peacemaker to favorites"`), verifies `onToggleFavorite` is invoked with the track, and verifies the semantic description immediately updates to `"Remove Peacemaker from favorites"` when `favoriteTrackUris` updates.
+   - `libraryScreen_rendersExactHzUnitsWithoutKhzOrDuplicateContainerCodecAndShowsDuration`: Renders `LibraryScreen` with a `96,000 Hz` 24-bit FLAC track, verifies `"Peacemaker"`, `"FLAC · 24-bit · 96,000 Hz"`, and `"03:24"` are displayed, and asserts zero nodes contain `"kHz"` or `"FLAC (FLAC)"`.
+   - `playlistsScreen_createPlaylistDialogAcceptsNameAndInvokesCreateCallback`: Renders `PlaylistsScreen` in empty state, clicks `"Create Playlist"`, verifies the `"New Playlist"` dialog opens, enters `"Audiophile Mix"`, clicks `"Create"`, and verifies `onCreatePlaylist("Audiophile Mix")` is invoked.
+   - `trackInfoSheet_displaysExactHzPlayCountAndSha256CopyCallback`: Renders `TrackInfoBottomSheet` with a full `TrackTechnicalInfo` payload, verifies `"96,000 Hz"`, `"24-bit"`, and `"7 plays"` are displayed, and verifies clicking the SHA-256 fingerprint row invokes the clipboard copy callback (`"Copied SHA-256 fingerprint"`).
+   - `sleepTimerSheet_rendersPresetsAndInvokesSelectionCallback`: Renders `SleepTimerBottomSheet`, verifies `"Sleep Timer"` and `"End of current track"` are displayed, and verifies clicking `"30 min"` invokes `onSelectPreset(SleepTimerPreset.MIN_30)` and `onDismiss`.
 
-
-
+### Software Verification (`./gradlew testDebugUnitTest lintDebug assembleDebug`)
+- **JVM Unit + Headless Compose UI Tests:** **134 / 134 passed** across **27 suites** (`0` failed, `0` errors, `0` skipped, `0` `@Ignore`), including **6 / 6** in `BitPerfectUiBehaviorTest`.
+- **Kotlin & KSP Compiler Warnings:** `0` Kotlin warnings, `0` KSP warnings.
+- **Android Lint (`lintDebug`):** **0 errors**, **0 warnings across all `/app/src/` Kotlin, manifest, and resource files**.
+- **Debug APK:** `app/build/outputs/apk/debug/app-debug.apk` (`20.01 MB` / `20,982,352 bytes`).
+- **Strict Offline Privacy Audit (Source + All Merged Debug & UnitTest Manifests):** **PASS** — **0 `android.permission.INTERNET`**, **0 `android.permission.MANAGE_EXTERNAL_STORAGE`**.
