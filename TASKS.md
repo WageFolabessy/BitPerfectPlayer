@@ -124,7 +124,7 @@ Execute unchecked `[ ]` items sequentially from top to bottom following `AGENTS.
 
 ## Milestone 5: Jetpack Compose UI (Dark Theme), Full Wiring, & Final Handoff
 
-- [ ] **T5.1 — Dark Theme & Library Screens**
+- [x] **T5.1 — Dark Theme & Library Screens**
   - Update the existing `app/src/main/java/com/cangkir/bitperfectplayer/ui/theme/{Color.kt, Theme.kt, Type.kt}` files to enforce a cohesive Material 3 Dark Theme, ensuring `>= 48.dp` touch targets for primary controls and accessibility `contentDescription` labels.
   - Build Library screens with tabs/sections for All Songs, Folders, Artists, Albums, Recently Played, and Favorites; SAF folder/file import action; persistent mini-player bar with quick Play/Pause; and clean runtime permission flows for `READ_MEDIA_AUDIO` (API 33+), `READ_EXTERNAL_STORAGE` (API 26–32), and `POST_NOTIFICATIONS` (API 33+).
   - **Verification:** `./gradlew assembleDebug` 100% green.
