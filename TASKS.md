@@ -113,7 +113,7 @@ Execute unchecked `[ ]` items sequentially from top to bottom following `AGENTS.
   - Provide grouped projections for All Songs, Folders, Artists, Albums, Recently Played, and Favorites, handling moved/deleted files gracefully.
   - **Verification:** `./gradlew testDebugUnitTest assembleDebug` 100% green.
 
-- [ ] **T4.2 — `LyricsRepository` (SAF Picker, `.lrc` Auto-Detect, & Manual Editor)**
+- [x] **T4.2 — `LyricsRepository` (SAF Picker, `.lrc` Auto-Detect, & Manual Editor)**
   - Wire `ContentFingerprintGenerator`, `LrcParser`, and the local database:
     - Compute SHA-256 fingerprint for the active track using OOM-safe head/tail reads and look up persisted lyrics.
     - If absent, attempt `.lrc` auto-detection for a matching base filename inside accessible SAF/MediaStore folders, parse it, and persist it.

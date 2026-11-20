@@ -9,6 +9,7 @@ import com.cangkir.bitperfectplayer.data.LocalPersistenceRepository
 import com.cangkir.bitperfectplayer.data.UserPreferencesRepository
 import com.cangkir.bitperfectplayer.library.LocalLibraryRepository
 import com.cangkir.bitperfectplayer.lyrics.AndroidContentFingerprintProvider
+import com.cangkir.bitperfectplayer.lyrics.LyricsRepository
 
 /**
  * Simple manual dependency container scoped to [BitPerfectApplication] (zero reflection/network).
@@ -29,6 +30,14 @@ class AppContainer(context: Context) {
             metadataReader = metadataReader,
             preferencesRepository = preferencesRepository,
             persistenceRepository = persistenceRepository,
+            fingerprintProvider = fingerprintProvider,
+        )
+    }
+    val lyricsRepository: LyricsRepository by lazy {
+        LyricsRepository(
+            context = appContext,
+            persistenceRepository = persistenceRepository,
+            preferencesRepository = preferencesRepository,
             fingerprintProvider = fingerprintProvider,
         )
     }
