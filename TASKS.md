@@ -61,7 +61,7 @@ Execute unchecked `[ ]` items sequentially from top to bottom following `AGENTS.
   - Write JVM unit tests (`PlaybackQueueManagerTest`) covering empty queue, single track, multi-track navigation, shuffle on/off preservation, and all repeat modes.
   - **Verification:** `./gradlew testDebugUnitTest` 100% green.
 
-- [ ] **T2.2 — Hearing Safety & Audio Mode State Machine (`AudioSafetyController`)**
+- [x] **T2.2 — Hearing Safety & Audio Mode State Machine (`AudioSafetyController`)**
   - Implement pure-Kotlin `AudioSafetyController` (zero `android.*` imports) under `app/src/main/java/com/cangkir/bitperfectplayer/audio/`:
     - Always initializes in `SAFE_VOLUME_MODE`.
     - Requesting `BIT_PERFECT_OPT_IN` must emit `REQUIRES_SAFETY_WARNING` whenever `isHardwareVolumeVerified == false`.
