@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Monochrome adaptive icon layer for Android 13+ Material You themed icons -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M54,29.5A24.5,24.5 0,1 1,54 78.5A24.5,24.5 0,1 1,54 29.5Z"
+        android:strokeWidth="2.0"
+        android:strokeColor="#FFFFFFFF" />
+
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M39.2,49A1.9,1.9 0,0 1,41.1 50.9V57.1A1.9,1.9 0,0 1,39.2 59A1.9,1.9 0,0 1,37.3 57.1V50.9A1.9,1.9 0,0 1,39.2 49Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M46.6,43A1.9,1.9 0,0 1,48.5 44.9V63.1A1.9,1.9 0,0 1,46.6 65A1.9,1.9 0,0 1,44.7 63.1V44.9A1.9,1.9 0,0 1,46.6 43Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M54,38A1.9,1.9 0,0 1,55.9 39.9V68.1A1.9,1.9 0,0 1,54 70A1.9,1.9 0,0 1,52.1 68.1V39.9A1.9,1.9 0,0 1,54 38Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M61.4,43A1.9,1.9 0,0 1,63.3 44.9V63.1A1.9,1.9 0,0 1,61.4 65A1.9,1.9 0,0 1,59.5 63.1V44.9A1.9,1.9 0,0 1,61.4 43Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M68.8,49A1.9,1.9 0,0 1,70.7 50.9V57.1A1.9,1.9 0,0 1,68.8 59A1.9,1.9 0,0 1,66.9 57.1V50.9A1.9,1.9 0,0 1,68.8 49Z" />
+</vector>
