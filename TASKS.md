@@ -70,7 +70,7 @@ Execute unchecked `[ ]` items sequentially from top to bottom following `AGENTS.
   - Write strict JVM unit tests (`AudioSafetyControllerTest`) verifying every safety transition.
   - **Verification:** `./gradlew testDebugUnitTest` 100% green.
 
-- [ ] **T2.3 — 6-Stage Audio Diagnostics Model (`AudioDiagnosticMapper`)**
+- [x] **T2.3 — 6-Stage Audio Diagnostics Model (`AudioDiagnosticMapper`)**
   - Implement pure-Kotlin `AudioDiagnosticSnapshot` and `AudioDiagnosticMapper` (zero `android.*` imports) representing all 6 audio stages with explicit `VerificationLevel` tags (`VERIFIED`, `INDICATED`, `UNVERIFIABLE`).
   - Ensure UI status automatically emits an honest fallback label (e.g., *"Clean Native Path — Bit-Perfect Not Supported by OS/Device"*) whenever negotiated mixer behavior is not `MIXER_BEHAVIOR_BIT_PERFECT`, and always marks internal USB-C DAC firmware / analog output as `UNVERIFIABLE` with the maximum claim notice from `SPEC.md` Section 3.5.
   - Write JVM unit tests (`AudioDiagnosticMapperTest`) covering Bit-Perfect active, clean native fallback, and Safe Mode states.
