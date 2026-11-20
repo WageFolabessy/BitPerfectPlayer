@@ -140,4 +140,22 @@ class AudioSafetyControllerTest {
         assertEquals(AudioOutputMode.SAFE_VOLUME_MODE, controller.state().mode)
         assertFalse(controller.state().isUsbAudioConnected)
     }
+
+    @Test
+    fun syncInitialOutputDevice_setsRealDeviceNameWithoutAutoEnablingBitPerfect() {
+        val controller = AudioSafetyController()
+        controller.syncInitialOutputDevice(
+            deviceName = "USB-Audio - Audio hs 2.0 headset",
+            isUsbAudio = true,
+            isHardwareVolumeVerified = false,
+        )
+
+        val state = controller.state()
+        assertEquals(AudioOutputMode.SAFE_VOLUME_MODE, state.mode)
+        assertEquals("USB-Audio - Audio hs 2.0 headset", state.activeDeviceName)
+        assertTrue(state.isUsbAudioConnected)
+        assertFalse(state.isHardwareVolumeVerified)
+        assertFalse(state.isPendingSafetyWarning)
+        assertEquals(null, state.lastAutoPauseReason)
+    }
 }

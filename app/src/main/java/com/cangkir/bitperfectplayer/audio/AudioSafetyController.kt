@@ -213,6 +213,25 @@ class AudioSafetyController {
         currentState = currentState.copy(isHardwareVolumeVerified = verified)
     }
 
+    /**
+     * Synchronizes the initial active output device detected at engine startup while preserving
+     * [AudioOutputMode.SAFE_VOLUME_MODE] and without emitting a spurious auto-pause event.
+     */
+    @Synchronized
+    fun syncInitialOutputDevice(
+        deviceName: String,
+        isUsbAudio: Boolean,
+        isHardwareVolumeVerified: Boolean = false,
+    ) {
+        currentState = currentState.copy(
+            mode = AudioOutputMode.SAFE_VOLUME_MODE,
+            isPendingSafetyWarning = false,
+            isHardwareVolumeVerified = isHardwareVolumeVerified,
+            isUsbAudioConnected = isUsbAudio,
+            activeDeviceName = deviceName.ifBlank { "Device Output" },
+        )
+    }
+
     companion object {
         const val FIXED_VOLUME_WARNING_MESSAGE: String =
             "Hardware volume control is not verified for this output device. " +

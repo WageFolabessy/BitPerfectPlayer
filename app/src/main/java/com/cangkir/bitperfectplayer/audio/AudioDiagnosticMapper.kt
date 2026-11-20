@@ -159,26 +159,26 @@ object AudioDiagnosticMapper {
             } else {
                 ""
             }
-            "${input.decodedPcmEncodingLabel} • ${formatSampleRate(input.decodedSampleRateHz)} • $chLabel (${input.decoderName})$downNote"
+            "${input.decodedPcmEncodingLabel} • ${formatSampleRate(input.decodedSampleRateHz)} • $chLabel • ${input.decoderName}$downNote"
         }
 
         val deviceSummary = "${input.outputDeviceName} (${input.outputConnectionType.displayName})"
 
         val engineSummary = if (isBitPerfectNegotiated) {
-            "Native AudioTrack + API 34+ MIXER_BEHAVIOR_BIT_PERFECT (${input.negotiatedMixerSummary})"
+            "Native AudioTrack • API 34+ ${input.negotiatedMixerSummary}"
         } else {
-            "Clean Native AudioTrack (${input.negotiatedMixerSummary})"
+            "Clean Native AudioTrack • ${input.negotiatedMixerSummary}"
         }
 
-        val volumeModeLabel = when (input.safetyMode) {
-            AudioOutputMode.SAFE_VOLUME_MODE ->
+        val volumeModeLabel = when {
+            input.safetyMode == AudioOutputMode.SAFE_VOLUME_MODE ->
                 "Safe Mode (System Volume Active)"
-            AudioOutputMode.BIT_PERFECT_OPT_IN ->
-                if (input.isHardwareVolumeVerified) {
-                    "Bit-Perfect Opt-In (Hardware Volume Verified)"
-                } else {
-                    "Bit-Perfect Opt-In (Potentially Fixed 100% / 0 dBFS — Unverified HW Volume)"
-                }
+            isBitPerfectNegotiated && input.isHardwareVolumeVerified ->
+                "Bit-Perfect Active (Hardware Volume Verified)"
+            isBitPerfectNegotiated ->
+                "Bit-Perfect Active (Potentially Fixed 100% / 0 dBFS — Unverified HW Volume)"
+            else ->
+                "Bit-Perfect Requested — Fallback Mixer Active (System Volume Active)"
         }
         val dspEqVolumeSummary = "EQ: OFF • DSP: OFF • Normalization: OFF • Crossfade: OFF • $volumeModeLabel"
 

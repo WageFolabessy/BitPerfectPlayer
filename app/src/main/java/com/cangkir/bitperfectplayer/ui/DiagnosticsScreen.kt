@@ -1,7 +1,9 @@
 package com.cangkir.bitperfectplayer.ui
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -19,12 +21,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.HelpOutline
+import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Shield
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -40,6 +45,9 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.cangkir.bitperfectplayer.audio.AudioOutputMode
@@ -53,11 +61,9 @@ import com.cangkir.bitperfectplayer.ui.theme.CoralWarningContainer
 import com.cangkir.bitperfectplayer.ui.theme.EmeraldSafe
 import com.cangkir.bitperfectplayer.ui.theme.EmeraldSafeContainer
 import com.cangkir.bitperfectplayer.ui.theme.IcePrimary
-import com.cangkir.bitperfectplayer.ui.theme.IcePrimaryContainer
 import com.cangkir.bitperfectplayer.ui.theme.OnAmberIndicatedContainer
 import com.cangkir.bitperfectplayer.ui.theme.OnCoralWarningContainer
 import com.cangkir.bitperfectplayer.ui.theme.OnEmeraldSafeContainer
-import com.cangkir.bitperfectplayer.ui.theme.OnIcePrimaryContainer
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -79,6 +85,12 @@ fun DiagnosticsScreen(
             onConfirmBitPerfect = onConfirmBitPerfectWarning,
             onDismissStaySafe = onDismissSafetyWarning,
         )
+    }
+
+    val statusAccent = when {
+        diagnostics.isBitPerfectMixerActive -> IcePrimary
+        isSafe -> EmeraldSafe
+        else -> AmberIndicated
     }
 
     Scaffold(
@@ -118,79 +130,57 @@ fun DiagnosticsScreen(
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            // 1. Live Status Headline & Mode Switcher
+            // 1. Live Status Headline & Unified Segmented Mode Switcher
             item(key = "headline") {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(14.dp),
+                    shape = RoundedCornerShape(16.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                    border = BorderStroke(
-                        width = 1.dp,
-                        color = when {
-                            diagnostics.isBitPerfectMixerActive -> IcePrimary
-                            isSafe -> EmeraldSafe
-                            else -> AmberIndicated
-                        },
-                    ),
+                    border = BorderStroke(1.dp, statusAccent.copy(alpha = 0.6f)),
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                imageVector = if (isSafe) Icons.Filled.Shield else Icons.Filled.GraphicEq,
-                                contentDescription = null,
-                                tint = when {
-                                    diagnostics.isBitPerfectMixerActive -> IcePrimary
-                                    isSafe -> EmeraldSafe
-                                    else -> AmberIndicated
-                                },
-                                modifier = Modifier.size(22.dp),
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = diagnostics.pathStatusHeadline,
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.onSurface,
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            Button(
-                                onClick = onSwitchToSafeMode,
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .sizeIn(minHeight = 48.dp),
-                                colors = if (isSafe) {
-                                    ButtonDefaults.buttonColors(
-                                        containerColor = EmeraldSafeContainer,
-                                        contentColor = OnEmeraldSafeContainer,
-                                    )
-                                } else {
-                                    ButtonDefaults.outlinedButtonColors()
-                                },
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = statusAccent.copy(alpha = 0.16f),
+                                modifier = Modifier.size(38.dp),
                             ) {
-                                Text("Safe Mode")
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = if (isSafe) Icons.Filled.Shield else Icons.Filled.GraphicEq,
+                                        contentDescription = null,
+                                        tint = statusAccent,
+                                        modifier = Modifier.size(20.dp),
+                                    )
+                                }
                             }
-                            Button(
-                                onClick = onRequestBitPerfectMode,
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .sizeIn(minHeight = 48.dp),
-                                colors = if (!isSafe) {
-                                    ButtonDefaults.buttonColors(
-                                        containerColor = IcePrimaryContainer,
-                                        contentColor = OnIcePrimaryContainer,
-                                    )
-                                } else {
-                                    ButtonDefaults.outlinedButtonColors()
-                                },
-                            ) {
-                                Text("Bit-Perfect Opt-In")
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = when {
+                                        diagnostics.isBitPerfectMixerActive -> "BIT-PERFECT HAL ACTIVE"
+                                        isSafe -> "SAFE MODE ACTIVE"
+                                        else -> "CLEAN NATIVE FALLBACK"
+                                    },
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = statusAccent,
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = diagnostics.pathStatusHeadline,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
                             }
                         }
+                        Spacer(modifier = Modifier.height(14.dp))
+                        AudioModeSegmentedSwitch(
+                            mode = safetyState.mode,
+                            isBitPerfectMixerActive = diagnostics.isBitPerfectMixerActive,
+                            onSwitchToSafeMode = onSwitchToSafeMode,
+                            onRequestBitPerfectMode = onRequestBitPerfectMode,
+                        )
                     }
                 }
             }
@@ -199,8 +189,9 @@ fun DiagnosticsScreen(
             item(key = "realtime_summary") {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(14.dp),
+                    shape = RoundedCornerShape(16.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.28f)),
                 ) {
                     Column(
                         modifier = Modifier.padding(16.dp),
@@ -209,30 +200,58 @@ fun DiagnosticsScreen(
                         Text(
                             text = "Real-Time Signal Summary",
                             style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
                             color = MaterialTheme.colorScheme.onSurface,
                         )
-                        DiagnosticKeyValueRow(label = "Source Format", value = diagnostics.sourceFormatSummary)
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
-                        DiagnosticKeyValueRow(label = "Decoded PCM", value = diagnostics.decodedPcmSummary)
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
-                        DiagnosticKeyValueRow(label = "Output Device", value = diagnostics.activeOutputDeviceSummary)
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
-                        DiagnosticKeyValueRow(label = "Engine & Mixer", value = diagnostics.activeEngineAndMixerSummary)
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
-                        DiagnosticKeyValueRow(label = "DSP / EQ / Volume", value = diagnostics.dspEqVolumeStatusSummary)
+                        DiagnosticKeyValueRow(
+                            icon = Icons.Filled.AudioFile,
+                            label = "Source Format",
+                            value = diagnostics.sourceFormatSummary,
+                        )
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.18f))
+                        DiagnosticKeyValueRow(
+                            icon = Icons.Filled.Memory,
+                            label = "Decoded PCM",
+                            value = diagnostics.decodedPcmSummary,
+                        )
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.18f))
+                        DiagnosticKeyValueRow(
+                            icon = Icons.Filled.Headphones,
+                            label = "Output Device",
+                            value = diagnostics.activeOutputDeviceSummary,
+                        )
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.18f))
+                        DiagnosticKeyValueRow(
+                            icon = Icons.Filled.Tune,
+                            label = "Engine & Mixer",
+                            value = diagnostics.activeEngineAndMixerSummary,
+                        )
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.18f))
+                        DiagnosticKeyValueRow(
+                            icon = Icons.Filled.Equalizer,
+                            label = "DSP / EQ / Volume",
+                            value = diagnostics.dspEqVolumeStatusSummary,
+                        )
                     }
                 }
             }
 
-            // 3. Confidence Legend
+            // 3. Confidence Legend & Section Header
             item(key = "legend") {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    VerificationBadge(VerificationLevel.VERIFIED)
-                    VerificationBadge(VerificationLevel.INDICATED)
-                    VerificationBadge(VerificationLevel.UNVERIFIABLE)
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "6-Stage Audio Signal Chain",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        VerificationBadge(VerificationLevel.VERIFIED)
+                        VerificationBadge(VerificationLevel.INDICATED)
+                        VerificationBadge(VerificationLevel.UNVERIFIABLE)
+                    }
                 }
             }
 
@@ -245,9 +264,9 @@ fun DiagnosticsScreen(
             item(key = "claim_notice") {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(14.dp),
+                    shape = RoundedCornerShape(16.dp),
                     colors = CardDefaults.cardColors(containerColor = CoralWarningContainer),
-                    border = BorderStroke(1.dp, CoralWarning.copy(alpha = 0.6f)),
+                    border = BorderStroke(1.dp, CoralWarning.copy(alpha = 0.55f)),
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -261,6 +280,7 @@ fun DiagnosticsScreen(
                             Text(
                                 text = "Maximum Verification Claim Boundary",
                                 style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold,
                                 color = OnCoralWarningContainer,
                             )
                         }
@@ -279,58 +299,109 @@ fun DiagnosticsScreen(
 
 @Composable
 private fun DiagnosticKeyValueRow(
+    icon: ImageVector,
     label: String,
     value: String,
 ) {
-    Column(modifier = Modifier.fillMaxWidth()) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.primary,
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f),
+            modifier = Modifier
+                .padding(top = 2.dp)
+                .size(16.dp),
         )
-        Spacer(modifier = Modifier.height(2.dp))
-        Text(
-            text = value,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurface,
-        )
+        Spacer(modifier = Modifier.width(10.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = value,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+        }
     }
 }
 
 @Composable
 private fun DiagnosticStageCard(entry: DiagnosticStageEntry) {
+    val tierAccent: Color = when (entry.verificationLevel) {
+        VerificationLevel.VERIFIED -> EmeraldSafe
+        VerificationLevel.INDICATED -> AmberIndicated
+        VerificationLevel.UNVERIFIABLE -> CoralWarning
+    }
+
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.25f)),
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
+            // Top bar: STAGE pill on left, confidence badge on right (zero title wrapping collisions)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                Text(
-                    text = "Stage ${entry.stage.stageNumber}: ${entry.stage.title}",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.weight(1f),
-                )
-                Spacer(modifier = Modifier.width(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(width = 3.dp, height = 14.dp)
+                            .clip(RoundedCornerShape(2.dp))
+                            .background(tierAccent),
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "STAGE ${entry.stage.stageNumber}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = tierAccent,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
                 VerificationBadge(level = entry.verificationLevel)
             }
+
             Spacer(modifier = Modifier.height(6.dp))
+
+            Text(
+                text = entry.stage.title,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+
+            Spacer(modifier = Modifier.height(4.dp))
+
             Text(
                 text = entry.summary,
                 style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.92f),
             )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = entry.detail,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.65f),
+            ) {
+                Text(
+                    text = entry.detail,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                )
+            }
         }
     }
 }

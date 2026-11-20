@@ -157,6 +157,13 @@ class LocalLibraryRepository(
             add(MediaStore.Audio.Media.DURATION)
             add(MediaStore.Audio.Media.SIZE)
             add(MediaStore.Audio.Media.MIME_TYPE)
+            add(MediaStore.Audio.Media.IS_MUSIC)
+            add(MediaStore.Audio.Media.IS_RINGTONE)
+            add(MediaStore.Audio.Media.IS_ALARM)
+            add(MediaStore.Audio.Media.IS_NOTIFICATION)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                add(MediaStore.Audio.Media.IS_RECORDING)
+            }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 add(MediaStore.Audio.Media.RELATIVE_PATH)
                 add(MediaStore.Audio.Media.BUCKET_DISPLAY_NAME)
@@ -166,7 +173,14 @@ class LocalLibraryRepository(
             }
         }.toTypedArray()
 
-        val selection = "${MediaStore.Audio.Media.IS_MUSIC} != 0 OR ${MediaStore.Audio.Media.DURATION} > 0"
+        val selection = buildString {
+            append("${MediaStore.Audio.Media.IS_RINGTONE} = 0 ")
+            append("AND ${MediaStore.Audio.Media.IS_ALARM} = 0 ")
+            append("AND ${MediaStore.Audio.Media.IS_NOTIFICATION} = 0")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                append(" AND ${MediaStore.Audio.Media.IS_RECORDING} = 0")
+            }
+        }
         val sortOrder = "${MediaStore.Audio.Media.TITLE} ASC"
 
         try {
@@ -185,6 +199,15 @@ class LocalLibraryRepository(
                 val durationCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
                 val sizeCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.SIZE)
                 val mimeCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.MIME_TYPE)
+                val isMusicCol = cursor.getColumnIndex(MediaStore.Audio.Media.IS_MUSIC)
+                val isRingtoneCol = cursor.getColumnIndex(MediaStore.Audio.Media.IS_RINGTONE)
+                val isAlarmCol = cursor.getColumnIndex(MediaStore.Audio.Media.IS_ALARM)
+                val isNotificationCol = cursor.getColumnIndex(MediaStore.Audio.Media.IS_NOTIFICATION)
+                val isRecordingCol = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    cursor.getColumnIndex(MediaStore.Audio.Media.IS_RECORDING)
+                } else {
+                    -1
+                }
 
                 val relPathCol = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     cursor.getColumnIndex(MediaStore.Audio.Media.RELATIVE_PATH)
@@ -210,7 +233,26 @@ class LocalLibraryRepository(
                     val format = AudioFormatClassifier.classify(displayName, mimeType) ?: continue
 
                     val sizeBytes = cursor.getLong(sizeCol).coerceAtLeast(0L)
-                    if (sizeBytes == 0L) continue
+                    val durationMs = cursor.getLong(durationCol).coerceAtLeast(0L)
+                    val relativePath = if (relPathCol >= 0) cursor.getString(relPathCol)?.trim() else null
+                    val bucketName = if (bucketCol >= 0) cursor.getString(bucketCol)?.trim() else null
+                    val legacyDataPath = if (dataCol >= 0) cursor.getString(dataCol)?.trim() else null
+
+                    val scanCandidate = MediaScanFilter.MediaStoreScanCandidate(
+                        displayName = displayName,
+                        relativePath = relativePath,
+                        legacyDataPath = legacyDataPath,
+                        bucketName = bucketName,
+                        durationMs = durationMs,
+                        sizeBytes = sizeBytes,
+                        format = format,
+                        isMusic = isMusicCol < 0 || cursor.getInt(isMusicCol) != 0,
+                        isRingtone = isRingtoneCol >= 0 && cursor.getInt(isRingtoneCol) != 0,
+                        isAlarm = isAlarmCol >= 0 && cursor.getInt(isAlarmCol) != 0,
+                        isNotification = isNotificationCol >= 0 && cursor.getInt(isNotificationCol) != 0,
+                        isRecording = isRecordingCol >= 0 && cursor.getInt(isRecordingCol) != 0,
+                    )
+                    if (!MediaScanFilter.shouldIncludeInAutoScan(scanCandidate)) continue
 
                     val contentUri = ContentUris.withAppendedId(
                         MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
@@ -220,17 +262,10 @@ class LocalLibraryRepository(
                     val rawTitle = cursor.getString(titleCol)?.trim()
                     val rawArtist = cursor.getString(artistCol)?.trim()
                     val rawAlbum = cursor.getString(albumCol)?.trim()
-                    val durationMs = cursor.getLong(durationCol).coerceAtLeast(0L)
 
-                    val relativePath = if (relPathCol >= 0) cursor.getString(relPathCol)?.trim() else null
-                    val bucketName = if (bucketCol >= 0) cursor.getString(bucketCol)?.trim() else null
-                    val legacyFolder = if (dataCol >= 0) {
-                        cursor.getString(dataCol)
-                            ?.substringBeforeLast('/', "")
-                            ?.substringAfterLast('/', "")
-                    } else {
-                        null
-                    }
+                    val legacyFolder = legacyDataPath
+                        ?.substringBeforeLast('/', "")
+                        ?.substringAfterLast('/', "")
                     val folderName = bucketName?.takeIf { it.isNotEmpty() }
                         ?: relativePath?.trimEnd('/')?.substringAfterLast('/')?.takeIf { it.isNotEmpty() }
                         ?: legacyFolder?.takeIf { it.isNotEmpty() }
@@ -245,7 +280,7 @@ class LocalLibraryRepository(
                     val cleanAlbum = rawAlbum?.takeIf { it.isNotEmpty() && !it.equals("<unknown>", true) }
                         ?: "Unknown Album"
 
-                    // For lossless WAV/FLAC, read exact header bit depth & sample rate lazily if fast.
+                    // For lossless WAV/FLAC, read exact header bit depth & sample rate.
                     var sampleRate = 0
                     var bitDepth: Int? = null
                     var resolvedDuration = durationMs

@@ -81,6 +81,9 @@ class AudioDiagnosticMapperTest {
 
         assertFalse(snapshot.isBitPerfectMixerActive)
         assertEquals(AudioDiagnosticMapper.FALLBACK_UNSUPPORTED_LABEL, snapshot.pathStatusHeadline)
+        assertTrue(snapshot.dspEqVolumeStatusSummary.contains("System Volume Active"))
+        assertFalse(snapshot.dspEqVolumeStatusSummary.contains("Fixed 100%"))
+        assertFalse(snapshot.activeEngineAndMixerSummary.contains("))"))
         assertEquals(VerificationLevel.UNVERIFIABLE, snapshot.stages.last().verificationLevel)
     }
 
