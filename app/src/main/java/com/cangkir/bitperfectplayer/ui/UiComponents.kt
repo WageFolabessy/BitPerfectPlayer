@@ -53,6 +53,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.cangkir.bitperfectplayer.audio.AudioFormatFormatter
 import com.cangkir.bitperfectplayer.audio.AudioOutputMode
 import com.cangkir.bitperfectplayer.audio.PlaybackControllerState
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
@@ -63,23 +65,20 @@ import com.cangkir.bitperfectplayer.ui.theme.IcePrimaryContainer
 import com.cangkir.bitperfectplayer.ui.theme.OnAmberIndicatedContainer
 import com.cangkir.bitperfectplayer.ui.theme.OnEmeraldSafeContainer
 import com.cangkir.bitperfectplayer.ui.theme.OnIcePrimaryContainer
-import java.util.Locale
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.StateFlow
 
-fun formatDurationMs(durationMs: Long): String {
-    val totalSeconds = (durationMs.coerceAtLeast(0L) / 1000L)
-    val hours = totalSeconds / 3600L
-    val minutes = (totalSeconds % 3600L) / 60L
-    val seconds = totalSeconds % 60L
-    return if (hours > 0L) {
-        String.format(Locale.US, "%d:%02d:%02d", hours, minutes, seconds)
-    } else {
-        String.format(Locale.US, "%02d:%02d", minutes, seconds)
-    }
-}
+fun formatDurationMs(durationMs: Long): String = AudioFormatFormatter.formatDurationMs(durationMs)
 
 /**
  * Displays local offline album cover art for [track] via [artworkLoader], falling back cleanly to
  * a minimalist monochrome placeholder when no embedded or sibling folder artwork is present.
+ *
+ * Performance guarantees:
+ * - Zero SHA-256 hashing on the Main Thread (`getCachedFromMemory` uses lightweight plain string keys).
+ * - Caches `bitmap.asImageBitmap()` via `remember(currentBitmap)` so wrappers aren't rebuilt.
+ * - Brief 35 ms fling debounce inside `LaunchedEffect` prevents cancelled scroll rows from flooding
+ *   the decode semaphore.
  */
 @Composable
 fun TrackArtworkThumbnail(
@@ -92,8 +91,8 @@ fun TrackArtworkThumbnail(
     placeholderIcon: ImageVector = Icons.Filled.MusicNote,
     contentDescriptionText: String? = null,
 ) {
-    val cacheIdentity = remember(track?.uriString, track?.dateModifiedSeconds, targetSizePx) {
-        if (track == null) "" else "${track.uriString}|${track.dateModifiedSeconds}|$targetSizePx"
+    val cacheIdentity = remember(track?.uriString, track?.album, track?.artist, track?.dateModifiedSeconds, targetSizePx) {
+        if (track == null) "" else artworkLoader.memoryKeyFor(track, targetSizePx)
     }
     var bitmap by remember(cacheIdentity) {
         mutableStateOf<Bitmap?>(
@@ -103,6 +102,7 @@ fun TrackArtworkThumbnail(
 
     LaunchedEffect(cacheIdentity) {
         if (track != null && bitmap == null) {
+            delay(35L)
             bitmap = artworkLoader.loadArtwork(track, targetSizePx)
         }
     }
@@ -123,9 +123,12 @@ fun TrackArtworkThumbnail(
         contentAlignment = Alignment.Center,
     ) {
         val currentBitmap = bitmap
-        if (currentBitmap != null && !currentBitmap.isRecycled) {
+        val imageBitmap = remember(currentBitmap) {
+            if (currentBitmap != null && !currentBitmap.isRecycled) currentBitmap.asImageBitmap() else null
+        }
+        if (imageBitmap != null) {
             Image(
-                bitmap = currentBitmap.asImageBitmap(),
+                bitmap = imageBitmap,
                 contentDescription = contentDescriptionText ?: track?.let { "Album art for ${it.title}" },
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
@@ -253,11 +256,37 @@ fun AudioModeSegmentedSwitch(
 }
 
 /**
+ * Narrow leaf composable collecting 20 Hz playback progress so neither [MiniPlayerBar]'s content
+ * nor host screens recompose during playback.
+ */
+@Composable
+private fun MiniPlayerProgressBar(
+    durationMs: Long,
+    playbackPositionMsFlow: StateFlow<Long>,
+) {
+    val currentPositionMs by playbackPositionMsFlow.collectAsStateWithLifecycle()
+    val progress = if (durationMs > 0L) {
+        (currentPositionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
+    } else {
+        0f
+    }
+    LinearProgressIndicator(
+        progress = { progress },
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(2.dp),
+        color = MaterialTheme.colorScheme.primary,
+        trackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+    )
+}
+
+/**
  * Minimalist persistent bottom mini-player bar with local album art thumbnail and >= 48 dp targets.
  */
 @Composable
 fun MiniPlayerBar(
     playbackState: PlaybackControllerState,
+    playbackPositionMsFlow: StateFlow<Long>,
     artworkLoader: AlbumArtworkLoader,
     onOpenNowPlaying: () -> Unit,
     onTogglePlayPause: () -> Unit,
@@ -265,11 +294,6 @@ fun MiniPlayerBar(
     modifier: Modifier = Modifier,
 ) {
     val track = playbackState.activeTrack ?: return
-    val progress = if (playbackState.durationMs > 0L) {
-        (playbackState.currentPositionMs.toFloat() / playbackState.durationMs.toFloat()).coerceIn(0f, 1f)
-    } else {
-        0f
-    }
 
     Surface(
         modifier = modifier.fillMaxWidth(),
@@ -280,13 +304,9 @@ fun MiniPlayerBar(
                 thickness = 0.5.dp,
                 color = MaterialTheme.colorScheme.outline.copy(alpha = 0.6f),
             )
-            LinearProgressIndicator(
-                progress = { progress },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(2.dp),
-                color = MaterialTheme.colorScheme.primary,
-                trackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+            MiniPlayerProgressBar(
+                durationMs = playbackState.durationMs,
+                playbackPositionMsFlow = playbackPositionMsFlow,
             )
             Row(
                 modifier = Modifier

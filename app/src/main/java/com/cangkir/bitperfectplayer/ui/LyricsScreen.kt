@@ -60,17 +60,23 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.cangkir.bitperfectplayer.audio.PlaybackControllerState
 import com.cangkir.bitperfectplayer.data.LyricsSourceType
+import com.cangkir.bitperfectplayer.lyrics.LrcLine
 import com.cangkir.bitperfectplayer.lyrics.LrcParser
 import com.cangkir.bitperfectplayer.ui.theme.CoralWarning
 import com.cangkir.bitperfectplayer.ui.theme.IcePrimary
 import com.cangkir.bitperfectplayer.ui.theme.IcePrimaryContainer
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LyricsScreen(
     playbackState: PlaybackControllerState,
+    playbackPositionMsFlow: StateFlow<Long>,
     lyricsUiState: LyricsUiState,
     onBack: () -> Unit,
     onImportLrcUri: (android.net.Uri) -> Unit,
@@ -216,7 +222,9 @@ fun LyricsScreen(
         bottomBar = {
             if (activeTrack != null) {
                 LyricsCompactSeekBar(
-                    playbackState = playbackState,
+                    isPlaying = playbackState.isPlaying,
+                    durationMs = playbackState.durationMs,
+                    playbackPositionMsFlow = playbackPositionMsFlow,
                     onTogglePlayPause = onTogglePlayPause,
                     onSeekTo = onSeekTo,
                 )
@@ -242,61 +250,11 @@ fun LyricsScreen(
                     CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
                 }
                 parsed != null && parsed.isSynced && parsed.lines.isNotEmpty() -> {
-                    // Derive active lyric line strictly from AudioOutputEngine's actual playback clock!
-                    val activeIndex = LrcParser.findActiveLineIndex(
+                    SyncedLyricsList(
                         lines = parsed.lines,
-                        positionMs = playbackState.currentPositionMs,
+                        playbackPositionMsFlow = playbackPositionMsFlow,
+                        onSeekTo = onSeekTo,
                     )
-                    val listState = rememberLazyListState()
-                    LaunchedEffect(activeIndex) {
-                        if (activeIndex >= 0) {
-                            val target = (activeIndex - 2).coerceAtLeast(0)
-                            listState.animateScrollToItem(target)
-                        }
-                    }
-
-                    LazyColumn(
-                        state = listState,
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 24.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        itemsIndexed(parsed.lines) { idx, line ->
-                            val isActive = idx == activeIndex
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .background(
-                                        if (isActive) IcePrimaryContainer.copy(alpha = 0.65f) else MaterialTheme.colorScheme.background,
-                                    )
-                                    .clickable { onSeekTo(line.timestampMs) }
-                                    .padding(horizontal = 14.dp, vertical = 10.dp),
-                            ) {
-                                Column {
-                                    Text(
-                                        text = formatDurationMs(line.timestampMs),
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = if (isActive) IcePrimary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                                    )
-                                    Spacer(modifier = Modifier.height(2.dp))
-                                    Text(
-                                        text = line.text.ifBlank { "♪" },
-                                        style = if (isActive) {
-                                            MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
-                                        } else {
-                                            MaterialTheme.typography.bodyLarge
-                                        },
-                                        color = if (isActive) {
-                                            MaterialTheme.colorScheme.onSurface
-                                        } else {
-                                            MaterialTheme.colorScheme.onSurfaceVariant
-                                        },
-                                    )
-                                }
-                            }
-                        }
-                    }
                 }
                 parsed != null && parsed.plainLines.isNotEmpty() -> {
                     // Static scrollable view for untimestamped manual or plain-text lyrics
@@ -332,16 +290,94 @@ fun LyricsScreen(
     }
 }
 
+/**
+ * Isolated synced lyrics list deriving active line strictly from the audio engine's playback
+ * clock via [distinctUntilChanged], so the list recomposes only when the active line changes.
+ */
+@Composable
+private fun SyncedLyricsList(
+    lines: List<LrcLine>,
+    playbackPositionMsFlow: StateFlow<Long>,
+    onSeekTo: (Long) -> Unit,
+) {
+    val activeIndex by remember(lines, playbackPositionMsFlow) {
+        playbackPositionMsFlow
+            .map { posMs -> LrcParser.findActiveLineIndex(lines = lines, positionMs = posMs) }
+            .distinctUntilChanged()
+    }.collectAsStateWithLifecycle(initialValue = -1)
+
+    val listState = rememberLazyListState()
+    LaunchedEffect(activeIndex) {
+        if (activeIndex >= 0) {
+            val target = (activeIndex - 2).coerceAtLeast(0)
+            listState.animateScrollToItem(target)
+        }
+    }
+
+    LazyColumn(
+        state = listState,
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        itemsIndexed(
+            items = lines,
+            contentType = { _, _ -> "lrc_line" },
+        ) { idx, line ->
+            val isActive = idx == activeIndex
+            val timestampLabel = remember(line.timestampMs) { formatDurationMs(line.timestampMs) }
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(
+                        if (isActive) IcePrimaryContainer.copy(alpha = 0.65f) else MaterialTheme.colorScheme.background,
+                    )
+                    .clickable { onSeekTo(line.timestampMs) }
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+            ) {
+                Column {
+                    Text(
+                        text = timestampLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (isActive) IcePrimary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        maxLines = 1,
+                        softWrap = false,
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = line.text.ifBlank { "♪" },
+                        style = if (isActive) {
+                            MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+                        } else {
+                            MaterialTheme.typography.bodyLarge
+                        },
+                        color = if (isActive) {
+                            MaterialTheme.colorScheme.onSurface
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun LyricsCompactSeekBar(
-    playbackState: PlaybackControllerState,
+    isPlaying: Boolean,
+    durationMs: Long,
+    playbackPositionMsFlow: StateFlow<Long>,
     onTogglePlayPause: () -> Unit,
     onSeekTo: (Long) -> Unit,
 ) {
-    val durationMs = playbackState.durationMs.coerceAtLeast(1L)
+    val livePosMs by playbackPositionMsFlow.collectAsStateWithLifecycle()
+    val safeDurationMs = durationMs.coerceAtLeast(1L)
     var scrubbing by remember { mutableStateOf(false) }
     var scrubMs by remember { mutableFloatStateOf(0f) }
-    val displayMs = if (scrubbing) scrubMs.toLong() else playbackState.currentPositionMs.coerceIn(0L, durationMs)
+    val displayMs = if (scrubbing) scrubMs.toLong() else livePosMs.coerceIn(0L, safeDurationMs)
+    val totalLabel = remember(durationMs) { formatDurationMs(durationMs) }
 
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -359,8 +395,8 @@ private fun LyricsCompactSeekBar(
                 modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
             ) {
                 Icon(
-                    imageVector = if (playbackState.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                    contentDescription = if (playbackState.isPlaying) "Pause" else "Play",
+                    imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                    contentDescription = if (isPlaying) "Pause" else "Play",
                 )
             }
             Text(
@@ -371,7 +407,7 @@ private fun LyricsCompactSeekBar(
                 softWrap = false,
             )
             Slider(
-                value = displayMs.toFloat().coerceIn(0f, durationMs.toFloat()),
+                value = displayMs.toFloat().coerceIn(0f, safeDurationMs.toFloat()),
                 onValueChange = {
                     scrubbing = true
                     scrubMs = it
@@ -381,13 +417,13 @@ private fun LyricsCompactSeekBar(
                     scrubbing = false
                     onSeekTo(target)
                 },
-                valueRange = 0f..durationMs.toFloat(),
+                valueRange = 0f..safeDurationMs.toFloat(),
                 modifier = Modifier
                     .weight(1f)
                     .padding(horizontal = 8.dp),
             )
             Text(
-                text = formatDurationMs(playbackState.durationMs),
+                text = totalLabel,
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,

@@ -3,6 +3,9 @@ package com.cangkir.bitperfectplayer.audio
 /**
  * Pure-Kotlin representation of a local playable audio track shared across library, playback,
  * lyrics, artwork caching, and UI layers.
+ *
+ * Precomputes UI display strings (`formatBadge`, `durationLabel`, `artistAlbumLine`) once upon
+ * construction so `LazyColumn` rows perform zero formatting allocations while scrolling.
  */
 data class PlaybackTrack(
     val uriString: String,
@@ -24,14 +27,27 @@ data class PlaybackTrack(
     val relativePath: String? = null,
 ) {
     /**
-     * Subtle non-redundant metadata line using exact Hz units (e.g., `FLAC · 24-bit · 96,000 Hz`).
+     * Precomputed subtle non-redundant metadata line using exact Hz units (e.g., `FLAC · 24-bit · 96,000 Hz`).
      */
-    val formatBadge: String
-        get() = AudioFormatFormatter.formatTrackMetadataLine(
-            container = container,
-            codec = codec,
-            bitDepth = bitDepth,
-            sampleRateHz = sampleRateHz,
-            separator = " · ",
-        )
+    val formatBadge: String = AudioFormatFormatter.formatTrackMetadataLine(
+        container = container,
+        codec = codec,
+        bitDepth = bitDepth,
+        sampleRateHz = sampleRateHz,
+        separator = " · ",
+    )
+
+    /**
+     * Precomputed non-wrapping duration label (`mm:ss` / `h:mm:ss`), or empty when unknown.
+     */
+    val durationLabel: String = if (durationMs > 0L) {
+        AudioFormatFormatter.formatDurationMs(durationMs)
+    } else {
+        ""
+    }
+
+    /**
+     * Precomputed secondary artist/album line for smooth list scrolling.
+     */
+    val artistAlbumLine: String = "$artist · $album"
 }

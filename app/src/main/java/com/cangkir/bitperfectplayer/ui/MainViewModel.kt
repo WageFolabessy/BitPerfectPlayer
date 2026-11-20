@@ -37,6 +37,7 @@ class MainViewModel(
 
     val libraryState: StateFlow<LibrarySnapshot> = container.libraryRepository.librarySnapshot
     val playbackState: StateFlow<PlaybackControllerState> = container.playbackController.state
+    val playbackPositionMs: StateFlow<Long> = container.playbackController.playbackPositionMs
     val albumArtworkLoader: AlbumArtworkLoader = container.albumArtworkLoader
 
     /**

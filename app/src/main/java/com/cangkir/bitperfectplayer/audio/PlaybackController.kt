@@ -21,8 +21,9 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
- * Combined UI-observable playback state unifying queue state, active track, resolved content
- * fingerprint, hardware-clocked playback engine state, safety state, and 6-stage diagnostics.
+ * Combined UI-observable low-frequency playback state unifying queue state, active track, resolved
+ * content fingerprint, playback status, safety state, and 6-stage diagnostics.
+ * High-frequency playback position (~20 Hz) is exposed separately via [PlaybackController.playbackPositionMs].
  */
 data class PlaybackControllerState(
     val queue: QueueSnapshot<PlaybackTrack> = QueueSnapshot(),
@@ -32,9 +33,6 @@ data class PlaybackControllerState(
 ) {
     val isPlaying: Boolean
         get() = engineState.isPlaying
-
-    val currentPositionMs: Long
-        get() = engineState.currentPositionMs
 
     val durationMs: Long
         get() = engineState.durationMs.takeIf { it > 0L } ?: activeTrack?.durationMs ?: 0L
@@ -67,6 +65,8 @@ class PlaybackController(
         PlaybackControllerState(engineState = engine.state.value),
     )
     val state: StateFlow<PlaybackControllerState> = _state.asStateFlow()
+
+    val playbackPositionMs: StateFlow<Long> = engine.playbackPositionMs
 
     private var positionPersistenceJob: Job? = null
     private var fingerprintJob: Job? = null
@@ -162,7 +162,7 @@ class PlaybackController(
     fun play() {
         val active = _state.value.activeTrack ?: queueManager.currentItem ?: return
         if (engine.state.value.activeTrackUri == null) {
-            loadActiveTrack(active, startPositionMs = _state.value.currentPositionMs, autoPlay = true)
+            loadActiveTrack(active, startPositionMs = playbackPositionMs.value, autoPlay = true)
             return
         }
         PlaybackForegroundService.startService(appContext)
@@ -195,7 +195,7 @@ class PlaybackController(
 
     fun previous() {
         // Standard UX: if > 3 seconds into track, restart current track; otherwise go to previous track.
-        if (_state.value.currentPositionMs > 3_000L) {
+        if (playbackPositionMs.value > 3_000L) {
             seekTo(0L)
             return
         }
@@ -382,7 +382,7 @@ class PlaybackController(
                 preferencesRepository.saveLastPlaybackState(
                     trackUri = track.uriString,
                     contentFingerprint = resolvedFp,
-                    positionMs = _state.value.currentPositionMs,
+                    positionMs = playbackPositionMs.value,
                 )
             }
         }
@@ -399,7 +399,7 @@ class PlaybackController(
                     preferencesRepository.saveLastPlaybackState(
                         trackUri = track.uriString,
                         contentFingerprint = snap.activeFingerprint ?: track.contentFingerprint,
-                        positionMs = snap.currentPositionMs,
+                        positionMs = playbackPositionMs.value,
                     )
                 }
             }
@@ -415,12 +415,13 @@ class PlaybackController(
     private fun persistCurrentPositionAsync() {
         val snap = _state.value
         val track = snap.activeTrack ?: return
+        val currentPos = playbackPositionMs.value
         scope.launch(Dispatchers.IO) {
             runCatching {
                 preferencesRepository.saveLastPlaybackState(
                     trackUri = track.uriString,
                     contentFingerprint = snap.activeFingerprint ?: track.contentFingerprint,
-                    positionMs = snap.currentPositionMs,
+                    positionMs = currentPos,
                 )
             }
         }

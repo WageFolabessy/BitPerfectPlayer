@@ -152,7 +152,12 @@ class PlaybackForegroundService : Service() {
         serviceScope.launch {
             playbackController.state.collect { state ->
                 syncArtworkForTrack(state.activeTrack)
-                syncMediaSessionAndNotification(state)
+                syncMediaSessionAndNotification(state, playbackController.playbackPositionMs.value)
+            }
+        }
+        serviceScope.launch {
+            playbackController.playbackPositionMs.collect { positionMs ->
+                syncMediaSessionPlaybackStateOnly(playbackController.state.value, positionMs)
             }
         }
     }
@@ -177,14 +182,20 @@ class PlaybackForegroundService : Service() {
             val loaded = albumArtworkLoader.loadArtwork(track, AlbumArtworkLoader.HERO_SIZE_PX)
             if (artworkTrackUri == track.uriString && loaded !== artworkBitmap) {
                 artworkBitmap = loaded
-                syncMediaSessionAndNotification(playbackController.state.value)
+                syncMediaSessionAndNotification(
+                    playbackController.state.value,
+                    playbackController.playbackPositionMs.value,
+                )
             }
         }
     }
 
-    private fun syncMediaSessionAndNotification(state: PlaybackControllerState) {
+    private fun syncMediaSessionAndNotification(
+        state: PlaybackControllerState,
+        positionMs: Long,
+    ) {
         val artworkToken = resolveArtworkToken(state.activeTrack)
-        syncMediaSessionOnly(state, artworkToken)
+        syncMediaSessionOnly(state, positionMs, artworkToken)
 
         val currentNotificationKey = buildNotificationKey(state, artworkToken)
         when (
@@ -207,6 +218,7 @@ class PlaybackForegroundService : Service() {
 
     private fun syncMediaSessionOnly(
         state: PlaybackControllerState,
+        positionMs: Long = playbackController.playbackPositionMs.value,
         artworkToken: Int = resolveArtworkToken(state.activeTrack),
     ) {
         val track = state.activeTrack
@@ -229,6 +241,14 @@ class PlaybackForegroundService : Service() {
             lastMetadataKey = metadataKey
         }
 
+        syncMediaSessionPlaybackStateOnly(state, positionMs)
+    }
+
+    private fun syncMediaSessionPlaybackStateOnly(
+        state: PlaybackControllerState,
+        positionMs: Long,
+    ) {
+        val track = state.activeTrack
         val nowElapsedMs = SystemClock.elapsedRealtime()
         val playbackSpeed = if (state.isPlaying) 1.0f else 0.0f
         if (
@@ -237,7 +257,7 @@ class PlaybackForegroundService : Service() {
                 status = state.engineState.status,
                 trackUri = track?.uriString,
                 errorMessage = state.engineState.errorMessage,
-                positionMs = state.currentPositionMs,
+                positionMs = positionMs,
                 playbackSpeed = playbackSpeed,
                 nowElapsedMs = nowElapsedMs,
             )
@@ -262,7 +282,7 @@ class PlaybackForegroundService : Service() {
                 .setActions(actions)
                 .setState(
                     sessionState,
-                    state.currentPositionMs,
+                    positionMs,
                     playbackSpeed,
                     nowElapsedMs,
                 )
@@ -274,7 +294,7 @@ class PlaybackForegroundService : Service() {
                 status = state.engineState.status,
                 trackUri = track?.uriString,
                 errorMessage = state.engineState.errorMessage,
-                positionMs = state.currentPositionMs,
+                positionMs = positionMs,
                 playbackSpeed = playbackSpeed,
                 publishedAtElapsedMs = nowElapsedMs,
             )

@@ -167,7 +167,10 @@ fun QueueScreen(
                 .padding(innerPadding),
             contentPadding = PaddingValues(vertical = 4.dp),
         ) {
-            itemsIndexed(queue.items) { index, track ->
+            itemsIndexed(
+                items = queue.items,
+                contentType = { _, _ -> "queue_row" },
+            ) { index, track ->
                 val isCurrent = index == queue.currentIndex
                 Row(
                     modifier = Modifier
@@ -196,7 +199,7 @@ fun QueueScreen(
                             overflow = TextOverflow.Ellipsis,
                         )
                         Text(
-                            text = "${track.artist} · ${track.formatBadge.replace(" • ", " · ")}",
+                            text = "${track.artist} · ${track.formatBadge}",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
@@ -266,7 +269,11 @@ private fun AddTrackToQueueDialog(
                         .heightIn(max = 360.dp),
                     verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
-                    items(libraryTracks, key = { it.uriString }) { track ->
+                    items(
+                        items = libraryTracks,
+                        key = { it.uriString },
+                        contentType = { "dialog_track_row" },
+                    ) { track ->
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -281,7 +288,7 @@ private fun AddTrackToQueueDialog(
                             )
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                text = "${track.artist} · ${track.formatBadge.replace(" • ", " · ")}",
+                                text = "${track.artist} · ${track.formatBadge}",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1,

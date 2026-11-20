@@ -90,6 +90,7 @@ import com.cangkir.bitperfectplayer.ui.theme.AmberIndicated
 import com.cangkir.bitperfectplayer.ui.theme.EmeraldSafe
 import com.cangkir.bitperfectplayer.ui.theme.IcePrimary
 import com.cangkir.bitperfectplayer.ui.theme.TextMuted
+import kotlinx.coroutines.flow.StateFlow
 
 enum class LibraryTab(val label: String) {
     ALL_SONGS("All Songs"),
@@ -106,6 +107,7 @@ fun LibraryScreen(
     libraryState: LibrarySnapshot,
     favoriteTrackUris: Set<String>,
     playbackState: PlaybackControllerState,
+    playbackPositionMsFlow: StateFlow<Long>,
     albumArtworkLoader: AlbumArtworkLoader,
     onRefreshLibrary: () -> Unit,
     onImportFolder: (android.net.Uri) -> Unit,
@@ -120,10 +122,6 @@ fun LibraryScreen(
     onTogglePlayPause: () -> Unit,
     onNext: () -> Unit,
 ) {
-    val isTrackFavorite: (PlaybackTrack) -> Boolean = { track ->
-        track.uriString in favoriteTrackUris ||
-            track.contentFingerprint?.lowercase()?.let { it in libraryState.favoriteFingerprints } == true
-    }
     val context = LocalContext.current
     var selectedTab by rememberSaveable { mutableStateOf(LibraryTab.ALL_SONGS) }
     var searchQuery by rememberSaveable { mutableStateOf("") }
@@ -200,6 +198,11 @@ fun LibraryScreen(
         else -> EmeraldSafe
     }
 
+    val launchImportFolder = remember(folderPickerLauncher) { { folderPickerLauncher.launch(null) } }
+    val launchImportFile = remember(filePickerLauncher) { { filePickerLauncher.launch(arrayOf("audio/*")) } }
+    val onSelectGroup = remember { { group: LibraryGroup -> openedGroupName = group.name } }
+    val onPlayGroup = remember(onPlayTracks) { { group: LibraryGroup -> onPlayTracks(group.tracks, 0) } }
+
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
@@ -245,7 +248,7 @@ fun LibraryScreen(
                 },
                 actions = {
                     IconButton(
-                        onClick = { folderPickerLauncher.launch(null) },
+                        onClick = launchImportFolder,
                         modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
                     ) {
                         Icon(
@@ -255,7 +258,7 @@ fun LibraryScreen(
                         )
                     }
                     IconButton(
-                        onClick = { filePickerLauncher.launch(arrayOf("audio/*")) },
+                        onClick = launchImportFile,
                         modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
                     ) {
                         Icon(
@@ -294,6 +297,7 @@ fun LibraryScreen(
         bottomBar = {
             MiniPlayerBar(
                 playbackState = playbackState,
+                playbackPositionMsFlow = playbackPositionMsFlow,
                 artworkLoader = albumArtworkLoader,
                 onOpenNowPlaying = onOpenNowPlaying,
                 onTogglePlayPause = onTogglePlayPause,
@@ -331,7 +335,7 @@ fun LibraryScreen(
                             permissionLauncher.launch(toRequest)
                         }
                     },
-                    onImportFolderInstead = { folderPickerLauncher.launch(null) },
+                    onImportFolderInstead = launchImportFolder,
                 )
             }
 
@@ -378,12 +382,13 @@ fun LibraryScreen(
                 GroupDetailTrackList(
                     group = openedGroup,
                     activeTrackUri = playbackState.activeTrack?.uriString,
+                    favoriteTrackUris = favoriteTrackUris,
+                    favoriteFingerprints = libraryState.favoriteFingerprints,
                     albumArtworkLoader = albumArtworkLoader,
                     onPlayTracks = onPlayTracks,
                     onEnqueueTrack = onEnqueueTrack,
                     onEnqueueNext = onEnqueueNext,
                     onToggleFavorite = onToggleFavorite,
-                    isTrackFavorite = isTrackFavorite,
                 )
             } else {
                 when (selectedTab) {
@@ -418,16 +423,13 @@ fun LibraryScreen(
                                 "Grant local audio access or import a music folder via SAF."
                             },
                             activeTrackUri = playbackState.activeTrack?.uriString,
+                            favoriteTrackUris = favoriteTrackUris,
+                            favoriteFingerprints = libraryState.favoriteFingerprints,
                             onPlayTracks = onPlayTracks,
                             onEnqueueTrack = onEnqueueTrack,
                             onEnqueueNext = onEnqueueNext,
                             onToggleFavorite = onToggleFavorite,
-                            isTrackFavorite = isTrackFavorite,
-                            onImportFolder = if (searchQuery.isBlank()) {
-                                { folderPickerLauncher.launch(null) }
-                            } else {
-                                null
-                            },
+                            onImportFolder = if (searchQuery.isBlank()) launchImportFolder else null,
                         )
                     }
                     LibraryTab.FOLDERS -> GroupListView(
@@ -436,8 +438,8 @@ fun LibraryScreen(
                         showArtworkThumbnail = false,
                         albumArtworkLoader = albumArtworkLoader,
                         emptyMessage = "No music folders scanned yet.",
-                        onSelectGroup = { openedGroupName = it.name },
-                        onPlayGroup = { onPlayTracks(it.tracks, 0) },
+                        onSelectGroup = onSelectGroup,
+                        onPlayGroup = onPlayGroup,
                     )
                     LibraryTab.ARTISTS -> GroupListView(
                         groups = libraryState.artists,
@@ -445,8 +447,8 @@ fun LibraryScreen(
                         showArtworkThumbnail = false,
                         albumArtworkLoader = albumArtworkLoader,
                         emptyMessage = "No artists found in local library.",
-                        onSelectGroup = { openedGroupName = it.name },
-                        onPlayGroup = { onPlayTracks(it.tracks, 0) },
+                        onSelectGroup = onSelectGroup,
+                        onPlayGroup = onPlayGroup,
                     )
                     LibraryTab.ALBUMS -> GroupListView(
                         groups = libraryState.albums,
@@ -454,8 +456,8 @@ fun LibraryScreen(
                         showArtworkThumbnail = true,
                         albumArtworkLoader = albumArtworkLoader,
                         emptyMessage = "No albums found in local library.",
-                        onSelectGroup = { openedGroupName = it.name },
-                        onPlayGroup = { onPlayTracks(it.tracks, 0) },
+                        onSelectGroup = onSelectGroup,
+                        onPlayGroup = onPlayGroup,
                     )
                     LibraryTab.RECENT -> TrackListView(
                         tracks = libraryState.recentlyPlayed,
@@ -463,11 +465,12 @@ fun LibraryScreen(
                         emptyTitle = "No recently played tracks",
                         emptySubtitle = "Tracks you play appear here locally.",
                         activeTrackUri = playbackState.activeTrack?.uriString,
+                        favoriteTrackUris = favoriteTrackUris,
+                        favoriteFingerprints = libraryState.favoriteFingerprints,
                         onPlayTracks = onPlayTracks,
                         onEnqueueTrack = onEnqueueTrack,
                         onEnqueueNext = onEnqueueNext,
                         onToggleFavorite = onToggleFavorite,
-                        isTrackFavorite = isTrackFavorite,
                         onImportFolder = null,
                     )
                     LibraryTab.FAVORITES -> TrackListView(
@@ -476,11 +479,12 @@ fun LibraryScreen(
                         emptyTitle = "No favorite tracks yet",
                         emptySubtitle = "Tap the heart icon on any track to save it locally.",
                         activeTrackUri = playbackState.activeTrack?.uriString,
+                        favoriteTrackUris = favoriteTrackUris,
+                        favoriteFingerprints = libraryState.favoriteFingerprints,
                         onPlayTracks = onPlayTracks,
                         onEnqueueTrack = onEnqueueTrack,
                         onEnqueueNext = onEnqueueNext,
                         onToggleFavorite = onToggleFavorite,
-                        isTrackFavorite = isTrackFavorite,
                         onImportFolder = null,
                     )
                 }
@@ -685,7 +689,11 @@ private fun GroupListView(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(vertical = 4.dp),
     ) {
-        items(groups, key = { it.name }) { group ->
+        items(
+            items = groups,
+            key = { it.name },
+            contentType = { "group_row" },
+        ) { group ->
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -760,12 +768,13 @@ private fun GroupListView(
 private fun GroupDetailTrackList(
     group: LibraryGroup,
     activeTrackUri: String?,
+    favoriteTrackUris: Set<String>,
+    favoriteFingerprints: Set<String>,
     albumArtworkLoader: AlbumArtworkLoader,
     onPlayTracks: (List<PlaybackTrack>, Int) -> Unit,
     onEnqueueTrack: (PlaybackTrack) -> Unit,
     onEnqueueNext: (PlaybackTrack) -> Unit,
     onToggleFavorite: (PlaybackTrack) -> Unit,
-    isTrackFavorite: (PlaybackTrack) -> Boolean,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         Row(
@@ -799,11 +808,12 @@ private fun GroupDetailTrackList(
             emptyTitle = "Empty group",
             emptySubtitle = "",
             activeTrackUri = activeTrackUri,
+            favoriteTrackUris = favoriteTrackUris,
+            favoriteFingerprints = favoriteFingerprints,
             onPlayTracks = onPlayTracks,
             onEnqueueTrack = onEnqueueTrack,
             onEnqueueNext = onEnqueueNext,
             onToggleFavorite = onToggleFavorite,
-            isTrackFavorite = isTrackFavorite,
             onImportFolder = null,
         )
     }
@@ -816,11 +826,12 @@ private fun TrackListView(
     emptyTitle: String,
     emptySubtitle: String,
     activeTrackUri: String?,
+    favoriteTrackUris: Set<String>,
+    favoriteFingerprints: Set<String>,
     onPlayTracks: (List<PlaybackTrack>, Int) -> Unit,
     onEnqueueTrack: (PlaybackTrack) -> Unit,
     onEnqueueNext: (PlaybackTrack) -> Unit,
     onToggleFavorite: (PlaybackTrack) -> Unit,
-    isTrackFavorite: (PlaybackTrack) -> Boolean,
     onImportFolder: (() -> Unit)?,
 ) {
     if (tracks.isEmpty()) {
@@ -872,132 +883,164 @@ private fun TrackListView(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(bottom = 12.dp),
     ) {
-        itemsIndexed(tracks, key = { _, track -> track.uriString }) { index, track ->
+        itemsIndexed(
+            items = tracks,
+            key = { _, track -> track.uriString },
+            contentType = { _, _ -> "track_row" },
+        ) { index, track ->
             val isActive = track.uriString == activeTrackUri
-            val isFav = isTrackFavorite(track)
-            var menuExpanded by remember { mutableStateOf(false) }
+            val isFav = track.uriString in favoriteTrackUris ||
+                track.contentFingerprint?.lowercase()?.let { it in favoriteFingerprints } == true
 
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(
-                        if (isActive) {
-                            MaterialTheme.colorScheme.surfaceVariant
-                        } else {
-                            Color.Transparent
-                        },
-                    )
-                    .clickable { onPlayTracks(tracks, index) }
-                    .padding(start = 16.dp, end = 2.dp, top = 9.dp, bottom = 9.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                TrackArtworkThumbnail(
-                    track = track,
-                    artworkLoader = albumArtworkLoader,
-                    size = 48.dp,
-                    cornerRadius = 8.dp,
-                    targetSizePx = AlbumArtworkLoader.THUMBNAIL_SIZE_PX,
-                )
-
-                Spacer(modifier = Modifier.width(12.dp))
-
-                Column(modifier = Modifier.weight(1f)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = track.title,
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Medium,
-                            color = if (isActive) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.onSurface
-                            },
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f),
-                        )
-                        if (track.durationMs > 0L) {
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = formatDurationMs(track.durationMs),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = TextMuted,
-                                maxLines = 1,
-                                softWrap = false,
-                            )
-                        }
-                    }
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(
-                        text = "${track.artist} · ${track.album}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(
-                        text = track.formatBadge.replace(" • ", " · "),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = TextMuted,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-
-                IconButton(
-                    onClick = { onToggleFavorite(track) },
-                    modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
-                ) {
-                    Icon(
-                        imageVector = if (isFav) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
-                        contentDescription = if (isFav) "Remove ${track.title} from favorites" else "Add ${track.title} to favorites",
-                        tint = if (isFav) MaterialTheme.colorScheme.primary else TextMuted,
-                        modifier = Modifier.size(20.dp),
-                    )
-                }
-
-                Box {
-                    IconButton(
-                        onClick = { menuExpanded = true },
-                        modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.MoreVert,
-                            contentDescription = "More actions for ${track.title}",
-                            tint = TextMuted,
-                            modifier = Modifier.size(20.dp),
-                        )
-                    }
-                    DropdownMenu(
-                        expanded = menuExpanded,
-                        onDismissRequest = { menuExpanded = false },
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("Play Next") },
-                            onClick = {
-                                menuExpanded = false
-                                onEnqueueNext(track)
-                            },
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Add to Queue") },
-                            onClick = {
-                                menuExpanded = false
-                                onEnqueueTrack(track)
-                            },
-                        )
-                    }
-                }
-            }
+            TrackListRow(
+                track = track,
+                isActive = isActive,
+                isFavorite = isFav,
+                albumArtworkLoader = albumArtworkLoader,
+                onPlay = { onPlayTracks(tracks, index) },
+                onToggleFavorite = onToggleFavorite,
+                onEnqueueNext = onEnqueueNext,
+                onEnqueueTrack = onEnqueueTrack,
+            )
             HorizontalDivider(
                 thickness = 0.5.dp,
                 color = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f),
                 modifier = Modifier.padding(start = 76.dp, end = 16.dp),
             )
+        }
+    }
+}
+
+@Composable
+private fun TrackListRow(
+    track: PlaybackTrack,
+    isActive: Boolean,
+    isFavorite: Boolean,
+    albumArtworkLoader: AlbumArtworkLoader,
+    onPlay: () -> Unit,
+    onToggleFavorite: (PlaybackTrack) -> Unit,
+    onEnqueueNext: (PlaybackTrack) -> Unit,
+    onEnqueueTrack: (PlaybackTrack) -> Unit,
+) {
+    var menuExpanded by remember { mutableStateOf(false) }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(
+                if (isActive) {
+                    MaterialTheme.colorScheme.surfaceVariant
+                } else {
+                    Color.Transparent
+                },
+            )
+            .clickable(onClick = onPlay)
+            .padding(start = 16.dp, end = 2.dp, top = 9.dp, bottom = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        TrackArtworkThumbnail(
+            track = track,
+            artworkLoader = albumArtworkLoader,
+            size = 48.dp,
+            cornerRadius = 8.dp,
+            targetSizePx = AlbumArtworkLoader.THUMBNAIL_SIZE_PX,
+        )
+
+        Spacer(modifier = Modifier.width(12.dp))
+
+        Column(modifier = Modifier.weight(1f)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = track.title,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Medium,
+                    color = if (isActive) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurface
+                    },
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                if (track.durationLabel.isNotEmpty()) {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = track.durationLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = TextMuted,
+                        maxLines = 1,
+                        softWrap = false,
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = track.artistAlbumLine,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = track.formatBadge,
+                style = MaterialTheme.typography.labelSmall,
+                color = TextMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+
+        IconButton(
+            onClick = { onToggleFavorite(track) },
+            modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
+        ) {
+            Icon(
+                imageVector = if (isFavorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+                contentDescription = if (isFavorite) "Remove ${track.title} from favorites" else "Add ${track.title} to favorites",
+                tint = if (isFavorite) MaterialTheme.colorScheme.primary else TextMuted,
+                modifier = Modifier.size(20.dp),
+            )
+        }
+
+        Box {
+            IconButton(
+                onClick = { menuExpanded = true },
+                modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.MoreVert,
+                    contentDescription = "More actions for ${track.title}",
+                    tint = TextMuted,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+            // Only compose DropdownMenu popup state when explicitly opened.
+            if (menuExpanded) {
+                DropdownMenu(
+                    expanded = true,
+                    onDismissRequest = { menuExpanded = false },
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("Play Next") },
+                        onClick = {
+                            menuExpanded = false
+                            onEnqueueNext(track)
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Add to Queue") },
+                        onClick = {
+                            menuExpanded = false
+                            onEnqueueTrack(track)
+                        },
+                    )
+                }
+            }
         }
     }
 }

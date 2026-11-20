@@ -13,7 +13,10 @@ import androidx.core.graphics.scale
 import androidx.core.net.toUri
 import androidx.documentfile.provider.DocumentFile
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
@@ -21,33 +24,54 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.max
 import kotlin.math.roundToInt
 
 /**
- * 100% offline local album cover art extractor & two-tier cache (in-memory [LruCache] + app disk
- * cache under `cacheDir/artwork/`).
+ * 100% offline local album cover art extractor & two-tier cache (in-memory [LruCache] + async
+ * disk cache under `cacheDir/artwork/`).
  *
- * Extraction order (strictly local, zero network):
- * 1. Embedded artwork tags via [MediaMetadataRetriever.getEmbeddedPicture]
- * 2. MediaStore OS thumbnail fallback via `ContentResolver.loadThumbnail` (API 29+ for `content://media/`)
- * 3. SAF sibling cover image fallback (`cover.jpg`, `cover.png`, `folder.jpg`, `front.jpg`, `album.jpg`,
- *    case-insensitive) inside the track's SAF album folder.
+ * Scroll-performance guarantees:
+ * - Zero Main-Thread SHA-256 hashing: memory cache & missing-key checks use lightweight album-level
+ *   plain-string keys (`AlbumArtworkHelper.buildMemoryCacheKey`).
+ * - Album-level deduplication: tracks sharing a valid album name decode and cache only ONE bitmap.
+ * - Fast extraction order: `160px` MediaStore thumbnails try OS-indexed `ContentResolver.loadThumbnail`
+ *   first (avoiding 200-400 ms `MediaMetadataRetriever` Binder calls on large FLACs), while `600px`
+ *   hero artwork prefers full-resolution `MediaMetadataRetriever.embeddedPicture` first.
+ * - Fire-and-forget async disk writes on `Dispatchers.IO` with throttled cache pruning (every 50 writes).
  */
 class AlbumArtworkLoader(context: Context) {
     private val appContext = context.applicationContext
     private val diskCacheDir = File(appContext.cacheDir, ARTWORK_CACHE_DIR)
     private val decodeSemaphore = Semaphore(permits = MAX_CONCURRENT_DECODES)
+    private val diskWriteScope = CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(2))
+    private val diskWriteCounter = AtomicInteger(0)
 
     private val memoryCache: LruCache<String, Bitmap> = createMemoryCache()
     private val missingKeys = ConcurrentHashMap.newKeySet<String>()
     private val folderCoverUriCache = ConcurrentHashMap<String, String>()
 
     /**
-     * Fast synchronous memory lookup for zero-flicker initial Compose rendering.
+     * Lightweight plain-string cache identity key safe to call synchronously on the Main Thread.
+     */
+    fun memoryKeyFor(track: PlaybackTrack, targetSizePx: Int = THUMBNAIL_SIZE_PX): String =
+        AlbumArtworkHelper.buildMemoryCacheKey(
+            trackUri = track.uriString,
+            artist = track.artist,
+            album = track.album,
+            parentTreeUriString = track.parentTreeUriString,
+            folderName = track.folderName,
+            dateModifiedSeconds = track.dateModifiedSeconds,
+            fileSizeBytes = track.fileSizeBytes,
+            targetSizePx = targetSizePx,
+        )
+
+    /**
+     * Fast synchronous memory lookup for zero-flicker initial Compose rendering (zero crypto/IO).
      */
     fun getCachedFromMemory(track: PlaybackTrack, targetSizePx: Int = THUMBNAIL_SIZE_PX): Bitmap? {
-        val key = cacheKeyFor(track, targetSizePx)
+        val key = memoryKeyFor(track, targetSizePx)
         return memoryCache.get(key)
     }
 
@@ -66,34 +90,40 @@ class AlbumArtworkLoader(context: Context) {
      */
     suspend fun loadArtwork(track: PlaybackTrack, targetSizePx: Int = THUMBNAIL_SIZE_PX): Bitmap? {
         val bucket = AlbumArtworkHelper.normalizeSizeBucket(targetSizePx)
-        val key = cacheKeyFor(track, bucket)
+        val memKey = memoryKeyFor(track, bucket)
 
-        memoryCache.get(key)?.let { return it }
-        if (missingKeys.contains(key)) return null
+        memoryCache.get(memKey)?.let { return it }
+        if (missingKeys.contains(memKey)) return null
 
         return withContext(Dispatchers.IO) {
-            memoryCache.get(key)?.let { return@withContext it }
-            if (missingKeys.contains(key)) return@withContext null
+            memoryCache.get(memKey)?.let { return@withContext it }
+            if (missingKeys.contains(memKey)) return@withContext null
 
             decodeSemaphore.withPermit {
-                memoryCache.get(key)?.let { return@withPermit it }
-                if (missingKeys.contains(key)) return@withPermit null
+                memoryCache.get(memKey)?.let { return@withPermit it }
+                if (missingKeys.contains(memKey)) return@withPermit null
+
+                // Compute SHA-256 disk filename hash strictly on Dispatchers.IO.
+                val diskHash = AlbumArtworkHelper.hashKeyForDiskFilename(memKey)
 
                 // 1. Check local disk cache first
-                readFromDiskCache(key, bucket)?.let { cached ->
-                    memoryCache.put(key, cached)
+                readFromDiskCache(diskHash, bucket)?.let { cached ->
+                    memoryCache.put(memKey, cached)
                     return@withPermit cached
                 }
 
-                // 2. Extract from local file tags / MediaStore / SAF sibling image
+                // 2. Extract from local MediaStore thumbnail / embedded tags / SAF sibling image
                 val decoded = extractLocalArtwork(track, bucket)
                 if (decoded != null) {
                     val normalized = constrainMaxDimension(decoded, bucket)
-                    memoryCache.put(key, normalized)
-                    writeToDiskCache(key, normalized)
+                    memoryCache.put(memKey, normalized)
+                    // Persist to disk asynchronously so UI receives the decoded bitmap immediately.
+                    diskWriteScope.launch {
+                        writeToDiskCache(diskHash, normalized)
+                    }
                     normalized
                 } else {
-                    missingKeys.add(key)
+                    missingKeys.add(memKey)
                     null
                 }
             }
@@ -102,13 +132,24 @@ class AlbumArtworkLoader(context: Context) {
 
     private fun extractLocalArtwork(track: PlaybackTrack, bucketPx: Int): Bitmap? {
         val uri = runCatching { track.uriString.toUri() }.getOrNull() ?: return null
+        val isMediaStore = isMediaStoreUri(uri)
+        val preferThumbnailFirst = AlbumArtworkHelper.shouldPreferMediaStoreThumbnailFirst(
+            targetSizePx = bucketPx,
+            isMediaStoreUri = isMediaStore,
+            supportsApi29LoadThumbnail = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q,
+        )
 
-        // Primary: embedded picture from FLAC/MP3/M4A/OGG/WAV audio tags
-        extractEmbeddedPicture(uri, bucketPx)?.let { return it }
-
-        // Secondary: MediaStore OS thumbnail loader on API 29+ for content://media/ tracks
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && isMediaStoreUri(uri)) {
+        if (preferThumbnailFirst) {
+            // Fast path for list/mini-player 160px thumbnails on MediaStore: try OS-indexed thumbnail first.
             extractMediaStoreThumbnail(uri, bucketPx)?.let { return it }
+            // Fallback to embedded tags only if MediaStore did not have a cached thumbnail.
+            extractEmbeddedPicture(uri, bucketPx)?.let { return it }
+        } else {
+            // Hero (600px) & SAF/legacy path: prefer full-resolution embedded tags first.
+            extractEmbeddedPicture(uri, bucketPx)?.let { return it }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && isMediaStore) {
+                extractMediaStoreThumbnail(uri, bucketPx)?.let { return it }
+            }
         }
 
         // Tertiary: SAF sibling cover image in the same folder
@@ -169,7 +210,6 @@ class AlbumArtworkLoader(context: Context) {
     }
 
     private fun findSiblingCoverUri(treeUri: Uri, parentDocId: String?): Uri? {
-        // Fast O(1) directory child query using DocumentsContract when parent document ID is known.
         if (!parentDocId.isNullOrBlank()) {
             val childrenUri = runCatching {
                 DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentDocId)
@@ -210,7 +250,6 @@ class AlbumArtworkLoader(context: Context) {
             }
         }
 
-        // Fallback: inspect immediate children of the persisted SAF tree root.
         val rootDoc = runCatching { DocumentFile.fromTreeUri(appContext, treeUri) }.getOrNull()
             ?: return null
         val children = runCatching { rootDoc.listFiles() }.getOrDefault(emptyArray())
@@ -279,8 +318,8 @@ class AlbumArtworkLoader(context: Context) {
         }.getOrDefault(bitmap)
     }
 
-    private fun readFromDiskCache(key: String, targetSizePx: Int): Bitmap? {
-        val file = File(diskCacheDir, "$key.jpg")
+    private fun readFromDiskCache(diskHash: String, targetSizePx: Int): Bitmap? {
+        val file = File(diskCacheDir, "$diskHash.jpg")
         if (!file.isFile || file.length() <= 0L) return null
         return runCatching {
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -300,20 +339,24 @@ class AlbumArtworkLoader(context: Context) {
         }.getOrNull()
     }
 
-    private fun writeToDiskCache(key: String, bitmap: Bitmap) {
+    private fun writeToDiskCache(diskHash: String, bitmap: Bitmap) {
+        if (bitmap.isRecycled) return
         runCatching {
             if (!diskCacheDir.exists()) {
                 diskCacheDir.mkdirs()
             }
-            val finalFile = File(diskCacheDir, "$key.jpg")
-            val tempFile = File(diskCacheDir, "$key.tmp")
+            val finalFile = File(diskCacheDir, "$diskHash.jpg")
+            val tempFile = File(diskCacheDir, "$diskHash.tmp")
             FileOutputStream(tempFile).use { stream ->
                 bitmap.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, stream)
             }
             if (!tempFile.renameTo(finalFile)) {
                 tempFile.delete()
             }
-            pruneDiskCacheIfOversized()
+            val writeCount = diskWriteCounter.incrementAndGet()
+            if (AlbumArtworkHelper.shouldPruneDiskCache(writeCount)) {
+                pruneDiskCacheIfOversized()
+            }
         }
     }
 
@@ -326,14 +369,6 @@ class AlbumArtworkLoader(context: Context) {
             sortedOldestFirst[i].delete()
         }
     }
-
-    private fun cacheKeyFor(track: PlaybackTrack, targetSizePx: Int): String =
-        AlbumArtworkHelper.buildCacheKey(
-            trackUri = track.uriString,
-            dateModifiedSeconds = track.dateModifiedSeconds,
-            fileSizeBytes = track.fileSizeBytes,
-            targetSizePx = targetSizePx,
-        )
 
     private fun isMediaStoreUri(uri: Uri): Boolean =
         uri.scheme == "content" && uri.authority == "media"

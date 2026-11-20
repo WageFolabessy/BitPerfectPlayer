@@ -54,6 +54,7 @@ fun BitPerfectAppRoot(
                     libraryState = libraryState,
                     favoriteTrackUris = favoriteTrackUris,
                     playbackState = playbackState,
+                    playbackPositionMsFlow = viewModel.playbackPositionMs,
                     albumArtworkLoader = viewModel.albumArtworkLoader,
                     onRefreshLibrary = viewModel::refreshLibrary,
                     onImportFolder = viewModel::importSafFolder,
@@ -86,6 +87,7 @@ fun BitPerfectAppRoot(
                     )
                 NowPlayingScreen(
                     playbackState = playbackState,
+                    playbackPositionMsFlow = viewModel.playbackPositionMs,
                     albumArtworkLoader = viewModel.albumArtworkLoader,
                     isFavorite = isFav,
                     onBack = { navController.popBackStack() },
@@ -132,6 +134,7 @@ fun BitPerfectAppRoot(
             composable(Routes.LYRICS) {
                 LyricsScreen(
                     playbackState = playbackState,
+                    playbackPositionMsFlow = viewModel.playbackPositionMs,
                     lyricsUiState = lyricsUiState,
                     onBack = { navController.popBackStack() },
                     onImportLrcUri = viewModel::importLrcForActiveTrack,

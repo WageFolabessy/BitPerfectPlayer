@@ -73,6 +73,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.cangkir.bitperfectplayer.audio.AudioOutputMode
 import com.cangkir.bitperfectplayer.audio.AudioSafetyController
 import com.cangkir.bitperfectplayer.audio.PlaybackControllerState
@@ -90,11 +91,13 @@ import com.cangkir.bitperfectplayer.ui.theme.OnAmberIndicatedContainer
 import com.cangkir.bitperfectplayer.ui.theme.OnCoralWarningContainer
 import com.cangkir.bitperfectplayer.ui.theme.OnEmeraldSafeContainer
 import com.cangkir.bitperfectplayer.ui.theme.TextMuted
+import kotlinx.coroutines.flow.StateFlow
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NowPlayingScreen(
     playbackState: PlaybackControllerState,
+    playbackPositionMsFlow: StateFlow<Long>,
     albumArtworkLoader: AlbumArtworkLoader,
     isFavorite: Boolean,
     onBack: () -> Unit,
@@ -119,10 +122,7 @@ fun NowPlayingScreen(
     val safetyState = playbackState.engineState.safetyState
     val diagnostics = playbackState.engineState.diagnostics
     val durationMs = playbackState.durationMs.coerceAtLeast(0L)
-    val currentPosMs = playbackState.currentPositionMs.coerceIn(0L, durationMs.coerceAtLeast(1L))
 
-    var isScrubbing by remember { mutableStateOf(false) }
-    var scrubPositionMs by remember { mutableFloatStateOf(0f) }
     var showAudioModeSheet by remember { mutableStateOf(false) }
 
     // Mandatory Hearing Safety Warning Dialog before activating potentially fixed-volume Bit-Perfect Mode.
@@ -262,10 +262,12 @@ fun NowPlayingScreen(
             isSafe -> "Safe Mode"
             else -> "Clean Native"
         }
-        val formatSpecText = diagnostics.sourceFormatSummary
-            .takeIf { it != "No active track loaded" }
-            ?.replace(" • ", " · ")
-            ?: track.formatBadge.replace(" • ", " · ")
+        val formatSpecText = remember(diagnostics.sourceFormatSummary, track.formatBadge) {
+            diagnostics.sourceFormatSummary
+                .takeIf { it != "No active track loaded" }
+                ?.replace(" • ", " · ")
+                ?: track.formatBadge
+        }
 
         Column(
             modifier = Modifier
@@ -314,7 +316,7 @@ fun NowPlayingScreen(
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "${track.artist} · ${track.album}",
+                text = track.artistAlbumLine,
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
@@ -337,47 +339,12 @@ fun NowPlayingScreen(
 
             Spacer(modifier = Modifier.height(18.dp))
 
-            // Seekable Progress Slider + Non-Wrapping Timestamps
-            val displayedPosMs = if (isScrubbing) scrubPositionMs.toLong() else currentPosMs
-            val sliderMax = durationMs.coerceAtLeast(1L).toFloat()
-            Slider(
-                value = displayedPosMs.toFloat().coerceIn(0f, sliderMax),
-                onValueChange = { newVal ->
-                    isScrubbing = true
-                    scrubPositionMs = newVal
-                },
-                onValueChangeFinished = {
-                    val target = scrubPositionMs.toLong()
-                    isScrubbing = false
-                    onSeekTo(target)
-                },
-                valueRange = 0f..sliderMax,
-                colors = SliderDefaults.colors(
-                    thumbColor = MaterialTheme.colorScheme.onSurface,
-                    activeTrackColor = MaterialTheme.colorScheme.primary,
-                    inactiveTrackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                ),
-                modifier = Modifier.fillMaxWidth(),
+            // Isolated 20 Hz Seekable Progress Leaf (hero art & controls do NOT recompose on ticks)
+            NowPlayingSeekSection(
+                durationMs = durationMs,
+                playbackPositionMsFlow = playbackPositionMsFlow,
+                onSeekTo = onSeekTo,
             )
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Text(
-                    text = formatDurationMs(displayedPosMs),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = TextMuted,
-                    maxLines = 1,
-                    softWrap = false,
-                )
-                Text(
-                    text = formatDurationMs(durationMs),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = TextMuted,
-                    maxLines = 1,
-                    softWrap = false,
-                )
-            }
 
             Spacer(modifier = Modifier.height(14.dp))
 
@@ -578,6 +545,65 @@ fun NowPlayingScreen(
                 }
             }
         }
+    }
+}
+
+/**
+ * Narrow leaf composable collecting 20 Hz playback position so Now Playing's hero artwork,
+ * metadata, transport controls, and audio-mode strip never recompose during playback.
+ */
+@Composable
+private fun NowPlayingSeekSection(
+    durationMs: Long,
+    playbackPositionMsFlow: StateFlow<Long>,
+    onSeekTo: (Long) -> Unit,
+) {
+    val livePositionMs by playbackPositionMsFlow.collectAsStateWithLifecycle()
+    val currentPosMs = livePositionMs.coerceIn(0L, durationMs.coerceAtLeast(1L))
+    var isScrubbing by remember { mutableStateOf(false) }
+    var scrubPositionMs by remember { mutableFloatStateOf(0f) }
+
+    val displayedPosMs = if (isScrubbing) scrubPositionMs.toLong() else currentPosMs
+    val sliderMax = durationMs.coerceAtLeast(1L).toFloat()
+    val durationLabel = remember(durationMs) { formatDurationMs(durationMs) }
+
+    Slider(
+        value = displayedPosMs.toFloat().coerceIn(0f, sliderMax),
+        onValueChange = { newVal ->
+            isScrubbing = true
+            scrubPositionMs = newVal
+        },
+        onValueChangeFinished = {
+            val target = scrubPositionMs.toLong()
+            isScrubbing = false
+            onSeekTo(target)
+        },
+        valueRange = 0f..sliderMax,
+        colors = SliderDefaults.colors(
+            thumbColor = MaterialTheme.colorScheme.onSurface,
+            activeTrackColor = MaterialTheme.colorScheme.primary,
+            inactiveTrackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+        ),
+        modifier = Modifier.fillMaxWidth(),
+    )
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Text(
+            text = formatDurationMs(displayedPosMs),
+            style = MaterialTheme.typography.labelSmall,
+            color = TextMuted,
+            maxLines = 1,
+            softWrap = false,
+        )
+        Text(
+            text = durationLabel,
+            style = MaterialTheme.typography.labelSmall,
+            color = TextMuted,
+            maxLines = 1,
+            softWrap = false,
+        )
     }
 }
 

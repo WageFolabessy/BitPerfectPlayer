@@ -51,13 +51,13 @@ data class EngineTrackRequest(
 )
 
 /**
- * Observable real-time playback engine state, including hardware-clocked [currentPositionMs],
- * hearing safety state, and 6-stage [diagnostics].
+ * Observable low-frequency playback engine state (status, active track, duration, safety state,
+ * and 6-stage diagnostics). High-frequency playback position (~20 Hz) is exposed separately via
+ * [AudioOutputEngine.playbackPositionMs] so Compose screens do not recompose at 20 Hz.
  */
 data class EnginePlaybackState(
     val status: PlaybackStatus = PlaybackStatus.IDLE,
     val activeTrackUri: Uri? = null,
-    val currentPositionMs: Long = 0L,
     val durationMs: Long = 0L,
     val safetyState: AudioSafetyState = AudioSafetyState(),
     val diagnostics: AudioDiagnosticSnapshot = AudioDiagnosticSnapshot.idle(),
@@ -101,6 +101,9 @@ class AudioOutputEngine(
         ),
     )
     val state: StateFlow<EnginePlaybackState> = _state.asStateFlow()
+
+    private val _playbackPositionMs = MutableStateFlow(0L)
+    val playbackPositionMs: StateFlow<Long> = _playbackPositionMs.asStateFlow()
 
     private val engineLock = ReentrantLock()
     private val controlExecutor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
@@ -272,11 +275,11 @@ class AudioOutputEngine(
         stopWorkerFlag.set(true)
         isPausedFlag.set(true)
         currentRequest = request
+        _playbackPositionMs.value = request.startPositionMs.coerceAtLeast(0L)
         _state.update {
             it.copy(
                 status = PlaybackStatus.PREPARING,
                 activeTrackUri = request.uri,
-                currentPositionMs = request.startPositionMs.coerceAtLeast(0L),
                 errorMessage = null,
                 lastAutoPauseNotice = null,
             )
@@ -358,11 +361,11 @@ class AudioOutputEngine(
 
         activeDecoder = decoder
         activeAudioTrack = audioTrack
+        _playbackPositionMs.value = decoder.currentPositionMs
         _state.update { current ->
             current.copy(
                 status = if (request.autoPlay) PlaybackStatus.PLAYING else PlaybackStatus.PAUSED,
                 activeTrackUri = request.uri,
-                currentPositionMs = decoder.currentPositionMs,
                 durationMs = decoder.format.durationMs,
                 errorMessage = null,
                 lastAutoPauseNotice = if (preserveAutoPauseNotice) current.lastAutoPauseNotice else null,
@@ -387,7 +390,7 @@ class AudioOutputEngine(
                     val req = currentRequest ?: return@withLock
                     val generation = loadGeneration.incrementAndGet()
                     loadTrackLocked(
-                        request = req.copy(startPositionMs = _state.value.currentPositionMs, autoPlay = true),
+                        request = req.copy(startPositionMs = _playbackPositionMs.value, autoPlay = true),
                         generation = generation,
                         preserveAutoPauseNotice = false,
                     )
@@ -395,7 +398,7 @@ class AudioOutputEngine(
                 }
                 if (_state.value.status == PlaybackStatus.COMPLETED) {
                     decoder.seekToMs(0L)
-                    _state.update { it.copy(currentPositionMs = 0L) }
+                    _playbackPositionMs.value = 0L
                 }
                 if (!requestAudioFocusLocked()) {
                     _state.update {
@@ -417,7 +420,7 @@ class AudioOutputEngine(
                     )
                 }
                 if (playbackThread?.isAlive != true) {
-                    startPlaybackWorkerLocked(initialSeekMs = _state.value.currentPositionMs)
+                    startPlaybackWorkerLocked(initialSeekMs = _playbackPositionMs.value)
                 }
             }
         }
@@ -431,7 +434,7 @@ class AudioOutputEngine(
     fun seekTo(positionMs: Long) {
         if (releasedFlag.get()) return
         val clamped = positionMs.coerceIn(0L, _state.value.durationMs.coerceAtLeast(0L))
-        _state.update { it.copy(currentPositionMs = clamped) }
+        _playbackPositionMs.value = clamped
         if (playbackThread?.isAlive == true) {
             pendingSeekMs.set(clamped)
         } else {
@@ -441,7 +444,7 @@ class AudioOutputEngine(
                     val decoder = activeDecoder ?: return@withLock
                     val actual = runCatching { decoder.seekToMs(clamped) }.getOrDefault(clamped)
                     activeAudioTrack?.let { safeFlushTrack(it) }
-                    _state.update { it.copy(currentPositionMs = actual) }
+                    _playbackPositionMs.value = actual
                 }
             }
         }
@@ -460,10 +463,10 @@ class AudioOutputEngine(
             engineLock.withLock {
                 stopWorkerAndReleaseTrackLocked(clearMixer = true)
                 abandonAudioFocusLocked()
+                _playbackPositionMs.value = 0L
                 _state.update {
                     it.copy(
                         status = PlaybackStatus.IDLE,
-                        currentPositionMs = 0L,
                         errorMessage = null,
                     )
                 }
@@ -587,7 +590,7 @@ class AudioOutputEngine(
             return
         }
         val generation = loadGeneration.incrementAndGet()
-        val resumePos = _state.value.currentPositionMs
+        val resumePos = _playbackPositionMs.value
         loadTrackLocked(
             request = req.copy(startPositionMs = resumePos, autoPlay = autoResume),
             generation = generation,
@@ -876,7 +879,7 @@ class AudioOutputEngine(
                     val actualSeekMs = decoder.seekToMs(requestedSeek)
                     seekBaseMs = actualSeekMs
                     headBaseFrames = readUnsignedPlaybackHeadFrames(currentTrack)
-                    _state.update { it.copy(currentPositionMs = actualSeekMs) }
+                    _playbackPositionMs.value = actualSeekMs
                     if (wasPlaying) {
                         safePlayTrack(currentTrack)
                     }
@@ -894,12 +897,10 @@ class AudioOutputEngine(
 
                 val bytesRead = decoder.readPcm(pcmBuffer)
                 if (bytesRead < 0) {
-                    val finalPos = durationMs.takeIf { it > 0L } ?: _state.value.currentPositionMs
+                    val finalPos = durationMs.takeIf { it > 0L } ?: _playbackPositionMs.value
+                    _playbackPositionMs.value = finalPos
                     _state.update {
-                        it.copy(
-                            status = PlaybackStatus.COMPLETED,
-                            currentPositionMs = finalPos,
-                        )
+                        it.copy(status = PlaybackStatus.COMPLETED)
                     }
                     mainHandler.post { onTrackCompleted?.invoke() }
                     break
@@ -938,7 +939,7 @@ class AudioOutputEngine(
                         floatBuffer = FloatArray(bufferSize / 4)
                         remainder = ByteArray(bytesPerFrame)
                         remainderLen = 0
-                        seekBaseMs = _state.value.currentPositionMs
+                        seekBaseMs = _playbackPositionMs.value
                         headBaseFrames = readUnsignedPlaybackHeadFrames(currentTrack)
                         // Skip writing bytes from the prior buffer/format into the newly allocated pcmBuffer.
                         continue
@@ -986,7 +987,7 @@ class AudioOutputEngine(
                     )
                 }
 
-                // Publish hardware-clocked playback position (~20 Hz) for smooth seek bar & synced lyrics.
+                // Publish hardware-clocked playback position (~20 Hz) to dedicated flow only (zero full-UI recompositions).
                 val nowNano = System.nanoTime()
                 if (nowNano - lastUiUpdateNano >= 50_000_000L) {
                     lastUiUpdateNano = nowNano
@@ -994,7 +995,7 @@ class AudioOutputEngine(
                     val deltaFrames = (headFrames - headBaseFrames).coerceAtLeast(0L)
                     val computedPos = seekBaseMs + (deltaFrames * 1000L) / sampleRate.toLong()
                     val clampedPos = if (durationMs > 0L) computedPos.coerceIn(0L, durationMs) else computedPos
-                    _state.update { it.copy(currentPositionMs = clampedPos) }
+                    _playbackPositionMs.value = clampedPos
                 }
             }
         } catch (e: AudioDecodeException) {

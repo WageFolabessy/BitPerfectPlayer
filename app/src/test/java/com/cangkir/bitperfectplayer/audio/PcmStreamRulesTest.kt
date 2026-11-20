@@ -152,5 +152,27 @@ class PcmStreamRulesTest {
             "WAV (PCM) · 16-bit · 44,100 Hz",
             AudioFormatFormatter.formatTrackMetadataLine("WAV", "PCM", 16, 44_100),
         )
+
+        // Allocation-minimal duration formatting & precomputed PlaybackTrack fields
+        assertEquals("00:00", AudioFormatFormatter.formatDurationMs(0L))
+        assertEquals("00:59", AudioFormatFormatter.formatDurationMs(59_000L))
+        assertEquals("05:51", AudioFormatFormatter.formatDurationMs(351_000L))
+        assertEquals("1:01:01", AudioFormatFormatter.formatDurationMs(3_661_000L))
+
+        val track = PlaybackTrack(
+            uriString = "content://media/external/audio/media/99",
+            title = "Blue in Green",
+            artist = "Miles Davis",
+            album = "Kind of Blue",
+            fileName = "03.flac",
+            durationMs = 351_000L,
+            sampleRateHz = 96_000,
+            bitDepth = 24,
+            container = "FLAC",
+            codec = "FLAC",
+        )
+        assertEquals("05:51", track.durationLabel)
+        assertEquals("Miles Davis · Kind of Blue", track.artistAlbumLine)
+        assertEquals("FLAC · 24-bit · 96,000 Hz", track.formatBadge)
     }
 }
