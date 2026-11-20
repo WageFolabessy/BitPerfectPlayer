@@ -80,7 +80,7 @@ Execute unchecked `[ ]` items sequentially from top to bottom following `AGENTS.
 
 ## Milestone 3: Native Android Audio Engine, 5-Format Decoders, & Foreground Service
 
-- [ ] **T3.1 — 5-Format Audio Decoders & Metadata Reader**
+- [x] **T3.1 — 5-Format Audio Decoders & Metadata Reader**
   - Implement `AudioMetadataReader` extracting title, artist, album, duration, container/codec, sample rate, and bit depth with graceful fallback to filename when tags are missing/corrupted.
   - Implement a direct pure-Kotlin `WavHeaderParser` and `WavPcmDecoder` parsing RIFF/`fmt `/`data` chunks for 16-bit and 24-bit (and 32-bit if present) PCM without truncating 24-bit precision, supporting byte-accurate seeking and lossless 24-bit-to-float32 unpacking helper for API 26–30 compatibility.
   - Implement `MediaCodecAudioDecoder` (`MediaExtractor` + `MediaCodec`) for FLAC (16/24-bit), MP3, M4A/AAC, and OGG (Vorbis/Opus), guarding `ENCODING_PCM_24BIT_PACKED`/`ENCODING_PCM_32BIT` with `Build.VERSION.SDK_INT >= Build.VERSION_CODES.S`, inspecting actual output PCM encoding honestly, and handling corrupted/unsupported files via typed errors without crashing.
