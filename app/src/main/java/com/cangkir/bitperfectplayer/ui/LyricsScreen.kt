@@ -134,6 +134,7 @@ fun LyricsScreen(
     }
 
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
                 title = {
@@ -149,13 +150,13 @@ fun LyricsScreen(
                             lyricsState?.hasPersistedLyrics == true -> {
                                 val src = if (lyricsState.sourceType == LyricsSourceType.LRC_FILE) ".lrc file" else "Manual"
                                 val syncLabel = if (parsed?.isSynced == true) "Synced" else "Static"
-                                "$syncLabel • $src • SHA-256 ${lyricsState.contentFingerprint.take(10)}…"
+                                "$syncLabel · $src · SHA-256 ${lyricsState.contentFingerprint.take(10)}…"
                             }
                             else -> "100% Offline Lyrics"
                         }
                         Text(
                             text = subtitle,
-                            style = MaterialTheme.typography.labelSmall,
+                            style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
@@ -208,7 +209,7 @@ fun LyricsScreen(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
+                    containerColor = MaterialTheme.colorScheme.background,
                 ),
             )
         },
@@ -366,6 +367,8 @@ private fun LyricsCompactSeekBar(
                 text = formatDurationMs(displayMs),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                softWrap = false,
             )
             Slider(
                 value = displayMs.toFloat().coerceIn(0f, durationMs.toFloat()),
@@ -387,6 +390,8 @@ private fun LyricsCompactSeekBar(
                 text = formatDurationMs(playbackState.durationMs),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                softWrap = false,
             )
         }
     }

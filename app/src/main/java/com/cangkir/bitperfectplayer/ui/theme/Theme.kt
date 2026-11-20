@@ -32,7 +32,7 @@ private val BitPerfectDarkColorScheme = darkColorScheme(
 )
 
 /**
- * Enforces a consistent audiophile Material 3 Dark Theme across all screens (SPEC Section 4.3).
+ * Enforces a consistent minimalist utilitarian dark Material 3 theme across all screens.
  */
 @Composable
 fun BitPerfectPlayerTheme(
@@ -40,7 +40,7 @@ fun BitPerfectPlayerTheme(
     dynamicColor: Boolean = false,
     content: @Composable () -> Unit,
 ) {
-    // Intentionally locked to BitPerfectDarkColorScheme so contrast and safety badges stay consistent.
+    // Locked intentionally to BitPerfectDarkColorScheme so contrast and safety indicators stay consistent.
     val colorScheme = if (darkTheme || !dynamicColor) {
         BitPerfectDarkColorScheme
     } else {

@@ -1,5 +1,6 @@
 package com.cangkir.bitperfectplayer.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -44,18 +45,21 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.cangkir.bitperfectplayer.audio.PlaybackControllerState
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
 import com.cangkir.bitperfectplayer.audio.RepeatMode
-import com.cangkir.bitperfectplayer.ui.theme.IcePrimary
+import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
+import com.cangkir.bitperfectplayer.ui.theme.TextMuted
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun QueueScreen(
     playbackState: PlaybackControllerState,
     libraryTracks: List<PlaybackTrack>,
+    albumArtworkLoader: AlbumArtworkLoader,
     onBack: () -> Unit,
     onSelectQueueIndex: (Int) -> Unit,
     onAddTrackToQueue: (PlaybackTrack) -> Unit,
@@ -79,6 +83,7 @@ fun QueueScreen(
     }
 
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
                 title = {
@@ -86,8 +91,8 @@ fun QueueScreen(
                         Text("Playback Queue", style = MaterialTheme.typography.titleLarge)
                         Text(
                             text = "${queue.size} ${if (queue.size == 1) "track" else "tracks"}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = TextMuted,
                         )
                     }
                 },
@@ -110,7 +115,7 @@ fun QueueScreen(
                         Icon(
                             imageVector = Icons.Filled.Shuffle,
                             contentDescription = if (queue.shuffleEnabled) "Disable shuffle" else "Enable shuffle",
-                            tint = if (queue.shuffleEnabled) IcePrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            tint = if (queue.shuffleEnabled) MaterialTheme.colorScheme.primary else TextMuted,
                         )
                     }
                     IconButton(
@@ -120,7 +125,7 @@ fun QueueScreen(
                         Icon(
                             imageVector = if (queue.repeatMode == RepeatMode.ONE) Icons.Filled.RepeatOne else Icons.Filled.Repeat,
                             contentDescription = "Cycle repeat mode (${queue.repeatMode.name})",
-                            tint = if (queue.repeatMode != RepeatMode.OFF) IcePrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            tint = if (queue.repeatMode != RepeatMode.OFF) MaterialTheme.colorScheme.primary else TextMuted,
                         )
                     }
                     IconButton(
@@ -134,7 +139,7 @@ fun QueueScreen(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
+                    containerColor = MaterialTheme.colorScheme.background,
                 ),
             )
         },
@@ -167,26 +172,31 @@ fun QueueScreen(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .background(
+                            if (isCurrent) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent,
+                        )
                         .clickable { onSelectQueueIndex(index) }
                         .padding(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(
-                        text = "${index + 1}",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = if (isCurrent) IcePrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.width(26.dp),
+                    TrackArtworkThumbnail(
+                        track = track,
+                        artworkLoader = albumArtworkLoader,
+                        size = 40.dp,
+                        cornerRadius = 6.dp,
+                        targetSizePx = AlbumArtworkLoader.THUMBNAIL_SIZE_PX,
                     )
+                    Spacer(modifier = Modifier.width(12.dp))
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = track.title,
                             style = MaterialTheme.typography.titleSmall,
-                            color = if (isCurrent) IcePrimary else MaterialTheme.colorScheme.onSurface,
+                            color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
                         Text(
-                            text = "${track.artist} • ${track.formatBadge}",
+                            text = "${track.artist} · ${track.formatBadge.replace(" • ", " · ")}",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
@@ -226,7 +236,11 @@ fun QueueScreen(
                         )
                     }
                 }
-                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                HorizontalDivider(
+                    thickness = 0.5.dp,
+                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f),
+                    modifier = Modifier.padding(start = 68.dp, end = 16.dp),
+                )
             }
         }
     }
@@ -240,6 +254,7 @@ private fun AddTrackToQueueDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surfaceVariant,
         title = { Text("Add Track to Queue") },
         text = {
             if (libraryTracks.isEmpty()) {
@@ -266,14 +281,17 @@ private fun AddTrackToQueueDialog(
                             )
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                text = "${track.artist} • ${track.formatBadge}",
+                                text = "${track.artist} · ${track.formatBadge.replace(" • ", " · ")}",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
                         }
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                        HorizontalDivider(
+                            thickness = 0.5.dp,
+                            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f),
+                        )
                     }
                 }
             }

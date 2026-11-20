@@ -6,6 +6,7 @@ import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -23,7 +24,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
@@ -42,8 +45,6 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -54,8 +55,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.PrimaryScrollableTabRow
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -71,24 +70,26 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.cangkir.bitperfectplayer.audio.AudioOutputMode
 import com.cangkir.bitperfectplayer.audio.PlaybackControllerState
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
+import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
 import com.cangkir.bitperfectplayer.library.LibraryGroup
 import com.cangkir.bitperfectplayer.library.LibrarySnapshot
 import com.cangkir.bitperfectplayer.ui.theme.AmberIndicated
 import com.cangkir.bitperfectplayer.ui.theme.EmeraldSafe
-import com.cangkir.bitperfectplayer.ui.theme.HiResGold
-import com.cangkir.bitperfectplayer.ui.theme.HiResGoldContainer
 import com.cangkir.bitperfectplayer.ui.theme.IcePrimary
-import com.cangkir.bitperfectplayer.ui.theme.IcePrimaryContainer
+import com.cangkir.bitperfectplayer.ui.theme.TextMuted
 
 enum class LibraryTab(val label: String) {
     ALL_SONGS("All Songs"),
@@ -105,6 +106,7 @@ fun LibraryScreen(
     libraryState: LibrarySnapshot,
     favoriteTrackUris: Set<String>,
     playbackState: PlaybackControllerState,
+    albumArtworkLoader: AlbumArtworkLoader,
     onRefreshLibrary: () -> Unit,
     onImportFolder: (android.net.Uri) -> Unit,
     onImportFile: (android.net.Uri) -> Unit,
@@ -188,17 +190,18 @@ fun LibraryScreen(
     val isBitPerfectActive = playbackState.engineState.diagnostics.isBitPerfectMixerActive
     val isBitPerfectOptIn = playbackState.engineState.safetyState.mode == AudioOutputMode.BIT_PERFECT_OPT_IN
     val statusText = when {
-        isBitPerfectActive -> "Bit-Perfect USB Active"
-        isBitPerfectOptIn -> "Clean Native Fallback • Offline"
-        else -> "100% Offline • Safe Mode"
+        isBitPerfectActive -> "Bit-Perfect USB · Offline"
+        isBitPerfectOptIn -> "Clean Native · Offline"
+        else -> "Safe Mode · Offline"
     }
-    val statusColor = when {
+    val statusDotColor = when {
         isBitPerfectActive -> IcePrimary
         isBitPerfectOptIn -> AmberIndicated
         else -> EmeraldSafe
     }
 
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
                 title = {
@@ -209,11 +212,22 @@ fun LibraryScreen(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
-                        Text(
-                            text = statusText,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = statusColor,
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(6.dp)
+                                    .clip(CircleShape)
+                                    .background(statusDotColor),
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = statusText,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
                     }
                 },
                 navigationIcon = {
@@ -237,6 +251,7 @@ fun LibraryScreen(
                         Icon(
                             imageVector = Icons.Filled.CreateNewFolder,
                             contentDescription = "Import music folder via SAF",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                     IconButton(
@@ -246,6 +261,7 @@ fun LibraryScreen(
                         Icon(
                             imageVector = Icons.Filled.AudioFile,
                             contentDescription = "Import audio file via SAF",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                     IconButton(
@@ -255,6 +271,7 @@ fun LibraryScreen(
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.QueueMusic,
                             contentDescription = "Open playback queue",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                     IconButton(
@@ -264,12 +281,12 @@ fun LibraryScreen(
                         Icon(
                             imageVector = Icons.Filled.GraphicEq,
                             contentDescription = "Open Audio Diagnostics Panel",
-                            tint = statusColor,
+                            tint = if (isBitPerfectActive) IcePrimary else MaterialTheme.colorScheme.onSurface,
                         )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
+                    containerColor = MaterialTheme.colorScheme.background,
                     titleContentColor = MaterialTheme.colorScheme.onSurface,
                 ),
             )
@@ -277,6 +294,7 @@ fun LibraryScreen(
         bottomBar = {
             MiniPlayerBar(
                 playbackState = playbackState,
+                artworkLoader = albumArtworkLoader,
                 onOpenNowPlaying = onOpenNowPlaying,
                 onTogglePlayPause = onTogglePlayPause,
                 onNext = onNext,
@@ -289,11 +307,17 @@ fun LibraryScreen(
                 .padding(innerPadding),
         ) {
             if (libraryState.isScanning) {
-                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                LinearProgressIndicator(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(2.dp),
+                    color = MaterialTheme.colorScheme.primary,
+                    trackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                )
             }
 
             if (!hasAudioPermission || !hasNotificationPermission) {
-                PermissionRequestCard(
+                PermissionRequestBanner(
                     needsAudioPermission = !hasAudioPermission,
                     needsNotificationPermission = !hasNotificationPermission,
                     onRequestPermissions = {
@@ -314,18 +338,37 @@ fun LibraryScreen(
             if (openedGroup == null) {
                 PrimaryScrollableTabRow(
                     selectedTabIndex = selectedTab.ordinal,
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    contentColor = MaterialTheme.colorScheme.primary,
-                    edgePadding = 12.dp,
+                    containerColor = MaterialTheme.colorScheme.background,
+                    contentColor = MaterialTheme.colorScheme.onSurface,
+                    edgePadding = 16.dp,
+                    divider = {
+                        HorizontalDivider(
+                            thickness = 0.5.dp,
+                            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.6f),
+                        )
+                    },
                 ) {
                     LibraryTab.entries.forEach { tab ->
+                        val selected = selectedTab == tab
                         Tab(
-                            selected = selectedTab == tab,
+                            selected = selected,
                             onClick = {
                                 selectedTab = tab
                                 openedGroupName = null
                             },
-                            text = { Text(text = tab.label, maxLines = 1) },
+                            text = {
+                                Text(
+                                    text = tab.label,
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = if (selected) {
+                                        MaterialTheme.colorScheme.onSurface
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                    },
+                                )
+                            },
                         )
                     }
                 }
@@ -335,6 +378,7 @@ fun LibraryScreen(
                 GroupDetailTrackList(
                     group = openedGroup,
                     activeTrackUri = playbackState.activeTrack?.uriString,
+                    albumArtworkLoader = albumArtworkLoader,
                     onPlayTracks = onPlayTracks,
                     onEnqueueTrack = onEnqueueTrack,
                     onEnqueueNext = onEnqueueNext,
@@ -344,12 +388,6 @@ fun LibraryScreen(
             } else {
                 when (selectedTab) {
                     LibraryTab.ALL_SONGS -> {
-                        SearchAndRefreshRow(
-                            query = searchQuery,
-                            totalCount = libraryState.allSongs.size,
-                            onQueryChange = { searchQuery = it },
-                            onRefresh = onRefreshLibrary,
-                        )
                         val filtered = remember(libraryState.allSongs, searchQuery) {
                             val q = searchQuery.trim()
                             if (q.isEmpty()) {
@@ -363,22 +401,40 @@ fun LibraryScreen(
                                 }
                             }
                         }
+                        CompactSearchBarRow(
+                            query = searchQuery,
+                            shownCount = filtered.size,
+                            totalCount = libraryState.allSongs.size,
+                            onQueryChange = { searchQuery = it },
+                            onRefresh = onRefreshLibrary,
+                        )
                         TrackListView(
                             tracks = filtered,
-                            emptyTitle = "No local music tracks found",
-                            emptySubtitle = "Auto-scan filters out WhatsApp audio, voice notes, recordings & ringtones. Grant audio access or pick a folder via SAF.",
+                            albumArtworkLoader = albumArtworkLoader,
+                            emptyTitle = if (searchQuery.isNotBlank()) "No matching tracks" else "No local audio tracks",
+                            emptySubtitle = if (searchQuery.isNotBlank()) {
+                                "Try a different title, artist, album, or filename."
+                            } else {
+                                "Grant local audio access or import a music folder via SAF."
+                            },
                             activeTrackUri = playbackState.activeTrack?.uriString,
                             onPlayTracks = onPlayTracks,
                             onEnqueueTrack = onEnqueueTrack,
                             onEnqueueNext = onEnqueueNext,
                             onToggleFavorite = onToggleFavorite,
                             isTrackFavorite = isTrackFavorite,
-                            onImportFolder = { folderPickerLauncher.launch(null) },
+                            onImportFolder = if (searchQuery.isBlank()) {
+                                { folderPickerLauncher.launch(null) }
+                            } else {
+                                null
+                            },
                         )
                     }
                     LibraryTab.FOLDERS -> GroupListView(
                         groups = libraryState.folders,
                         icon = Icons.Filled.Folder,
+                        showArtworkThumbnail = false,
+                        albumArtworkLoader = albumArtworkLoader,
                         emptyMessage = "No music folders scanned yet.",
                         onSelectGroup = { openedGroupName = it.name },
                         onPlayGroup = { onPlayTracks(it.tracks, 0) },
@@ -386,6 +442,8 @@ fun LibraryScreen(
                     LibraryTab.ARTISTS -> GroupListView(
                         groups = libraryState.artists,
                         icon = Icons.Filled.Person,
+                        showArtworkThumbnail = false,
+                        albumArtworkLoader = albumArtworkLoader,
                         emptyMessage = "No artists found in local library.",
                         onSelectGroup = { openedGroupName = it.name },
                         onPlayGroup = { onPlayTracks(it.tracks, 0) },
@@ -393,14 +451,17 @@ fun LibraryScreen(
                     LibraryTab.ALBUMS -> GroupListView(
                         groups = libraryState.albums,
                         icon = Icons.Filled.Album,
+                        showArtworkThumbnail = true,
+                        albumArtworkLoader = albumArtworkLoader,
                         emptyMessage = "No albums found in local library.",
                         onSelectGroup = { openedGroupName = it.name },
                         onPlayGroup = { onPlayTracks(it.tracks, 0) },
                     )
                     LibraryTab.RECENT -> TrackListView(
                         tracks = libraryState.recentlyPlayed,
+                        albumArtworkLoader = albumArtworkLoader,
                         emptyTitle = "No recently played tracks",
-                        emptySubtitle = "Tracks you listen to will appear here locally.",
+                        emptySubtitle = "Tracks you play appear here locally.",
                         activeTrackUri = playbackState.activeTrack?.uriString,
                         onPlayTracks = onPlayTracks,
                         onEnqueueTrack = onEnqueueTrack,
@@ -411,8 +472,9 @@ fun LibraryScreen(
                     )
                     LibraryTab.FAVORITES -> TrackListView(
                         tracks = libraryState.favorites,
+                        albumArtworkLoader = albumArtworkLoader,
                         emptyTitle = "No favorite tracks yet",
-                        emptySubtitle = "Tap the heart icon on any track to bind it persistently by SHA-256 fingerprint.",
+                        emptySubtitle = "Tap the heart icon on any track to save it locally.",
                         activeTrackUri = playbackState.activeTrack?.uriString,
                         onPlayTracks = onPlayTracks,
                         onEnqueueTrack = onEnqueueTrack,
@@ -428,41 +490,38 @@ fun LibraryScreen(
 }
 
 @Composable
-private fun PermissionRequestCard(
+private fun PermissionRequestBanner(
     needsAudioPermission: Boolean,
     needsNotificationPermission: Boolean,
     onRequestPermissions: () -> Unit,
     onImportFolderInstead: () -> Unit,
 ) {
-    Card(
+    Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant,
-        ),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
-        shape = RoundedCornerShape(14.dp),
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outline),
+        shape = RoundedCornerShape(12.dp),
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
             Text(
                 text = if (needsAudioPermission) {
                     "Local Audio Access Needed"
                 } else {
-                    "Enable Media Playback Notification"
+                    "Enable Media Controls Notification"
                 },
                 style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurface,
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
                 text = buildString {
                     if (needsAudioPermission) {
-                        append("Allow local audio access to scan music (excludes WhatsApp/recordings), or pick folders via SAF. ")
+                        append("Allow local audio access to scan your library, or pick folders via SAF. ")
                     }
                     if (needsNotificationPermission) {
-                        append("Allow notifications for lock-screen & background playback controls.")
+                        append("Allow notifications for lock-screen playback controls.")
                     }
                 },
                 style = MaterialTheme.typography.bodySmall,
@@ -481,7 +540,7 @@ private fun PermissionRequestCard(
                         onClick = onImportFolderInstead,
                         modifier = Modifier.sizeIn(minHeight = 48.dp),
                     ) {
-                        Text("Pick Folder (SAF)")
+                        Text("Pick Folder")
                     }
                 }
             }
@@ -490,8 +549,9 @@ private fun PermissionRequestCard(
 }
 
 @Composable
-private fun SearchAndRefreshRow(
+private fun CompactSearchBarRow(
     query: String,
+    shownCount: Int,
     totalCount: Int,
     onQueryChange: (String) -> Unit,
     onRefresh: () -> Unit,
@@ -499,55 +559,98 @@ private fun SearchAndRefreshRow(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .padding(start = 16.dp, end = 8.dp, top = 10.dp, bottom = 6.dp),
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            OutlinedTextField(
-                value = query,
-                onValueChange = onQueryChange,
-                placeholder = { Text("Search songs, artists, albums...") },
-                leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
-                trailingIcon = {
+            Surface(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(48.dp),
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.6f)),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(start = 12.dp, end = if (query.isNotEmpty()) 0.dp else 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Search,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Box(
+                        modifier = Modifier.weight(1f),
+                        contentAlignment = Alignment.CenterStart,
+                    ) {
+                        if (query.isEmpty()) {
+                            Text(
+                                text = "Search tracks, artists, albums",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = TextMuted,
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        BasicTextField(
+                            value = query,
+                            onValueChange = onQueryChange,
+                            singleLine = true,
+                            textStyle = MaterialTheme.typography.bodyMedium.copy(
+                                color = MaterialTheme.colorScheme.onSurface,
+                            ),
+                            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
                     if (query.isNotEmpty()) {
                         IconButton(
                             onClick = { onQueryChange("") },
                             modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
                         ) {
-                            Icon(Icons.Filled.Close, contentDescription = "Clear search")
+                            Icon(
+                                imageVector = Icons.Filled.Close,
+                                contentDescription = "Clear search",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(18.dp),
+                            )
                         }
                     }
-                },
-                singleLine = true,
-                shape = RoundedCornerShape(14.dp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
-                    unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f),
-                ),
-                modifier = Modifier.weight(1f),
-            )
-            Spacer(modifier = Modifier.width(6.dp))
+                }
+            }
+            Spacer(modifier = Modifier.width(4.dp))
             IconButton(
                 onClick = onRefresh,
                 modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
             ) {
                 Icon(
                     imageVector = Icons.Filled.Refresh,
-                    contentDescription = "Rescan local music library",
+                    contentDescription = "Refresh local library",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
         Spacer(modifier = Modifier.height(6.dp))
+        val countLabel = if (query.isBlank()) {
+            "$totalCount ${if (totalCount == 1) "track" else "tracks"}"
+        } else {
+            "$shownCount of $totalCount ${if (totalCount == 1) "track" else "tracks"}"
+        }
         Text(
-            text = "$totalCount ${if (totalCount == 1) "track" else "tracks"} • Auto-scan excludes WhatsApp, voice notes & recordings",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            text = countLabel,
+            style = MaterialTheme.typography.labelMedium,
+            color = TextMuted,
             maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(horizontal = 4.dp),
+            softWrap = false,
+            modifier = Modifier.padding(horizontal = 2.dp),
         )
     }
 }
@@ -556,6 +659,8 @@ private fun SearchAndRefreshRow(
 private fun GroupListView(
     groups: List<LibraryGroup>,
     icon: ImageVector,
+    showArtworkThumbnail: Boolean,
+    albumArtworkLoader: AlbumArtworkLoader,
     emptyMessage: String,
     onSelectGroup: (LibraryGroup) -> Unit,
     onPlayGroup: (LibraryGroup) -> Unit,
@@ -578,69 +683,75 @@ private fun GroupListView(
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        contentPadding = PaddingValues(vertical = 4.dp),
     ) {
         items(groups, key = { it.name }) { group ->
-            Surface(
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { onSelectGroup(group) },
-                shape = RoundedCornerShape(14.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)),
+                    .clickable { onSelectGroup(group) }
+                    .padding(start = 16.dp, end = 6.dp, top = 10.dp, bottom = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(start = 12.dp, end = 6.dp, top = 10.dp, bottom = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
+                if (showArtworkThumbnail) {
+                    TrackArtworkThumbnail(
+                        track = group.tracks.firstOrNull(),
+                        artworkLoader = albumArtworkLoader,
+                        size = 48.dp,
+                        cornerRadius = 8.dp,
+                        placeholderIcon = icon,
+                        contentDescriptionText = group.name,
+                    )
+                } else {
                     Surface(
                         modifier = Modifier.size(44.dp),
-                        shape = RoundedCornerShape(10.dp),
-                        color = MaterialTheme.colorScheme.surface,
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerHighest,
                     ) {
                         Box(contentAlignment = Alignment.Center) {
                             Icon(
                                 imageVector = icon,
                                 contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(22.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(20.dp),
                             )
                         }
                     }
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = group.name,
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = group.subtitle,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                    IconButton(
-                        onClick = { onPlayGroup(group) },
-                        modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.PlayArrow,
-                            contentDescription = "Play all tracks in ${group.name}",
-                            tint = MaterialTheme.colorScheme.primary,
-                        )
-                    }
+                }
+                Spacer(modifier = Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = group.name,
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = group.subtitle,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                IconButton(
+                    onClick = { onPlayGroup(group) },
+                    modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.PlayArrow,
+                        contentDescription = "Play all tracks in ${group.name}",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
+            HorizontalDivider(
+                thickness = 0.5.dp,
+                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f),
+                modifier = Modifier.padding(start = 76.dp, end = 16.dp),
+            )
         }
     }
 }
@@ -649,6 +760,7 @@ private fun GroupListView(
 private fun GroupDetailTrackList(
     group: LibraryGroup,
     activeTrackUri: String?,
+    albumArtworkLoader: AlbumArtworkLoader,
     onPlayTracks: (List<PlaybackTrack>, Int) -> Unit,
     onEnqueueTrack: (PlaybackTrack) -> Unit,
     onEnqueueNext: (PlaybackTrack) -> Unit,
@@ -677,8 +789,13 @@ private fun GroupDetailTrackList(
                 Text("Play All")
             }
         }
+        HorizontalDivider(
+            thickness = 0.5.dp,
+            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.55f),
+        )
         TrackListView(
             tracks = group.tracks,
+            albumArtworkLoader = albumArtworkLoader,
             emptyTitle = "Empty group",
             emptySubtitle = "",
             activeTrackUri = activeTrackUri,
@@ -695,6 +812,7 @@ private fun GroupDetailTrackList(
 @Composable
 private fun TrackListView(
     tracks: List<PlaybackTrack>,
+    albumArtworkLoader: AlbumArtworkLoader,
     emptyTitle: String,
     emptySubtitle: String,
     activeTrackUri: String?,
@@ -716,14 +834,15 @@ private fun TrackListView(
             Icon(
                 imageVector = Icons.Filled.MusicNote,
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(44.dp),
+                tint = TextMuted,
+                modifier = Modifier.size(40.dp),
             )
             Spacer(modifier = Modifier.height(12.dp))
             Text(
                 text = emptyTitle,
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.onSurface,
+                textAlign = TextAlign.Center,
             )
             if (emptySubtitle.isNotBlank()) {
                 Spacer(modifier = Modifier.height(6.dp))
@@ -731,6 +850,7 @@ private fun TrackListView(
                     text = emptySubtitle,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
                 )
             }
             if (onImportFolder != null) {
@@ -741,7 +861,7 @@ private fun TrackListView(
                 ) {
                     Icon(Icons.Filled.CreateNewFolder, contentDescription = null)
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Import Folder (SAF)")
+                    Text("Import Folder")
                 }
             }
         }
@@ -750,68 +870,42 @@ private fun TrackListView(
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
+        contentPadding = PaddingValues(bottom = 12.dp),
     ) {
         itemsIndexed(tracks, key = { _, track -> track.uriString }) { index, track ->
             val isActive = track.uriString == activeTrackUri
             val isFav = isTrackFavorite(track)
             var menuExpanded by remember { mutableStateOf(false) }
 
-            val tileBg = when {
-                isActive -> IcePrimaryContainer
-                track.isHiResLossless() -> HiResGoldContainer.copy(alpha = 0.75f)
-                track.isLosslessFormat() -> MaterialTheme.colorScheme.surfaceContainerHighest
-                else -> MaterialTheme.colorScheme.surface
-            }
-            val tileIconTint = when {
-                isActive -> IcePrimary
-                track.isHiResLossless() -> HiResGold
-                track.isLosslessFormat() -> IcePrimary.copy(alpha = 0.85f)
-                else -> MaterialTheme.colorScheme.onSurfaceVariant
-            }
-
-            Surface(
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { onPlayTracks(tracks, index) },
-                shape = RoundedCornerShape(12.dp),
-                color = if (isActive) {
-                    IcePrimaryContainer.copy(alpha = 0.28f)
-                } else {
-                    Color.Transparent
-                },
-                border = if (isActive) {
-                    BorderStroke(1.dp, IcePrimary.copy(alpha = 0.35f))
-                } else {
-                    null
-                },
+                    .background(
+                        if (isActive) {
+                            MaterialTheme.colorScheme.surfaceVariant
+                        } else {
+                            Color.Transparent
+                        },
+                    )
+                    .clickable { onPlayTracks(tracks, index) }
+                    .padding(start = 16.dp, end = 2.dp, top = 9.dp, bottom = 9.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(start = 10.dp, end = 2.dp, top = 8.dp, bottom = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Surface(
-                        modifier = Modifier.size(44.dp),
-                        shape = RoundedCornerShape(10.dp),
-                        color = tileBg,
-                        border = BorderStroke(0.75.dp, tileIconTint.copy(alpha = 0.25f)),
+                TrackArtworkThumbnail(
+                    track = track,
+                    artworkLoader = albumArtworkLoader,
+                    size = 48.dp,
+                    cornerRadius = 8.dp,
+                    targetSizePx = AlbumArtworkLoader.THUMBNAIL_SIZE_PX,
+                )
+
+                Spacer(modifier = Modifier.width(12.dp))
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Icon(
-                                imageVector = if (isActive) Icons.Filled.GraphicEq else Icons.Filled.MusicNote,
-                                contentDescription = null,
-                                tint = tileIconTint,
-                                modifier = Modifier.size(21.dp),
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.width(12.dp))
-
-                    Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = track.title,
                             style = MaterialTheme.typography.titleSmall,
@@ -823,81 +917,87 @@ private fun TrackListView(
                             },
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
                         )
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = "${track.artist} • ${track.album}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Spacer(modifier = Modifier.height(5.dp))
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            TrackFormatBadge(track = track)
-                            if (track.durationMs > 0L) {
-                                Text(
-                                    text = formatDurationMs(track.durationMs),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
+                        if (track.durationMs > 0L) {
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = formatDurationMs(track.durationMs),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TextMuted,
+                                maxLines = 1,
+                                softWrap = false,
+                            )
                         }
                     }
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "${track.artist} · ${track.album}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = track.formatBadge.replace(" • ", " · "),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = TextMuted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
 
+                IconButton(
+                    onClick = { onToggleFavorite(track) },
+                    modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
+                ) {
+                    Icon(
+                        imageVector = if (isFav) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+                        contentDescription = if (isFav) "Remove ${track.title} from favorites" else "Add ${track.title} to favorites",
+                        tint = if (isFav) MaterialTheme.colorScheme.primary else TextMuted,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+
+                Box {
                     IconButton(
-                        onClick = { onToggleFavorite(track) },
+                        onClick = { menuExpanded = true },
                         modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
                     ) {
                         Icon(
-                            imageVector = if (isFav) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
-                            contentDescription = if (isFav) "Remove ${track.title} from favorites" else "Add ${track.title} to favorites",
-                            tint = if (isFav) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            imageVector = Icons.Filled.MoreVert,
+                            contentDescription = "More actions for ${track.title}",
+                            tint = TextMuted,
+                            modifier = Modifier.size(20.dp),
                         )
                     }
-
-                    Box {
-                        IconButton(
-                            onClick = { menuExpanded = true },
-                            modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.MoreVert,
-                                contentDescription = "More actions for ${track.title}",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        DropdownMenu(
-                            expanded = menuExpanded,
-                            onDismissRequest = { menuExpanded = false },
-                        ) {
-                            DropdownMenuItem(
-                                text = { Text("Play Next") },
-                                onClick = {
-                                    menuExpanded = false
-                                    onEnqueueNext(track)
-                                },
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Add to Queue") },
-                                onClick = {
-                                    menuExpanded = false
-                                    onEnqueueTrack(track)
-                                },
-                            )
-                        }
+                    DropdownMenu(
+                        expanded = menuExpanded,
+                        onDismissRequest = { menuExpanded = false },
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Play Next") },
+                            onClick = {
+                                menuExpanded = false
+                                onEnqueueNext(track)
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Add to Queue") },
+                            onClick = {
+                                menuExpanded = false
+                                onEnqueueTrack(track)
+                            },
+                        )
                     }
                 }
             }
-            if (!isActive) {
-                HorizontalDivider(
-                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.14f),
-                    modifier = Modifier.padding(start = 66.dp, end = 12.dp),
-                )
-            }
+            HorizontalDivider(
+                thickness = 0.5.dp,
+                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f),
+                modifier = Modifier.padding(start = 76.dp, end = 16.dp),
+            )
         }
     }
 }

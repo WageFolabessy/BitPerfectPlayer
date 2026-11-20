@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
@@ -23,6 +24,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.GraphicEq
@@ -32,7 +34,6 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.RepeatOne
-import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
@@ -40,15 +41,15 @@ import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
@@ -58,6 +59,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -67,7 +69,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -77,26 +78,24 @@ import com.cangkir.bitperfectplayer.audio.AudioSafetyController
 import com.cangkir.bitperfectplayer.audio.PlaybackControllerState
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
 import com.cangkir.bitperfectplayer.audio.RepeatMode
+import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
 import com.cangkir.bitperfectplayer.ui.theme.AmberIndicated
 import com.cangkir.bitperfectplayer.ui.theme.AmberIndicatedContainer
 import com.cangkir.bitperfectplayer.ui.theme.CoralWarning
 import com.cangkir.bitperfectplayer.ui.theme.CoralWarningContainer
 import com.cangkir.bitperfectplayer.ui.theme.EmeraldSafe
 import com.cangkir.bitperfectplayer.ui.theme.EmeraldSafeContainer
-import com.cangkir.bitperfectplayer.ui.theme.HiResGold
-import com.cangkir.bitperfectplayer.ui.theme.HiResGoldContainer
 import com.cangkir.bitperfectplayer.ui.theme.IcePrimary
-import com.cangkir.bitperfectplayer.ui.theme.IcePrimaryContainer
 import com.cangkir.bitperfectplayer.ui.theme.OnAmberIndicatedContainer
 import com.cangkir.bitperfectplayer.ui.theme.OnCoralWarningContainer
 import com.cangkir.bitperfectplayer.ui.theme.OnEmeraldSafeContainer
-import com.cangkir.bitperfectplayer.ui.theme.OnHiResGoldContainer
-import com.cangkir.bitperfectplayer.ui.theme.OnIcePrimaryContainer
+import com.cangkir.bitperfectplayer.ui.theme.TextMuted
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NowPlayingScreen(
     playbackState: PlaybackControllerState,
+    albumArtworkLoader: AlbumArtworkLoader,
     isFavorite: Boolean,
     onBack: () -> Unit,
     onToggleFavorite: (PlaybackTrack) -> Unit,
@@ -124,6 +123,7 @@ fun NowPlayingScreen(
 
     var isScrubbing by remember { mutableStateOf(false) }
     var scrubPositionMs by remember { mutableFloatStateOf(0f) }
+    var showAudioModeSheet by remember { mutableStateOf(false) }
 
     // Mandatory Hearing Safety Warning Dialog before activating potentially fixed-volume Bit-Perfect Mode.
     if (safetyState.isPendingSafetyWarning) {
@@ -134,10 +134,42 @@ fun NowPlayingScreen(
         )
     }
 
+    if (showAudioModeSheet) {
+        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ModalBottomSheet(
+            onDismissRequest = { showAudioModeSheet = false },
+            sheetState = sheetState,
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+            contentColor = MaterialTheme.colorScheme.onSurface,
+        ) {
+            AudioModeSheetContent(
+                mode = safetyState.mode,
+                isBitPerfectMixerActive = diagnostics.isBitPerfectMixerActive,
+                isUsbOutputConnected = safetyState.isUsbAudioConnected,
+                isFixedVolumeRisk = safetyState.isFixedVolumeRisk,
+                headline = diagnostics.pathStatusHeadline,
+                outputDeviceSummary = diagnostics.activeOutputDeviceSummary,
+                onSwitchToSafeMode = onSwitchToSafeMode,
+                onRequestBitPerfectMode = onRequestBitPerfectMode,
+                onOpenDiagnostics = {
+                    showAudioModeSheet = false
+                    onOpenDiagnostics()
+                },
+            )
+        }
+    }
+
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
-                title = { Text("Now Playing", style = MaterialTheme.typography.titleLarge) },
+                title = {
+                    Text(
+                        text = "Now Playing",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                },
                 navigationIcon = {
                     IconButton(
                         onClick = onBack,
@@ -150,6 +182,7 @@ fun NowPlayingScreen(
                     }
                 },
                 actions = {
+                    // Always keep a one-tap quick Pause accessible during playback for IEM hearing safety.
                     if (playbackState.isPlaying) {
                         FilledTonalButton(
                             onClick = onQuickPause,
@@ -165,10 +198,10 @@ fun NowPlayingScreen(
                             Icon(
                                 imageVector = Icons.Filled.Pause,
                                 contentDescription = null,
-                                modifier = Modifier.size(18.dp),
+                                modifier = Modifier.size(16.dp),
                             )
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("Pause", maxLines = 1)
+                            Text("Pause", maxLines = 1, softWrap = false)
                         }
                     }
                     if (track != null) {
@@ -179,13 +212,13 @@ fun NowPlayingScreen(
                             Icon(
                                 imageVector = if (isFavorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
                                 contentDescription = if (isFavorite) "Remove from favorites" else "Add to favorites",
-                                tint = if (isFavorite) IcePrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                tint = if (isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
+                    containerColor = MaterialTheme.colorScheme.background,
                 ),
             )
         },
@@ -202,14 +235,14 @@ fun NowPlayingScreen(
                 Icon(
                     imageVector = Icons.Filled.MusicNote,
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(56.dp),
+                    tint = TextMuted,
+                    modifier = Modifier.size(48.dp),
                 )
                 Spacer(modifier = Modifier.height(12.dp))
                 Text("No track selected", style = MaterialTheme.typography.titleMedium)
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
-                    text = "Select a local FLAC, WAV, MP3, M4A, or OGG track from your library to begin playback.",
+                    text = "Select a local FLAC, WAV, MP3, M4A, or OGG track from your library.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
@@ -218,28 +251,37 @@ fun NowPlayingScreen(
             return@Scaffold
         }
 
-        val heroAccent = when {
+        val isSafe = safetyState.mode == AudioOutputMode.SAFE_VOLUME_MODE
+        val modeDotColor = when {
             diagnostics.isBitPerfectMixerActive -> IcePrimary
-            track.isHiResLossless() -> HiResGold
-            else -> EmeraldSafe
+            isSafe -> EmeraldSafe
+            else -> AmberIndicated
         }
+        val modeShortLabel = when {
+            diagnostics.isBitPerfectMixerActive -> "Bit-Perfect"
+            isSafe -> "Safe Mode"
+            else -> "Clean Native"
+        }
+        val formatSpecText = diagnostics.sourceFormatSummary
+            .takeIf { it != "No active track loaded" }
+            ?.replace(" • ", " · ")
+            ?: track.formatBadge.replace(" • ", " · ")
 
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp, vertical = 14.dp),
+                .padding(horizontal = 24.dp, vertical = 12.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            // Auto-pause or decode error banner
             playbackState.engineState.lastAutoPauseNotice?.let { notice ->
                 SafetyAlertBanner(
                     message = notice,
                     isError = false,
                     onDismiss = onClearAutoPauseNotice,
                 )
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(12.dp))
             }
             playbackState.engineState.errorMessage?.let { err ->
                 SafetyAlertBanner(
@@ -247,68 +289,24 @@ fun NowPlayingScreen(
                     isError = true,
                     onDismiss = null,
                 )
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(12.dp))
             }
 
-            // Studio offline audiophile hero artwork card
-            Surface(
-                modifier = Modifier.size(184.dp),
-                shape = RoundedCornerShape(28.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant,
-                border = BorderStroke(1.25.dp, heroAccent.copy(alpha = 0.5f)),
-                tonalElevation = 6.dp,
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(
-                            Brush.verticalGradient(
-                                colors = listOf(
-                                    heroAccent.copy(alpha = 0.14f),
-                                    MaterialTheme.colorScheme.surfaceVariant,
-                                    MaterialTheme.colorScheme.surface,
-                                ),
-                            ),
-                        ),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center,
-                    ) {
-                        Surface(
-                            modifier = Modifier.size(86.dp),
-                            shape = CircleShape,
-                            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
-                            border = BorderStroke(1.dp, heroAccent.copy(alpha = 0.45f)),
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = Icons.Filled.GraphicEq,
-                                    contentDescription = null,
-                                    tint = heroAccent,
-                                    modifier = Modifier.size(46.dp),
-                                )
-                            }
-                        }
-                        Spacer(modifier = Modifier.height(12.dp))
-                        FormatBadgeChip(
-                            text = if (track.isHiResLossless()) "HI-RES ${track.container}" else track.container,
-                            containerColor = if (track.isHiResLossless()) HiResGoldContainer else MaterialTheme.colorScheme.surface,
-                            contentColor = if (track.isHiResLossless()) OnHiResGoldContainer else heroAccent,
-                            borderColor = heroAccent.copy(alpha = 0.45f),
-                        )
-                    }
-                }
-            }
+            // Hero Album Cover Art Centerpiece (100% offline local extraction)
+            TrackArtworkThumbnail(
+                track = track,
+                artworkLoader = albumArtworkLoader,
+                size = 272.dp,
+                cornerRadius = 16.dp,
+                targetSizePx = AlbumArtworkLoader.HERO_SIZE_PX,
+            )
 
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(24.dp))
 
             // Track Metadata
             Text(
                 text = track.title,
                 style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
@@ -316,26 +314,30 @@ fun NowPlayingScreen(
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "${track.artist} • ${track.album}",
+                text = "${track.artist} · ${track.album}",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 textAlign = TextAlign.Center,
             )
-            Spacer(modifier = Modifier.height(10.dp))
-
-            FormatBadgeChip(
-                text = diagnostics.sourceFormatSummary.takeIf { it != "No active track loaded" }
-                    ?: track.formatBadge,
-                containerColor = if (track.isHiResLossless()) HiResGoldContainer else IcePrimaryContainer.copy(alpha = 0.65f),
-                contentColor = if (track.isHiResLossless()) OnHiResGoldContainer else OnIcePrimaryContainer,
-                modifier = Modifier.clickable(onClick = onOpenDiagnostics),
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = formatSpecText,
+                style = MaterialTheme.typography.labelSmall,
+                color = TextMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable(onClick = onOpenDiagnostics)
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
             )
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(18.dp))
 
-            // Seekable Progress Bar
+            // Seekable Progress Slider + Non-Wrapping Timestamps
             val displayedPosMs = if (isScrubbing) scrubPositionMs.toLong() else currentPosMs
             val sliderMax = durationMs.coerceAtLeast(1L).toFloat()
             Slider(
@@ -351,7 +353,7 @@ fun NowPlayingScreen(
                 },
                 valueRange = 0f..sliderMax,
                 colors = SliderDefaults.colors(
-                    thumbColor = MaterialTheme.colorScheme.primary,
+                    thumbColor = MaterialTheme.colorScheme.onSurface,
                     activeTrackColor = MaterialTheme.colorScheme.primary,
                     inactiveTrackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
                 ),
@@ -364,12 +366,16 @@ fun NowPlayingScreen(
                 Text(
                     text = formatDurationMs(displayedPosMs),
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = TextMuted,
+                    maxLines = 1,
+                    softWrap = false,
                 )
                 Text(
                     text = formatDurationMs(durationMs),
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = TextMuted,
+                    maxLines = 1,
+                    softWrap = false,
                 )
             }
 
@@ -378,21 +384,18 @@ fun NowPlayingScreen(
             // Primary Transport Controls (all >= 48 dp touch targets)
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly,
+                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 val shuffleOn = playbackState.queue.shuffleEnabled
                 IconButton(
                     onClick = onToggleShuffle,
-                    modifier = Modifier
-                        .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
-                        .clip(CircleShape)
-                        .background(if (shuffleOn) IcePrimaryContainer.copy(alpha = 0.55f) else androidx.compose.ui.graphics.Color.Transparent),
+                    modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
                 ) {
                     Icon(
                         imageVector = Icons.Filled.Shuffle,
                         contentDescription = if (shuffleOn) "Disable shuffle" else "Enable shuffle",
-                        tint = if (shuffleOn) IcePrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        tint = if (shuffleOn) MaterialTheme.colorScheme.primary else TextMuted,
                     )
                 }
 
@@ -403,33 +406,25 @@ fun NowPlayingScreen(
                     Icon(
                         imageVector = Icons.Filled.SkipPrevious,
                         contentDescription = "Previous track",
-                        modifier = Modifier.size(34.dp),
+                        modifier = Modifier.size(32.dp),
                         tint = MaterialTheme.colorScheme.onSurface,
                     )
                 }
 
-                Surface(
+                FilledIconButton(
+                    onClick = onTogglePlayPause,
+                    modifier = Modifier.size(64.dp),
                     shape = CircleShape,
-                    color = MaterialTheme.colorScheme.primary.copy(alpha = if (playbackState.isPlaying) 0.18f else 0f),
-                    modifier = Modifier.size(80.dp),
+                    colors = IconButtonDefaults.filledIconButtonColors(
+                        containerColor = MaterialTheme.colorScheme.onSurface,
+                        contentColor = MaterialTheme.colorScheme.background,
+                    ),
                 ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        FilledIconButton(
-                            onClick = onTogglePlayPause,
-                            modifier = Modifier.size(68.dp),
-                            shape = CircleShape,
-                            colors = IconButtonDefaults.filledIconButtonColors(
-                                containerColor = MaterialTheme.colorScheme.primary,
-                                contentColor = MaterialTheme.colorScheme.onPrimary,
-                            ),
-                        ) {
-                            Icon(
-                                imageVector = if (playbackState.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                                contentDescription = if (playbackState.isPlaying) "Pause playback" else "Play audio",
-                                modifier = Modifier.size(36.dp),
-                            )
-                        }
-                    }
+                    Icon(
+                        imageVector = if (playbackState.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                        contentDescription = if (playbackState.isPlaying) "Pause playback" else "Play audio",
+                        modifier = Modifier.size(32.dp),
+                    )
                 }
 
                 IconButton(
@@ -439,7 +434,7 @@ fun NowPlayingScreen(
                     Icon(
                         imageVector = Icons.Filled.SkipNext,
                         contentDescription = "Next track",
-                        modifier = Modifier.size(34.dp),
+                        modifier = Modifier.size(32.dp),
                         tint = MaterialTheme.colorScheme.onSurface,
                     )
                 }
@@ -447,107 +442,138 @@ fun NowPlayingScreen(
                 val repeatMode = playbackState.queue.repeatMode
                 IconButton(
                     onClick = onCycleRepeatMode,
-                    modifier = Modifier
-                        .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
-                        .clip(CircleShape)
-                        .background(if (repeatMode != RepeatMode.OFF) IcePrimaryContainer.copy(alpha = 0.55f) else androidx.compose.ui.graphics.Color.Transparent),
+                    modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
                 ) {
                     Icon(
                         imageVector = if (repeatMode == RepeatMode.ONE) Icons.Filled.RepeatOne else Icons.Filled.Repeat,
                         contentDescription = "Repeat mode: ${repeatMode.name}",
-                        tint = if (repeatMode != RepeatMode.OFF) IcePrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        tint = if (repeatMode != RepeatMode.OFF) MaterialTheme.colorScheme.primary else TextMuted,
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.height(18.dp))
+            Spacer(modifier = Modifier.height(22.dp))
 
-            // Safe Mode vs Bit-Perfect Opt-In Safety Control Card
-            AudioSafetyModeCard(
-                mode = safetyState.mode,
-                isBitPerfectMixerActive = diagnostics.isBitPerfectMixerActive,
-                isUsbOutputConnected = safetyState.isUsbAudioConnected,
-                isFixedVolumeRisk = safetyState.isFixedVolumeRisk,
-                headline = diagnostics.pathStatusHeadline,
-                outputDeviceSummary = diagnostics.activeOutputDeviceSummary,
-                onSwitchToSafeMode = onSwitchToSafeMode,
-                onRequestBitPerfectMode = onRequestBitPerfectMode,
-                onOpenDiagnostics = onOpenDiagnostics,
-            )
+            // Compact Clickable Audio-Mode Status Strip (opens bottom sheet for mode switching)
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .sizeIn(minHeight = 48.dp)
+                    .clickable { showAudioModeSheet = true },
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.7f)),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(modeDotColor),
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text(
+                            text = "$modeShortLabel · ${safetyState.activeDeviceName}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Icon(
+                        imageVector = Icons.Filled.ChevronRight,
+                        contentDescription = "Configure audio output mode",
+                        tint = TextMuted,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(14.dp))
 
-            // Fast Access Strip: Queue, Lyrics, Diagnostics (>= 48 dp touch targets)
+            // Subtle Bottom Utility Strip: Queue, Lyrics, Audio Path (>= 48 dp targets)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                OutlinedButton(
+                TextButton(
                     onClick = onOpenQueue,
-                    shape = RoundedCornerShape(14.dp),
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.45f)),
                     modifier = Modifier
-                        .weight(1.18f)
+                        .weight(1.1f)
                         .sizeIn(minHeight = 48.dp),
                 ) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.QueueMusic,
                         contentDescription = null,
-                        modifier = Modifier.size(16.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp),
                     )
-                    Spacer(modifier = Modifier.width(4.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
                     Text(
                         text = "Queue (${playbackState.queue.size})",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         softWrap = false,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
 
-                OutlinedButton(
+                TextButton(
                     onClick = onOpenLyrics,
-                    shape = RoundedCornerShape(14.dp),
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.45f)),
-                    modifier = Modifier
-                        .weight(1f)
-                        .sizeIn(minHeight = 48.dp),
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Lyrics,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp),
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = "Lyrics",
-                        maxLines = 1,
-                        softWrap = false,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-
-                OutlinedButton(
-                    onClick = onOpenDiagnostics,
-                    shape = RoundedCornerShape(14.dp),
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.45f)),
                     modifier = Modifier
                         .weight(0.95f)
                         .sizeIn(minHeight = 48.dp),
                 ) {
                     Icon(
-                        imageVector = Icons.Filled.GraphicEq,
+                        imageVector = Icons.Filled.Lyrics,
                         contentDescription = null,
-                        modifier = Modifier.size(16.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp),
                     )
-                    Spacer(modifier = Modifier.width(4.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "Path",
+                        text = "Lyrics",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         softWrap = false,
-                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+
+                TextButton(
+                    onClick = onOpenDiagnostics,
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .sizeIn(minHeight = 48.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.GraphicEq,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Audio Path",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        softWrap = false,
                     )
                 }
             }
@@ -556,7 +582,7 @@ fun NowPlayingScreen(
 }
 
 @Composable
-private fun AudioSafetyModeCard(
+private fun AudioModeSheetContent(
     mode: AudioOutputMode,
     isBitPerfectMixerActive: Boolean,
     isUsbOutputConnected: Boolean,
@@ -574,88 +600,82 @@ private fun AudioSafetyModeCard(
         else -> AmberIndicated
     }
 
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-        border = BorderStroke(1.dp, accentColor.copy(alpha = 0.35f)),
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .navigationBarsPadding()
+            .padding(horizontal = 20.dp, vertical = 8.dp),
     ) {
-        Column(modifier = Modifier.padding(14.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = if (isSafe) Icons.Filled.Shield else Icons.Filled.GraphicEq,
-                        contentDescription = null,
-                        tint = accentColor,
-                        modifier = Modifier.size(20.dp),
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "Audio Output Mode",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
-                }
-                TextButton(
-                    onClick = onOpenDiagnostics,
-                    modifier = Modifier.sizeIn(minHeight = 48.dp),
-                ) {
-                    Text("Details")
-                }
-            }
+        Text(
+            text = "Audio Output Mode",
+            style = MaterialTheme.typography.titleLarge,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = outputDeviceSummary,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
 
-            AudioModeSegmentedSwitch(
-                mode = mode,
-                isBitPerfectMixerActive = isBitPerfectMixerActive,
-                onSwitchToSafeMode = onSwitchToSafeMode,
-                onRequestBitPerfectMode = onRequestBitPerfectMode,
-            )
+        Spacer(modifier = Modifier.height(16.dp))
 
-            Spacer(modifier = Modifier.height(10.dp))
-            Text(
-                text = headline,
-                style = MaterialTheme.typography.bodySmall,
-                fontWeight = FontWeight.Medium,
-                color = accentColor,
-            )
-            Spacer(modifier = Modifier.height(2.dp))
-            Text(
-                text = "Output: $outputDeviceSummary",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            when {
-                isBitPerfectMixerActive && isFixedVolumeRisk -> {
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text(
-                        text = "Caution: Hardware volume unverified — output may be fixed at 100% (0 dBFS).",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = CoralWarning,
-                    )
-                }
-                !isSafe && isUsbOutputConnected && !isBitPerfectMixerActive -> {
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text(
-                        text = "System volume remains active on Clean Native fallback (USB HAL did not engage Bit-Perfect).",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                !isSafe && !isUsbOutputConnected -> {
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text(
-                        text = "System volume remains active on non-USB output. Connect a USB-C DAC/headset and opt in again to negotiate Bit-Perfect.",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
+        AudioModeSegmentedSwitch(
+            mode = mode,
+            isBitPerfectMixerActive = isBitPerfectMixerActive,
+            onSwitchToSafeMode = onSwitchToSafeMode,
+            onRequestBitPerfectMode = onRequestBitPerfectMode,
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Text(
+            text = headline,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium,
+            color = accentColor,
+        )
+
+        val detailNote = when {
+            isBitPerfectMixerActive && isFixedVolumeRisk ->
+                "Caution: Hardware volume is unverified — USB output may be fixed at 100% (0 dBFS)."
+            !isSafe && isUsbOutputConnected && !isBitPerfectMixerActive ->
+                "System volume remains active on Clean Native fallback because the USB HAL did not engage Bit-Perfect."
+            !isSafe && !isUsbOutputConnected ->
+                "System volume remains active on non-USB output. Connect a USB-C DAC/headset to negotiate Bit-Perfect."
+            else ->
+                "Safe Mode keeps Android system volume active and prevents full-scale blast on high-sensitivity IEMs."
         }
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = detailNote,
+            style = MaterialTheme.typography.bodySmall,
+            color = if (isBitPerfectMixerActive && isFixedVolumeRisk) CoralWarning else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+        HorizontalDivider(
+            thickness = 0.5.dp,
+            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.55f),
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+
+        OutlinedButton(
+            onClick = onOpenDiagnostics,
+            shape = RoundedCornerShape(10.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .sizeIn(minHeight = 48.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Filled.GraphicEq,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Open 6-Stage Audio Diagnostics")
+        }
+        Spacer(modifier = Modifier.height(16.dp))
     }
 }
 
@@ -667,11 +687,11 @@ private fun SafetyAlertBanner(
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(10.dp),
         color = if (isError) CoralWarningContainer else AmberIndicatedContainer,
         border = BorderStroke(
-            1.dp,
-            (if (isError) CoralWarning else AmberIndicated).copy(alpha = 0.45f),
+            0.5.dp,
+            (if (isError) CoralWarning else AmberIndicated).copy(alpha = 0.5f),
         ),
     ) {
         Row(
@@ -684,7 +704,7 @@ private fun SafetyAlertBanner(
                 imageVector = Icons.Filled.Warning,
                 contentDescription = null,
                 tint = if (isError) CoralWarning else AmberIndicated,
-                modifier = Modifier.size(20.dp),
+                modifier = Modifier.size(18.dp),
             )
             Spacer(modifier = Modifier.width(10.dp))
             Text(
@@ -720,12 +740,13 @@ fun HearingSafetyWarningDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismissStaySafe,
+        containerColor = MaterialTheme.colorScheme.surfaceVariant,
         icon = {
             Icon(
                 imageVector = Icons.Filled.Warning,
                 contentDescription = "Hearing safety warning",
                 tint = CoralWarning,
-                modifier = Modifier.size(32.dp),
+                modifier = Modifier.size(28.dp),
             )
         },
         title = {

@@ -54,6 +54,7 @@ fun BitPerfectAppRoot(
                     libraryState = libraryState,
                     favoriteTrackUris = favoriteTrackUris,
                     playbackState = playbackState,
+                    albumArtworkLoader = viewModel.albumArtworkLoader,
                     onRefreshLibrary = viewModel::refreshLibrary,
                     onImportFolder = viewModel::importSafFolder,
                     onImportFile = viewModel::importSafAudioFile,
@@ -85,6 +86,7 @@ fun BitPerfectAppRoot(
                     )
                 NowPlayingScreen(
                     playbackState = playbackState,
+                    albumArtworkLoader = viewModel.albumArtworkLoader,
                     isFavorite = isFav,
                     onBack = { navController.popBackStack() },
                     onToggleFavorite = viewModel::toggleFavorite,
@@ -116,6 +118,7 @@ fun BitPerfectAppRoot(
                 QueueScreen(
                     playbackState = playbackState,
                     libraryTracks = libraryState.allSongs,
+                    albumArtworkLoader = viewModel.albumArtworkLoader,
                     onBack = { navController.popBackStack() },
                     onSelectQueueIndex = viewModel::playTrackAtQueueIndex,
                     onAddTrackToQueue = viewModel::enqueueTrack,
