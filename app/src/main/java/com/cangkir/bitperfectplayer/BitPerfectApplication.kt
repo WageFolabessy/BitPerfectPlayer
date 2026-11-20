@@ -9,6 +9,7 @@ import com.cangkir.bitperfectplayer.data.LocalPersistenceRepository
 import com.cangkir.bitperfectplayer.data.UserPreferencesRepository
 import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
 import com.cangkir.bitperfectplayer.library.LocalLibraryRepository
+import com.cangkir.bitperfectplayer.library.PlaylistRepository
 import com.cangkir.bitperfectplayer.lyrics.AndroidContentFingerprintProvider
 import com.cangkir.bitperfectplayer.lyrics.LyricsRepository
 
@@ -32,6 +33,15 @@ class AppContainer(context: Context) {
             metadataReader = metadataReader,
             preferencesRepository = preferencesRepository,
             persistenceRepository = persistenceRepository,
+            fingerprintProvider = fingerprintProvider,
+        )
+    }
+    val playlistRepository: PlaylistRepository by lazy {
+        PlaylistRepository(
+            context = appContext,
+            playlistDao = database.playlistDao(),
+            trackStatsDao = database.trackStatsDao(),
+            libraryRepository = libraryRepository,
             fingerprintProvider = fingerprintProvider,
         )
     }

@@ -9,6 +9,8 @@ import com.cangkir.bitperfectplayer.audio.PlaybackControllerState
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
 import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
 import com.cangkir.bitperfectplayer.library.LibrarySnapshot
+import com.cangkir.bitperfectplayer.library.PlaylistsUiSnapshot
+import com.cangkir.bitperfectplayer.library.ResolvedPlaylist
 import com.cangkir.bitperfectplayer.lyrics.TrackLyricsState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -36,6 +38,7 @@ class MainViewModel(
 ) : ViewModel() {
 
     val libraryState: StateFlow<LibrarySnapshot> = container.libraryRepository.librarySnapshot
+    val playlistsState: StateFlow<PlaylistsUiSnapshot> = container.playlistRepository.playlistsSnapshot
     val playbackState: StateFlow<PlaybackControllerState> = container.playbackController.state
     val playbackPositionMs: StateFlow<Long> = container.playbackController.playbackPositionMs
     val albumArtworkLoader: AlbumArtworkLoader = container.albumArtworkLoader
@@ -183,6 +186,122 @@ class MainViewModel(
             result.onFailure {
                 _uiMessage.value = "Unable to update favorite status"
             }
+        }
+    }
+
+    fun createPlaylist(name: String) {
+        viewModelScope.launch {
+            val clean = name.trim()
+            container.playlistRepository.createPlaylist(clean)
+                .onSuccess {
+                    _uiMessage.value = "Created playlist \"$clean\""
+                }
+                .onFailure { err ->
+                    _uiMessage.value = err.message ?: "Unable to create playlist"
+                }
+        }
+    }
+
+    fun createPlaylistAndAddTrack(name: String, track: PlaybackTrack) {
+        viewModelScope.launch {
+            val clean = name.trim()
+            container.playlistRepository.createPlaylist(clean)
+                .onSuccess { newId ->
+                    container.playlistRepository.addTracksToPlaylist(newId, listOf(track))
+                        .onSuccess {
+                            _uiMessage.value = "Added \"${track.title}\" to \"$clean\""
+                        }
+                        .onFailure { err ->
+                            _uiMessage.value = err.message ?: "Created \"$clean\" but failed to add track"
+                        }
+                }
+                .onFailure { err ->
+                    _uiMessage.value = err.message ?: "Unable to create playlist"
+                }
+        }
+    }
+
+    fun renamePlaylist(playlistId: Long, newName: String) {
+        viewModelScope.launch {
+            val clean = newName.trim()
+            container.playlistRepository.renamePlaylist(playlistId, clean)
+                .onSuccess {
+                    _uiMessage.value = "Renamed playlist to \"$clean\""
+                }
+                .onFailure { err ->
+                    _uiMessage.value = err.message ?: "Unable to rename playlist"
+                }
+        }
+    }
+
+    fun deletePlaylist(playlistId: Long, playlistName: String) {
+        viewModelScope.launch {
+            container.playlistRepository.deletePlaylist(playlistId)
+                .onSuccess {
+                    _uiMessage.value = "Deleted playlist \"$playlistName\""
+                }
+                .onFailure { err ->
+                    _uiMessage.value = err.message ?: "Unable to delete playlist"
+                }
+        }
+    }
+
+    fun addTrackToPlaylist(playlistId: Long, playlistName: String, track: PlaybackTrack) {
+        viewModelScope.launch {
+            container.playlistRepository.addTracksToPlaylist(playlistId, listOf(track))
+                .onSuccess {
+                    _uiMessage.value = "Added \"${track.title}\" to \"$playlistName\""
+                }
+                .onFailure { err ->
+                    _uiMessage.value = err.message ?: "Unable to add track to playlist"
+                }
+        }
+    }
+
+    fun removePlaylistEntry(playlistId: Long, entryId: Long) {
+        viewModelScope.launch {
+            container.playlistRepository.removeEntryFromPlaylist(playlistId, entryId)
+                .onFailure { err ->
+                    _uiMessage.value = err.message ?: "Unable to remove track from playlist"
+                }
+        }
+    }
+
+    fun movePlaylistEntry(playlistId: Long, fromIndex: Int, toIndex: Int) {
+        viewModelScope.launch {
+            container.playlistRepository.moveEntryInPlaylist(playlistId, fromIndex, toIndex)
+                .onFailure { err ->
+                    _uiMessage.value = err.message ?: "Unable to reorder playlist"
+                }
+        }
+    }
+
+    fun exportPlaylistToM3u8(playlist: ResolvedPlaylist, destinationUri: Uri) {
+        viewModelScope.launch {
+            container.playlistRepository.exportPlaylistToM3u8(playlist, destinationUri)
+                .onSuccess { exportedCount ->
+                    _uiMessage.value = "Exported \"${playlist.name}\" ($exportedCount ${if (exportedCount == 1) "track" else "tracks"})"
+                }
+                .onFailure { err ->
+                    _uiMessage.value = err.message ?: "Unable to export .m3u8 playlist"
+                }
+        }
+    }
+
+    fun importPlaylistFromM3u8(sourceUri: Uri) {
+        viewModelScope.launch {
+            val allTracks = libraryState.value.allSongs
+            container.playlistRepository.importPlaylistFromM3u8(sourceUri, allTracks)
+                .onSuccess { summary ->
+                    _uiMessage.value = if (summary.unmatchedCount > 0) {
+                        "Imported \"${summary.playlistName}\": ${summary.matchedCount} matched, ${summary.unmatchedCount} missing"
+                    } else {
+                        "Imported \"${summary.playlistName}\" (${summary.matchedCount} ${if (summary.matchedCount == 1) "track" else "tracks"})"
+                    }
+                }
+                .onFailure { err ->
+                    _uiMessage.value = err.message ?: "Unable to import .m3u8 playlist"
+                }
         }
     }
 
