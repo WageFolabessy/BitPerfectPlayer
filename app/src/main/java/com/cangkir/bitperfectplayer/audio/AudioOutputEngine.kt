@@ -17,6 +17,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.Process
+import android.util.Log
 import androidx.annotation.RequiresApi
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -24,6 +25,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
@@ -68,14 +70,15 @@ data class EnginePlaybackState(
 
 /**
  * Native Android [AudioTrack] playback engine with:
- * - Runtime-adaptive Android 14+ (`API 34+`) `MIXER_BEHAVIOR_BIT_PERFECT` negotiation on USB audio outputs.
- * - Mandatory `clearPreferredMixerAttributes` cleanup on Safe Mode, stop/release, USB disconnect,
- *   and sample-rate/track transitions.
- * - API 31+ (`Build.VERSION_CODES.S`) PCM encoding guards with lossless float32 fallback on API 26–30.
- * - Zero app-side EQ, DSP, normalization, or crossfade.
- * - Hardware-clocked [EnginePlaybackState.currentPositionMs] via `AudioTrack.playbackHeadPosition`.
+ * - Confirmed `MediaCodec.outputFormat` negotiation before `AudioTrack` creation (and dynamic
+ *   reconfiguration if `INFO_OUTPUT_FORMAT_CHANGED` occurs mid-stream).
+ * - Frame-aligned direct little-endian `ByteBuffer` writes for integer PCM and `FloatArray` writes
+ *   for `ENCODING_PCM_FLOAT` with full partial-write loops (never drops remainder bytes or calls
+ *   `write(ByteArray)` on float tracks).
+ * - Runtime-adaptive Android 14+ (`API 34+`) `MIXER_BEHAVIOR_BIT_PERFECT` negotiation on USB audio outputs
+ *   with mandatory `clearPreferredMixerAttributes` cleanup.
+ * - Idempotent lifecycle transitions (no duplicate `AudioTrack.stop()` or redundant `pause()` calls).
  * - Hearing-safety auto-pause on `ACTION_AUDIO_BECOMING_NOISY`, USB connect/disconnect, and route change.
- * - Full [AudioFocusRequest] integration for calls and system notifications.
  */
 class AudioOutputEngine(
     context: Context,
@@ -299,6 +302,7 @@ class AudioOutputEngine(
         stopWorkerAndReleaseTrackLocked(clearMixer = true)
         currentRequest = request
 
+        // Open and prime decoder BEFORE creating AudioTrack so codec.outputFormat is confirmed.
         val decoder = try {
             MediaCodecAudioDecoder.open(
                 context = appContext,
@@ -346,7 +350,7 @@ class AudioOutputEngine(
         }
 
         if (releasedFlag.get() || loadGeneration.get() != generation) {
-            runCatching { audioTrack.release() }
+            safeStopAndReleaseTrack(audioTrack)
             runCatching { decoder.close() }
             clearPreferredMixerAttributesOnApi34(null)
             return
@@ -404,7 +408,7 @@ class AudioOutputEngine(
                 }
                 resumeAfterTransientFocusLoss = false
                 isPausedFlag.set(false)
-                runCatching { track.play() }
+                safePlayTrack(track)
                 _state.update {
                     it.copy(
                         status = PlaybackStatus.PLAYING,
@@ -436,7 +440,7 @@ class AudioOutputEngine(
                 engineLock.withLock {
                     val decoder = activeDecoder ?: return@withLock
                     val actual = runCatching { decoder.seekToMs(clamped) }.getOrDefault(clamped)
-                    runCatching { activeAudioTrack?.flush() }
+                    activeAudioTrack?.let { safeFlushTrack(it) }
                     _state.update { it.copy(currentPositionMs = actual) }
                 }
             }
@@ -444,11 +448,14 @@ class AudioOutputEngine(
     }
 
     fun stop() {
+        if (releasedFlag.get()) return
+        if (_state.value.status == PlaybackStatus.IDLE && activeAudioTrack == null && activeDecoder == null) {
+            return
+        }
         loadGeneration.incrementAndGet()
         resumeAfterTransientFocusLoss = false
         stopWorkerFlag.set(true)
         isPausedFlag.set(true)
-        runCatching { activeAudioTrack?.pause() }
         enqueueControlTask {
             engineLock.withLock {
                 stopWorkerAndReleaseTrackLocked(clearMixer = true)
@@ -499,7 +506,6 @@ class AudioOutputEngine(
         stopWorkerFlag.set(true)
         isPausedFlag.set(true)
         unregisterAudioMonitors()
-        runCatching { activeAudioTrack?.pause() }
         runCatching {
             controlExecutor.execute {
                 engineLock.withLock {
@@ -552,7 +558,6 @@ class AudioOutputEngine(
                 }
             }
             SafetyEventType.MODE_CHANGED_TO_BIT_PERFECT -> {
-                // Re-open AudioTrack cleanly with API 34+ MIXER_BEHAVIOR_BIT_PERFECT negotiation.
                 val shouldResume = _state.value.isPlaying
                 enqueueControlTask {
                     if (releasedFlag.get()) return@enqueueControlTask
@@ -591,23 +596,30 @@ class AudioOutputEngine(
     }
 
     private fun pauseInternal(clearFocus: Boolean, notice: String?) {
-        // Immediate lock-free pause for minimal hearing-safety latency.
-        isPausedFlag.set(true)
-        runCatching { activeAudioTrack?.pause() }
-        _state.update { current ->
-            val nextStatus = if (current.status == PlaybackStatus.PLAYING || current.status == PlaybackStatus.PREPARING) {
-                PlaybackStatus.PAUSED
-            } else {
-                current.status
+        val wasPaused = isPausedFlag.getAndSet(true)
+        activeAudioTrack?.let { safePauseTrack(it) }
+        val currentStatus = _state.value.status
+        val needsStateUpdate = !wasPaused ||
+            currentStatus == PlaybackStatus.PLAYING ||
+            currentStatus == PlaybackStatus.PREPARING ||
+            notice != null
+
+        if (needsStateUpdate) {
+            _state.update { current ->
+                val nextStatus = if (current.status == PlaybackStatus.PLAYING || current.status == PlaybackStatus.PREPARING) {
+                    PlaybackStatus.PAUSED
+                } else {
+                    current.status
+                }
+                current.copy(
+                    status = nextStatus,
+                    safetyState = safetyController.state(),
+                    lastAutoPauseNotice = notice ?: current.lastAutoPauseNotice,
+                )
             }
-            current.copy(
-                status = nextStatus,
-                safetyState = safetyController.state(),
-                lastAutoPauseNotice = notice ?: current.lastAutoPauseNotice,
-            )
+            publishDiagnostics()
         }
-        publishDiagnostics()
-        if (clearFocus) {
+        if (clearFocus && hasAudioFocus) {
             enqueueControlTask {
                 if (releasedFlag.get()) return@enqueueControlTask
                 engineLock.withLock {
@@ -641,10 +653,11 @@ class AudioOutputEngine(
         activeNegotiatedMixerBehavior = negotiation.behavior
         activeNegotiatedMixerSummary = negotiation.summary
 
+        val bytesPerFrame = pcmFormat.bytesPerFrame.coerceAtLeast(1)
         val minBuf = AudioTrack.getMinBufferSize(pcmFormat.sampleRateHz, channelMask, androidEncoding)
-            .coerceAtLeast(pcmFormat.bytesPerFrame * 1024)
-        val rawBufSize = maxOf(minBuf * 2, pcmFormat.bytesPerFrame * (pcmFormat.sampleRateHz / 20))
-        val alignedBufSize = ((rawBufSize + pcmFormat.bytesPerFrame - 1) / pcmFormat.bytesPerFrame) * pcmFormat.bytesPerFrame
+            .coerceAtLeast(bytesPerFrame * 1024)
+        val rawBufSize = maxOf(minBuf * 2, bytesPerFrame * (pcmFormat.sampleRateHz / 20))
+        val alignedBufSize = PcmStreamRules.computeAlignedBufferSize(rawBufSize, bytesPerFrame)
 
         val audioFormat = AudioFormat.Builder()
             .setSampleRate(pcmFormat.sampleRateHz)
@@ -652,7 +665,7 @@ class AudioOutputEngine(
             .setEncoding(androidEncoding)
             .build()
 
-        // PERFORMANCE_MODE_NONE avoids forcing fast-mixer 48 kHz resampling on USB HAL paths.
+        // PERFORMANCE_MODE_NONE avoids forcing fast-mixer 48,000 Hz resampling on USB HAL paths.
         val track = AudioTrack.Builder()
             .setAudioAttributes(playbackAudioAttributes)
             .setAudioFormat(audioFormat)
@@ -665,8 +678,17 @@ class AudioOutputEngine(
             runCatching { track.preferredDevice = usbDevice }
         }
 
+        val actualEncodingInt = track.audioFormat
         audioTrackActualSampleRateHz = track.sampleRate
-        audioTrackActualEncodingLabel = pcmFormat.encoding.displayLabel
+        audioTrackActualEncodingLabel = androidEncodingName(actualEncodingInt)
+
+        Log.d(
+            TAG,
+            "AudioTrack configured: decoder=${pcmFormat.decoderName}, decodedEncoding=${pcmFormat.encoding}, " +
+                "audioTrackEncoding=${audioTrackActualEncodingLabel} (const=$actualEncodingInt), " +
+                "sampleRate=${track.sampleRate}Hz, channels=${pcmFormat.channelCount}, " +
+                "bytesPerFrame=$bytesPerFrame, bufferBytes=$alignedBufSize, mixer=${negotiation.behavior}",
+        )
         return track
     }
 
@@ -734,11 +756,11 @@ class AudioOutputEngine(
                     .take(6)
                     .joinToString(", ") { candidate ->
                         val fmt = candidate.format
-                        "${fmt.sampleRate} Hz/${androidEncodingName(fmt.encoding)}"
+                        "${AudioFormatFormatter.formatSampleRateHz(fmt.sampleRate)}/${androidEncodingName(fmt.encoding)}"
                     }
                 return MixerNegotiationResult(
                     behavior = NegotiatedMixerBehavior.DEFAULT_MIXER_FALLBACK,
-                    summary = "Default System Mixer (No exact bit-perfect match for ${pcmFormat.sampleRateHz} Hz / ${pcmFormat.encoding.displayLabel}; HAL supports: $reported)",
+                    summary = "Default System Mixer (No exact bit-perfect match for ${AudioFormatFormatter.formatSampleRateHz(pcmFormat.sampleRateHz)} / ${androidEncodingName(androidEncoding)}; HAL supports: $reported)",
                 )
             }
 
@@ -759,7 +781,7 @@ class AudioOutputEngine(
                 lastConfiguredMixerDevice = usbDevice
                 MixerNegotiationResult(
                     behavior = NegotiatedMixerBehavior.BIT_PERFECT,
-                    summary = "MIXER_BEHAVIOR_BIT_PERFECT (${verified.format.sampleRate} Hz, ${pcmFormat.encoding.displayLabel})",
+                    summary = "MIXER_BEHAVIOR_BIT_PERFECT (${AudioFormatFormatter.formatSampleRateHz(verified.format.sampleRate)}, ${androidEncodingName(verified.format.encoding)})",
                 )
             } else {
                 clearPreferredMixerAttributesOnApi34(usbDevice)
@@ -807,7 +829,7 @@ class AudioOutputEngine(
         stopWorkerFlag.set(false)
         isPausedFlag.set(false)
         pendingSeekMs.set(-1L)
-        runCatching { track.play() }
+        safePlayTrack(track)
 
         val worker = Thread(
             {
@@ -822,17 +844,25 @@ class AudioOutputEngine(
 
     private fun runPlaybackLoop(
         decoder: PcmAudioDecoder,
-        track: AudioTrack,
+        initialTrack: AudioTrack,
         initialSeekMs: Long,
     ) {
-        val sampleRate = decoder.format.sampleRateHz.coerceAtLeast(1)
-        val durationMs = decoder.format.durationMs.coerceAtLeast(0L)
-        val bufferSize = maxOf(8_192, decoder.format.bytesPerFrame * 1024)
-        val pcmBuffer = ByteArray(bufferSize)
-        val byteBuffer = ByteBuffer.wrap(pcmBuffer)
+        var currentTrack = initialTrack
+        var observedFormatVersion = decoder.formatVersion
+        var currentFormat = decoder.format
+        var sampleRate = currentFormat.sampleRateHz.coerceAtLeast(1)
+        val durationMs = currentFormat.durationMs.coerceAtLeast(0L)
+        var bytesPerFrame = currentFormat.bytesPerFrame.coerceAtLeast(1)
+
+        var bufferSize = PcmStreamRules.computeAlignedBufferSize(16_384, bytesPerFrame)
+        var pcmBuffer = ByteArray(bufferSize)
+        var directBuffer = ByteBuffer.allocateDirect(bufferSize).order(ByteOrder.LITTLE_ENDIAN)
+        var floatBuffer = FloatArray(bufferSize / 4 + 1)
+        var remainder = ByteArray(bytesPerFrame)
+        var remainderLen = 0
 
         var seekBaseMs = initialSeekMs.coerceAtLeast(0L)
-        var headBaseFrames = readUnsignedPlaybackHeadFrames(track)
+        var headBaseFrames = readUnsignedPlaybackHeadFrames(currentTrack)
         var lastUiUpdateNano = 0L
 
         try {
@@ -840,14 +870,15 @@ class AudioOutputEngine(
                 val requestedSeek = pendingSeekMs.getAndSet(-1L)
                 if (requestedSeek >= 0L) {
                     val wasPlaying = !isPausedFlag.get()
-                    runCatching { track.pause() }
-                    runCatching { track.flush() }
+                    safePauseTrack(currentTrack)
+                    safeFlushTrack(currentTrack)
+                    remainderLen = 0
                     val actualSeekMs = decoder.seekToMs(requestedSeek)
                     seekBaseMs = actualSeekMs
-                    headBaseFrames = readUnsignedPlaybackHeadFrames(track)
+                    headBaseFrames = readUnsignedPlaybackHeadFrames(currentTrack)
                     _state.update { it.copy(currentPositionMs = actualSeekMs) }
                     if (wasPlaying) {
-                        runCatching { track.play() }
+                        safePlayTrack(currentTrack)
                     }
                     continue
                 }
@@ -862,8 +893,46 @@ class AudioOutputEngine(
                 }
 
                 val bytesRead = decoder.readPcm(pcmBuffer)
+
+                // Reconfigure AudioTrack dynamically if MediaCodec emitted INFO_OUTPUT_FORMAT_CHANGED mid-stream.
+                val latestVersion = decoder.formatVersion
+                if (latestVersion != observedFormatVersion) {
+                    observedFormatVersion = latestVersion
+                    val newFormat = decoder.format
+                    if (newFormat.encoding != currentFormat.encoding ||
+                        newFormat.sampleRateHz != currentFormat.sampleRateHz ||
+                        newFormat.channelCount != currentFormat.channelCount
+                    ) {
+                        val rebuiltTrack = engineLock.withLock {
+                            if (stopWorkerFlag.get() || releasedFlag.get()) {
+                                null
+                            } else {
+                                safeStopAndReleaseTrack(currentTrack)
+                                createConfiguredAudioTrackLocked(newFormat).also { created ->
+                                    activeAudioTrack = created
+                                    if (!isPausedFlag.get()) {
+                                        safePlayTrack(created)
+                                    }
+                                    publishDiagnostics()
+                                }
+                            }
+                        } ?: break
+                        currentTrack = rebuiltTrack
+                        currentFormat = newFormat
+                        sampleRate = currentFormat.sampleRateHz.coerceAtLeast(1)
+                        bytesPerFrame = currentFormat.bytesPerFrame.coerceAtLeast(1)
+                        bufferSize = PcmStreamRules.computeAlignedBufferSize(16_384, bytesPerFrame)
+                        pcmBuffer = ByteArray(bufferSize)
+                        directBuffer = ByteBuffer.allocateDirect(bufferSize).order(ByteOrder.LITTLE_ENDIAN)
+                        floatBuffer = FloatArray(bufferSize / 4 + 1)
+                        remainder = ByteArray(bytesPerFrame)
+                        remainderLen = 0
+                        seekBaseMs = _state.value.currentPositionMs
+                        headBaseFrames = readUnsignedPlaybackHeadFrames(currentTrack)
+                    }
+                }
+
                 if (bytesRead < 0) {
-                    // Wait briefly for remaining queued frames to finish playing out
                     val finalPos = durationMs.takeIf { it > 0L } ?: _state.value.currentPositionMs
                     _state.update {
                         it.copy(
@@ -884,18 +953,43 @@ class AudioOutputEngine(
                     continue
                 }
 
-                byteBuffer.position(0)
-                byteBuffer.limit(bytesRead)
-                val written = track.write(byteBuffer, bytesRead, AudioTrack.WRITE_BLOCKING)
-                if (written < 0) {
-                    throw AudioDecodeException.IoError("AudioTrack.write failed with code $written")
+                // Combine any partial-frame remainder with incoming bytes and write ONLY whole PCM frames.
+                val combinedBytes: ByteArray
+                val totalLen: Int
+                if (remainderLen > 0) {
+                    totalLen = remainderLen + bytesRead
+                    combinedBytes = ByteArray(totalLen)
+                    System.arraycopy(remainder, 0, combinedBytes, 0, remainderLen)
+                    System.arraycopy(pcmBuffer, 0, combinedBytes, remainderLen, bytesRead)
+                    remainderLen = 0
+                } else {
+                    combinedBytes = pcmBuffer
+                    totalLen = bytesRead
+                }
+
+                val alignedLen = PcmStreamRules.alignByteCountToFrame(totalLen, bytesPerFrame)
+                val trailingLen = totalLen - alignedLen
+                if (trailingLen > 0) {
+                    System.arraycopy(combinedBytes, alignedLen, remainder, 0, trailingLen)
+                    remainderLen = trailingLen
+                }
+
+                if (alignedLen > 0) {
+                    writeAlignedPcmFully(
+                        track = currentTrack,
+                        encoding = currentFormat.encoding,
+                        bytes = combinedBytes,
+                        alignedByteCount = alignedLen,
+                        directBuffer = directBuffer,
+                        floatBuffer = floatBuffer,
+                    )
                 }
 
                 // Publish hardware-clocked playback position (~20 Hz) for smooth seek bar & synced lyrics.
                 val nowNano = System.nanoTime()
                 if (nowNano - lastUiUpdateNano >= 50_000_000L) {
                     lastUiUpdateNano = nowNano
-                    val headFrames = readUnsignedPlaybackHeadFrames(track)
+                    val headFrames = readUnsignedPlaybackHeadFrames(currentTrack)
                     val deltaFrames = (headFrames - headBaseFrames).coerceAtLeast(0L)
                     val computedPos = seekBaseMs + (deltaFrames * 1000L) / sampleRate.toLong()
                     val clampedPos = if (durationMs > 0L) computedPos.coerceIn(0L, durationMs) else computedPos
@@ -923,6 +1017,134 @@ class AudioOutputEngine(
         }
     }
 
+    /**
+     * Writes every byte of an aligned PCM chunk to [AudioTrack], looping cleanly on partial writes.
+     *
+     * - For [PcmEncodingType.PCM_FLOAT]: converts little-endian float32 PCM bytes to [FloatArray] and
+     *   uses `AudioTrack.write(FloatArray, offset, count, WRITE_BLOCKING)` (avoids `ERROR_BAD_VALUE`
+     *   from `AudioTrack.write(ByteArray, ...)` on `ENCODING_PCM_FLOAT` tracks).
+     * - For integer PCM (`PCM_16BIT`, `PCM_24BIT_PACKED`, `PCM_32BIT`): writes via a direct
+     *   little-endian [ByteBuffer] using `AudioTrack.write(ByteBuffer, remaining, WRITE_BLOCKING)`.
+     */
+    private fun writeAlignedPcmFully(
+        track: AudioTrack,
+        encoding: PcmEncodingType,
+        bytes: ByteArray,
+        alignedByteCount: Int,
+        directBuffer: ByteBuffer,
+        floatBuffer: FloatArray,
+    ) {
+        if (encoding == PcmEncodingType.PCM_FLOAT) {
+            var byteOffset = 0
+            while (byteOffset < alignedByteCount && !stopWorkerFlag.get() && !releasedFlag.get()) {
+                val chunkBytes = minOf(alignedByteCount - byteOffset, floatBuffer.size * 4)
+                val totalFloats = PcmStreamRules.convertLittleEndianBytesToFloats(
+                    sourceBytes = bytes,
+                    sourceOffset = byteOffset,
+                    byteCount = chunkBytes,
+                    destFloats = floatBuffer,
+                )
+                var floatOffset = 0
+                while (floatOffset < totalFloats && !stopWorkerFlag.get() && !releasedFlag.get()) {
+                    val written = track.write(
+                        floatBuffer,
+                        floatOffset,
+                        totalFloats - floatOffset,
+                        AudioTrack.WRITE_BLOCKING,
+                    )
+                    if (written < 0) {
+                        throw AudioDecodeException.IoError("AudioTrack float write failed with code $written")
+                    }
+                    if (written == 0) {
+                        if (isPausedFlag.get()) return
+                        Thread.sleep(2L)
+                    } else {
+                        floatOffset += written
+                    }
+                }
+                byteOffset += totalFloats * 4
+            }
+            return
+        }
+
+        var offset = 0
+        while (offset < alignedByteCount && !stopWorkerFlag.get() && !releasedFlag.get()) {
+            val chunkLen = minOf(alignedByteCount - offset, directBuffer.capacity())
+            directBuffer.clear()
+            directBuffer.put(bytes, offset, chunkLen)
+            directBuffer.flip()
+
+            while (directBuffer.hasRemaining() && !stopWorkerFlag.get() && !releasedFlag.get()) {
+                val written = track.write(
+                    directBuffer,
+                    directBuffer.remaining(),
+                    AudioTrack.WRITE_BLOCKING,
+                )
+                if (written < 0) {
+                    throw AudioDecodeException.IoError("AudioTrack ByteBuffer write failed with code $written")
+                }
+                if (written == 0) {
+                    if (isPausedFlag.get()) return
+                    Thread.sleep(2L)
+                }
+            }
+            offset += chunkLen
+        }
+    }
+
+    private fun safePlayTrack(track: AudioTrack) {
+        runCatching {
+            if (track.state == AudioTrack.STATE_INITIALIZED && track.playState != AudioTrack.PLAYSTATE_PLAYING) {
+                track.play()
+            }
+        }
+    }
+
+    private fun safePauseTrack(track: AudioTrack) {
+        runCatching {
+            if (track.state == AudioTrack.STATE_INITIALIZED && track.playState == AudioTrack.PLAYSTATE_PLAYING) {
+                track.pause()
+            }
+        }
+    }
+
+    private fun safeFlushTrack(track: AudioTrack) {
+        runCatching {
+            if (track.state == AudioTrack.STATE_INITIALIZED) {
+                if (track.playState == AudioTrack.PLAYSTATE_PLAYING) {
+                    track.pause()
+                }
+                track.flush()
+            }
+        }
+    }
+
+    /**
+     * Cleanly idempotent AudioTrack teardown: avoids duplicate `stop()` / `pause()` calls when the
+     * track is already paused, flushed, or stopped.
+     */
+    private fun safeStopAndReleaseTrack(track: AudioTrack) {
+        runCatching {
+            if (track.state == AudioTrack.STATE_INITIALIZED) {
+                when (track.playState) {
+                    AudioTrack.PLAYSTATE_PLAYING -> {
+                        track.pause()
+                        track.flush()
+                        track.stop()
+                    }
+                    AudioTrack.PLAYSTATE_PAUSED -> {
+                        track.flush()
+                        track.stop()
+                    }
+                    AudioTrack.PLAYSTATE_STOPPED -> {
+                        // Already stopped; skip redundant stop() call.
+                    }
+                }
+            }
+        }
+        runCatching { track.release() }
+    }
+
     private fun stopWorkerAndReleaseTrackLocked(clearMixer: Boolean) {
         stopWorkerFlag.set(true)
         isPausedFlag.set(true)
@@ -930,9 +1152,9 @@ class AudioOutputEngine(
         val track = activeAudioTrack
         activeAudioTrack = null
         if (track != null) {
-            runCatching { track.pause() }
-            runCatching { track.flush() }
-            runCatching { track.stop() }
+            // Unblock any blocking track.write() on worker thread cleanly once.
+            safePauseTrack(track)
+            safeFlushTrack(track)
         }
 
         val thread = playbackThread
@@ -943,7 +1165,7 @@ class AudioOutputEngine(
         }
 
         if (track != null) {
-            runCatching { track.release() }
+            safeStopAndReleaseTrack(track)
         }
 
         val decoder = activeDecoder
@@ -1105,11 +1327,15 @@ class AudioOutputEngine(
         }
         return when (encoding) {
             AudioFormat.ENCODING_PCM_16BIT -> "PCM_16BIT"
-            AudioFormat.ENCODING_PCM_FLOAT -> "PCM_FLOAT"
+            AudioFormat.ENCODING_PCM_FLOAT -> "PCM_FLOAT (32-bit IEEE)"
             else -> "ENC_$encoding"
         }
     }
 
     private fun readUnsignedPlaybackHeadFrames(track: AudioTrack): Long =
         runCatching { track.playbackHeadPosition.toLong() and 0xFFFFFFFFL }.getOrDefault(0L)
+
+    companion object {
+        private const val TAG = "BitPerfectAudio"
+    }
 }

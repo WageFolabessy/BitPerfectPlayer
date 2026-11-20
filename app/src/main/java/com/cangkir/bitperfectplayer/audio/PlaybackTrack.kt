@@ -2,7 +2,7 @@ package com.cangkir.bitperfectplayer.audio
 
 /**
  * Pure-Kotlin representation of a local playable audio track shared across library, playback,
- * lyrics, and UI layers.
+ * lyrics, artwork caching, and UI layers.
  */
 data class PlaybackTrack(
     val uriString: String,
@@ -13,6 +13,7 @@ data class PlaybackTrack(
     val fileName: String,
     val mimeType: String? = null,
     val fileSizeBytes: Long = 0L,
+    val dateModifiedSeconds: Long = 0L,
     val durationMs: Long = 0L,
     val sampleRateHz: Int = 0,
     val bitDepth: Int? = null,
@@ -22,20 +23,15 @@ data class PlaybackTrack(
     val parentTreeUriString: String? = null,
     val relativePath: String? = null,
 ) {
+    /**
+     * Subtle non-redundant metadata line using exact Hz units (e.g., `FLAC · 24-bit · 96,000 Hz`).
+     */
     val formatBadge: String
-        get() {
-            val parts = mutableListOf(container)
-            if (bitDepth != null && bitDepth > 0) {
-                parts.add("${bitDepth}-bit")
-            }
-            if (sampleRateHz > 0) {
-                val khz = if (sampleRateHz % 1000 == 0) {
-                    "${sampleRateHz / 1000} kHz"
-                } else {
-                    String.format(java.util.Locale.US, "%.1f kHz", sampleRateHz / 1000.0)
-                }
-                parts.add(khz)
-            }
-            return parts.joinToString(" • ")
-        }
+        get() = AudioFormatFormatter.formatTrackMetadataLine(
+            container = container,
+            codec = codec,
+            bitDepth = bitDepth,
+            sampleRateHz = sampleRateHz,
+            separator = " · ",
+        )
 }

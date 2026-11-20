@@ -102,7 +102,8 @@ data class AudioDiagnosticSnapshot(
 /**
  * Pure-Kotlin mapper producing an honest, 6-stage [AudioDiagnosticSnapshot] (zero `android.*` imports).
  *
- * Never equates FLAC/WAV playback with verified bit-perfect output and always tags Stage 6
+ * Uses exact `Hz` sample-rate units via [AudioFormatFormatter], avoids redundant `FLAC (FLAC)` labels,
+ * never equates lossless playback with verified bit-perfect output, and always marks Stage 6
  * (internal USB-C DAC firmware & analog conversion) as [VerificationLevel.UNVERIFIABLE].
  */
 object AudioDiagnosticMapper {
@@ -142,12 +143,21 @@ object AudioDiagnosticMapper {
             else -> BIT_PERFECT_ACTIVE_LABEL
         }
 
+        val sourceLabel = AudioFormatFormatter.formatContainerAndCodec(
+            container = input.sourceContainer,
+            codec = input.sourceCodec,
+        )
         val sourceSummary = if (!input.isTrackLoaded) {
             "No active track loaded"
         } else {
-            val bitPart = input.sourceBitDepth?.let { "${it}-bit" } ?: "Lossy / Variable"
-            val ratePart = formatSampleRate(input.sourceSampleRateHz)
-            "${input.sourceContainer} (${input.sourceCodec}) • $ratePart • $bitPart"
+            val parts = mutableListOf(sourceLabel)
+            if (input.sourceBitDepth != null && input.sourceBitDepth > 0) {
+                parts.add("${input.sourceBitDepth}-bit")
+            } else {
+                parts.add("Lossy / Variable")
+            }
+            parts.add(AudioFormatFormatter.formatSampleRateHz(input.sourceSampleRateHz))
+            parts.joinToString(" · ")
         }
 
         val decodedSummary = if (!input.isTrackLoaded || input.decodedSampleRateHz <= 0) {
@@ -159,15 +169,15 @@ object AudioDiagnosticMapper {
             } else {
                 ""
             }
-            "${input.decodedPcmEncodingLabel} • ${formatSampleRate(input.decodedSampleRateHz)} • $chLabel • ${input.decoderName}$downNote"
+            "${input.decodedPcmEncodingLabel} · ${AudioFormatFormatter.formatSampleRateHz(input.decodedSampleRateHz)} · $chLabel · ${input.decoderName}$downNote"
         }
 
         val deviceSummary = "${input.outputDeviceName} (${input.outputConnectionType.displayName})"
 
         val engineSummary = if (isBitPerfectNegotiated) {
-            "Native AudioTrack • API 34+ ${input.negotiatedMixerSummary}"
+            "Native AudioTrack · API 34+ ${input.negotiatedMixerSummary}"
         } else {
-            "Clean Native AudioTrack • ${input.negotiatedMixerSummary}"
+            "Clean Native AudioTrack · ${input.negotiatedMixerSummary}"
         }
 
         val volumeModeLabel = when {
@@ -180,13 +190,13 @@ object AudioDiagnosticMapper {
             else ->
                 "Bit-Perfect Requested — Fallback Mixer Active (System Volume Active)"
         }
-        val dspEqVolumeSummary = "EQ: OFF • DSP: OFF • Normalization: OFF • Crossfade: OFF • $volumeModeLabel"
+        val dspEqVolumeSummary = "EQ: OFF · DSP: OFF · Normalization: OFF · Crossfade: OFF · $volumeModeLabel"
 
         val stage1 = DiagnosticStageEntry(
             stage = AudioPathStage.SOURCE_FILE,
             summary = sourceSummary,
             detail = if (input.isTrackLoaded) {
-                "Container=${input.sourceContainer}, Codec=${input.sourceCodec}, Source Rate=${formatSampleRate(input.sourceSampleRateHz)}, Bit Depth=${input.sourceBitDepth?.let { "$it-bit" } ?: "N/A"}"
+                "Format=$sourceLabel, Source Rate=${AudioFormatFormatter.formatSampleRateHz(input.sourceSampleRateHz)}, Bit Depth=${input.sourceBitDepth?.let { "$it-bit" } ?: "N/A"}"
             } else {
                 "Select a local audio file to inspect source stream properties."
             },
@@ -201,7 +211,7 @@ object AudioDiagnosticMapper {
             stage = AudioPathStage.DECODED_PCM,
             summary = decodedSummary,
             detail = if (input.isTrackLoaded && input.decodedSampleRateHz > 0) {
-                "Decoder=${input.decoderName}, Encoding=${input.decodedPcmEncodingLabel}, Effective Precision=${input.decodedEffectiveBitDepth}-bit, Channels=${input.decodedChannelCount}"
+                "Decoder=${input.decoderName}, Actual Output Encoding=${input.decodedPcmEncodingLabel}, Effective Precision=${input.decodedEffectiveBitDepth}-bit, Rate=${AudioFormatFormatter.formatSampleRateHz(input.decodedSampleRateHz)}, Channels=${input.decodedChannelCount}"
             } else {
                 "PCM decoder inactive."
             },
@@ -215,11 +225,15 @@ object AudioDiagnosticMapper {
         val stage3 = DiagnosticStageEntry(
             stage = AudioPathStage.APP_TO_FRAMEWORK,
             summary = if (input.isTrackLoaded && input.audioTrackSampleRateHz > 0) {
-                "AudioTrack ${input.audioTrackEncodingLabel} @ ${formatSampleRate(input.audioTrackSampleRateHz)} • Zero App DSP"
+                "AudioTrack ${input.audioTrackEncodingLabel} @ ${AudioFormatFormatter.formatSampleRateHz(input.audioTrackSampleRateHz)} · Zero App DSP"
             } else {
-                "Clean Native AudioTrack Engine • Zero App DSP"
+                "Clean Native AudioTrack Engine · Zero App DSP"
             },
-            detail = dspEqVolumeSummary,
+            detail = if (input.isTrackLoaded && input.audioTrackSampleRateHz > 0) {
+                "AudioTrack Encoding=${input.audioTrackEncodingLabel}, Rate=${AudioFormatFormatter.formatSampleRateHz(input.audioTrackSampleRateHz)} · $dspEqVolumeSummary"
+            } else {
+                dspEqVolumeSummary
+            },
             verificationLevel = VerificationLevel.VERIFIED,
         )
 
@@ -232,7 +246,7 @@ object AudioDiagnosticMapper {
         val stage4 = DiagnosticStageEntry(
             stage = AudioPathStage.OS_POLICY_MIXER_RESAMPLER,
             summary = headline,
-            detail = "API ${input.apiLevel} • Mixer=${input.negotiatedMixerSummary}",
+            detail = "API ${input.apiLevel} · Mixer=${input.negotiatedMixerSummary}",
             verificationLevel = stage4Level,
         )
 
@@ -266,12 +280,6 @@ object AudioDiagnosticMapper {
             stages = listOf(stage1, stage2, stage3, stage4, stage5, stage6),
             maximumClaimNotice = AudioDiagnosticSnapshot.MAXIMUM_VERIFICATION_CLAIM_NOTICE,
         )
-    }
-
-    private fun formatSampleRate(hz: Int): String = when {
-        hz <= 0 -> "Unknown Hz"
-        hz % 1000 == 0 -> "${hz / 1000} kHz"
-        else -> String.format(java.util.Locale.US, "%.1f kHz", hz / 1000.0)
     }
 
     private fun formatChannels(count: Int): String = when (count) {

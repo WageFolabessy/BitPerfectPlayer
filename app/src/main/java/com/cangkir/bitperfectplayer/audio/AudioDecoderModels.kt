@@ -64,11 +64,13 @@ sealed class AudioDecodeException(
  */
 interface PcmAudioDecoder : Closeable {
     val format: DecodedPcmFormat
+    val formatVersion: Int
+        get() = 0
     val currentPositionMs: Long
 
     /**
-     * Reads decoded PCM bytes into [destination]. Returns bytes written, `0` if temporarily
-     * waiting for codec buffers, or `-1` on end-of-stream.
+     * Reads decoded PCM bytes into [destination]. Returns bytes written (always aligned to whole
+     * PCM frames), `0` if temporarily waiting for codec buffers, or `-1` on end-of-stream.
      */
     @Throws(AudioDecodeException::class)
     fun readPcm(destination: ByteArray): Int

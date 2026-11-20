@@ -7,30 +7,46 @@ import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.net.Uri
 import android.os.Build
+import android.util.Log
 import com.cangkir.bitperfectplayer.lyrics.FileChannelSeekableByteSource
 import java.io.FileInputStream
 import java.io.IOException
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Native Android [MediaExtractor] + [MediaCodec] PCM decoder for FLAC (16/24-bit), MP3,
  * M4A (AAC), and OGG (Vorbis/Opus).
  *
- * Inspects the runtime decoded PCM encoding directly from [MediaCodec.getOutputFormat] so
- * diagnostics honestly reflect whether the OS decoder preserved 24-bit output or down-converted
- * to 16-bit PCM.
+ * Critical PCM encoding guarantees:
+ * - For high-bit-depth (>16-bit, e.g., 24-bit FLAC) sources, requests [AudioFormat.ENCODING_PCM_FLOAT]
+ *   (preserves full 24-bit integer mantissa precision losslessly inside float32 and is natively
+ *   supported by AOSP `c2.android.flac.decoder` and AudioFlinger).
+ * - NEVER assumes `MediaCodec` honored the requested `KEY_PCM_ENCODING`, and NEVER falls back to
+ *   the requested encoding when `KEY_PCM_ENCODING` is absent from `codec.outputFormat` (an omitted
+ *   `KEY_PCM_ENCODING` in Android `MediaCodec` explicitly means [AudioFormat.ENCODING_PCM_16BIT]).
+ * - Pumps the codec until `INFO_OUTPUT_FORMAT_CHANGED` or the first output buffer before returning
+ *   from [open], so `AudioTrack` creation always uses the confirmed runtime `codec.outputFormat`.
+ * - Every [readPcm] call respects exact `BufferInfo.offset`/`size` and returns whole PCM frames.
  */
 class MediaCodecAudioDecoder private constructor(
     private val extractor: MediaExtractor,
     private val codec: MediaCodec,
+    private val codecName: String,
+    private val requestedEncoding: PcmEncodingType,
     initialFormat: DecodedPcmFormat,
-    initialPendingPcm: ByteArray?,
 ) : PcmAudioDecoder {
 
+    @Volatile
     private var _format: DecodedPcmFormat = initialFormat
     override val format: DecodedPcmFormat
         get() = _format
 
+    private val _formatVersion = AtomicInteger(0)
+    override val formatVersion: Int
+        get() = _formatVersion.get()
+
+    @Volatile
     private var _currentPositionMs: Long = 0L
     override val currentPositionMs: Long
         get() = _currentPositionMs
@@ -38,25 +54,33 @@ class MediaCodecAudioDecoder private constructor(
     private val closed = AtomicBoolean(false)
     private var inputEos = false
     private var outputEos = false
+    private var outputFormatConfirmed = false
 
-    private var pendingBytes: ByteArray? = initialPendingPcm
+    private var pendingBytes: ByteArray? = null
     private var pendingOffset: Int = 0
     private val bufferInfo = MediaCodec.BufferInfo()
 
     override fun readPcm(destination: ByteArray): Int {
         if (closed.get()) return -1
 
+        val bytesPerFrame = _format.bytesPerFrame.coerceAtLeast(1)
+        val maxAlignedCopy = PcmStreamRules.alignByteCountToFrame(destination.size, bytesPerFrame)
+        if (maxAlignedCopy <= 0) return 0
+
         // 1. Drain leftover buffered PCM bytes from a previous decoded MediaCodec frame.
         val pending = pendingBytes
         if (pending != null && pendingOffset < pending.size) {
-            val toCopy = minOf(destination.size, pending.size - pendingOffset)
-            System.arraycopy(pending, pendingOffset, destination, 0, toCopy)
-            pendingOffset += toCopy
-            if (pendingOffset >= pending.size) {
-                pendingBytes = null
-                pendingOffset = 0
+            val available = pending.size - pendingOffset
+            val toCopy = PcmStreamRules.alignByteCountToFrame(minOf(maxAlignedCopy, available), bytesPerFrame)
+            if (toCopy > 0) {
+                System.arraycopy(pending, pendingOffset, destination, 0, toCopy)
+                pendingOffset += toCopy
+                if (pendingOffset >= pending.size) {
+                    pendingBytes = null
+                    pendingOffset = 0
+                }
+                return toCopy
             }
-            return toCopy
         }
 
         if (outputEos) return -1
@@ -72,21 +96,20 @@ class MediaCodecAudioDecoder private constructor(
                     outIndex >= 0 -> {
                         val isEnd = (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0
                         val size = bufferInfo.size
-                        var copied = 0
+                        var extracted = ByteArray(0)
 
                         if (size > 0) {
+                            if (!outputFormatConfirmed) {
+                                // Ensure format reflects actual outputFormat even if OEM codec didn't emit INFO_OUTPUT_FORMAT_CHANGED first.
+                                applyActualOutputFormat(codec.outputFormat, sourceTag = "firstBuffer")
+                            }
                             val outBuf = codec.getOutputBuffer(outIndex)
                             if (outBuf != null) {
-                                outBuf.position(bufferInfo.offset)
-                                outBuf.limit(bufferInfo.offset + size)
-                                copied = minOf(destination.size, size)
-                                outBuf.get(destination, 0, copied)
-                                if (copied < size) {
-                                    val leftover = ByteArray(size - copied)
-                                    outBuf.get(leftover)
-                                    pendingBytes = leftover
-                                    pendingOffset = 0
-                                }
+                                extracted = PcmStreamRules.extractBufferSlice(
+                                    source = outBuf,
+                                    offset = bufferInfo.offset,
+                                    size = size,
+                                )
                             }
                             if (bufferInfo.presentationTimeUs >= 0L) {
                                 _currentPositionMs = bufferInfo.presentationTimeUs / 1000L
@@ -95,17 +118,41 @@ class MediaCodecAudioDecoder private constructor(
 
                         codec.releaseOutputBuffer(outIndex, false)
 
+                        val combined = combineWithPending(extracted)
+                        val frameBytes = _format.bytesPerFrame.coerceAtLeast(1)
+                        val alignedDestMax = PcmStreamRules.alignByteCountToFrame(destination.size, frameBytes)
+                        val toCopy = PcmStreamRules.alignByteCountToFrame(
+                            minOf(alignedDestMax, combined.size),
+                            frameBytes,
+                        )
+
+                        if (toCopy > 0) {
+                            System.arraycopy(combined, 0, destination, 0, toCopy)
+                            if (toCopy < combined.size) {
+                                pendingBytes = combined.copyOfRange(toCopy, combined.size)
+                                pendingOffset = 0
+                            } else {
+                                pendingBytes = null
+                                pendingOffset = 0
+                            }
+                        } else if (combined.isNotEmpty()) {
+                            pendingBytes = combined
+                            pendingOffset = 0
+                        }
+
                         if (isEnd) {
                             outputEos = true
-                            return if (copied > 0) copied else -1
+                            return if (toCopy > 0) toCopy else -1
                         }
-                        if (copied > 0) return copied
+                        if (toCopy > 0) return toCopy
                     }
                     outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
-                        updateFormatFromMediaFormat(codec.outputFormat)
+                        applyActualOutputFormat(codec.outputFormat, sourceTag = "INFO_OUTPUT_FORMAT_CHANGED")
+                        // Return 0 so AudioOutputEngine can notice formatVersion change before next write if needed.
+                        if (pendingBytes == null) return 0
                     }
                     outIndex == MediaCodec.INFO_TRY_AGAIN_LATER -> {
-                        if (inputEos && attempts > 16) {
+                        if (inputEos && attempts > 20) {
                             outputEos = true
                             return -1
                         }
@@ -144,6 +191,24 @@ class MediaCodecAudioDecoder private constructor(
         runCatching { codec.release() }
         runCatching { extractor.release() }
         pendingBytes = null
+        pendingOffset = 0
+    }
+
+    private fun combineWithPending(incoming: ByteArray): ByteArray {
+        val existing = pendingBytes
+        val existingRem = if (existing != null && pendingOffset < existing.size) {
+            existing.size - pendingOffset
+        } else {
+            0
+        }
+        if (existingRem == 0) return incoming
+        if (incoming.isEmpty()) {
+            return existing!!.copyOfRange(pendingOffset, existing.size)
+        }
+        val merged = ByteArray(existingRem + incoming.size)
+        System.arraycopy(existing!!, pendingOffset, merged, 0, existingRem)
+        System.arraycopy(incoming, 0, merged, existingRem, incoming.size)
+        return merged
     }
 
     private fun feedInputBufferIfAvailable() {
@@ -162,24 +227,104 @@ class MediaCodecAudioDecoder private constructor(
         }
     }
 
-    private fun updateFormatFromMediaFormat(outFormat: MediaFormat) {
+    private fun applyActualOutputFormat(outFormat: MediaFormat, sourceTag: String) {
         val sampleRate = outFormat.getIntegerOrDefault(MediaFormat.KEY_SAMPLE_RATE, _format.sampleRateHz)
         val channels = outFormat.getIntegerOrDefault(MediaFormat.KEY_CHANNEL_COUNT, _format.channelCount)
-        val androidPcmEnc = outFormat.getIntegerOrDefault(
-            MediaFormat.KEY_PCM_ENCODING,
-            AudioFormat.ENCODING_PCM_16BIT,
+        val hasPcmKey = outFormat.containsKey(MediaFormat.KEY_PCM_ENCODING)
+        val reportedEncoding = if (hasPcmKey) {
+            runCatching { outFormat.getInteger(MediaFormat.KEY_PCM_ENCODING) }.getOrNull()
+        } else {
+            null
+        }
+        // CRITICAL: Missing KEY_PCM_ENCODING strictly resolves to PCM_16BIT — NEVER requestedEncoding.
+        val resolvedEncoding = PcmStreamRules.resolveMediaCodecOutputEncoding(
+            hasPcmEncodingKey = hasPcmKey,
+            reportedEncoding = reportedEncoding,
+            supportsApi31Encodings = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S,
         )
-        val encodingType = mapAndroidPcmEncoding(androidPcmEnc)
-        _format = _format.copy(
+
+        val previous = _format
+        val updated = previous.copy(
             sampleRateHz = sampleRate,
             channelCount = channels,
-            encoding = encodingType,
-            effectiveBitDepth = encodingType.effectiveBitDepth,
+            encoding = resolvedEncoding,
+            effectiveBitDepth = resolvedEncoding.effectiveBitDepth,
+        )
+        _format = updated
+        outputFormatConfirmed = true
+        if (previous.encoding != updated.encoding ||
+            previous.sampleRateHz != updated.sampleRateHz ||
+            previous.channelCount != updated.channelCount
+        ) {
+            _formatVersion.incrementAndGet()
+        }
+
+        Log.d(
+            TAG,
+            "MediaCodec outputFormat ($sourceTag): codec=$codecName, requested=$requestedEncoding, " +
+                "hasPcmKey=$hasPcmKey, rawPcmKey=$reportedEncoding, resolved=${updated.encoding}, " +
+                "sampleRate=${updated.sampleRateHz}Hz, channels=${updated.channelCount}",
         )
     }
 
+    /**
+     * Pumps initial input frames until `INFO_OUTPUT_FORMAT_CHANGED` and/or the first decoded PCM
+     * buffer arrives so `AudioTrack` creation uses the confirmed runtime `codec.outputFormat`.
+     */
+    private fun primeOutputFormat() {
+        var tries = 0
+        while (tries < PRIME_MAX_ATTEMPTS && !outputEos) {
+            tries++
+            feedInputBufferIfAvailable()
+            val outIndex = codec.dequeueOutputBuffer(bufferInfo, DEQUEUE_TIMEOUT_US)
+            when {
+                outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                    applyActualOutputFormat(codec.outputFormat, sourceTag = "prime:INFO_OUTPUT_FORMAT_CHANGED")
+                    // Stop priming as soon as format is confirmed AND we either got data or next step is audio loop.
+                    // Continue briefly to also grab first buffer or exit cleanly if already confirmed.
+                }
+                outIndex >= 0 -> {
+                    if (!outputFormatConfirmed) {
+                        applyActualOutputFormat(codec.outputFormat, sourceTag = "prime:firstBuffer")
+                    }
+                    val size = bufferInfo.size
+                    if (size > 0) {
+                        val outBuf = codec.getOutputBuffer(outIndex)
+                        if (outBuf != null) {
+                            pendingBytes = PcmStreamRules.extractBufferSlice(
+                                source = outBuf,
+                                offset = bufferInfo.offset,
+                                size = size,
+                            )
+                            pendingOffset = 0
+                        }
+                        if (bufferInfo.presentationTimeUs >= 0L) {
+                            _currentPositionMs = bufferInfo.presentationTimeUs / 1000L
+                        }
+                    }
+                    if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+                        outputEos = true
+                    }
+                    codec.releaseOutputBuffer(outIndex, false)
+                    break
+                }
+                outIndex == MediaCodec.INFO_TRY_AGAIN_LATER -> {
+                    if (outputFormatConfirmed && tries >= 8) break
+                }
+            }
+        }
+        if (!outputFormatConfirmed) {
+            // Even if codec produced no output during prime, inspect outputFormat strictly (defaulting absent key to PCM_16BIT).
+            runCatching { codec.outputFormat }.getOrNull()?.let { fmt ->
+                applyActualOutputFormat(fmt, sourceTag = "prime:fallback")
+            }
+        }
+    }
+
     companion object {
+        private const val TAG = "BitPerfectAudio"
         private const val DEQUEUE_TIMEOUT_US = 10_000L
+        private const val PRIME_MAX_ATTEMPTS = 64
 
         @Throws(AudioDecodeException::class)
         fun open(
@@ -224,6 +369,12 @@ class MediaCodecAudioDecoder private constructor(
                 }
                 val supportsNative24And32 = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
                 val decoder = WavPcmDecoder(source, supportsNative24And32BitPcm = supportsNative24And32)
+                Log.d(
+                    TAG,
+                    "WavPcmDecoder opened: sourceBits=${decoder.header.bitsPerSample}, " +
+                        "outputEncoding=${decoder.format.encoding}, sampleRate=${decoder.format.sampleRateHz}Hz, " +
+                        "channels=${decoder.format.channelCount}",
+                )
                 closePfdOnError = false
                 return decoder
             } catch (e: AudioDecodeException) {
@@ -289,44 +440,35 @@ class MediaCodecAudioDecoder private constructor(
                 }
                 val sourceBitDepth = flacInfo?.bitsPerSample ?: detectSourceBitDepthFromFormat(trackFormat)
 
-                // Request higher precision PCM from MediaCodec for >16-bit lossless tracks where supported.
-                if (sourceBitDepth != null && sourceBitDepth > 16) {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                        trackFormat.setInteger(
-                            MediaFormat.KEY_PCM_ENCODING,
-                            AudioFormat.ENCODING_PCM_24BIT_PACKED,
-                        )
-                    } else {
-                        trackFormat.setInteger(
-                            MediaFormat.KEY_PCM_ENCODING,
-                            AudioFormat.ENCODING_PCM_FLOAT,
-                        )
-                    }
+                // Request ENCODING_PCM_FLOAT for >16-bit sources (preserves full 24-bit mantissa precision
+                // losslessly and is natively supported by c2.android.flac.decoder and AudioFlinger).
+                val requestedPcm = PcmStreamRules.selectMediaCodecRequestEncoding(sourceBitDepth)
+                if (requestedPcm == PcmEncodingType.PCM_FLOAT) {
+                    trackFormat.setInteger(
+                        MediaFormat.KEY_PCM_ENCODING,
+                        AudioFormat.ENCODING_PCM_FLOAT,
+                    )
+                } else {
+                    trackFormat.setInteger(
+                        MediaFormat.KEY_PCM_ENCODING,
+                        AudioFormat.ENCODING_PCM_16BIT,
+                    )
                 }
 
-                codec = createAndConfigureCodec(mime, trackFormat, sourceBitDepth)
+                codec = createAndConfigureCodec(mime, trackFormat, requestedPcm)
                 codec.start()
 
                 val codecLabel = runCatching { codec.name }.getOrDefault("Android MediaCodec")
                 val containerLabel = classifiedFormat?.containerLabel ?: containerLabelFromMime(mime)
                 val sourceCodecLabel = codecLabelFromMime(mime)
 
-                // Negotiate initial output format by pumping briefly so reported PCM bit depth is verified.
-                val initialOutFormat = runCatching { codec.outputFormat }.getOrNull()
-                val initialEnc = mapAndroidPcmEncoding(
-                    initialOutFormat?.getIntegerOrDefault(
-                        MediaFormat.KEY_PCM_ENCODING,
-                        AudioFormat.ENCODING_PCM_16BIT,
-                    ) ?: AudioFormat.ENCODING_PCM_16BIT,
-                )
-
+                // Initialize conservatively to PCM_16BIT; primeOutputFormat() resolves the true runtime
+                // encoding strictly from INFO_OUTPUT_FORMAT_CHANGED / first output buffer.
                 val initialDecoded = DecodedPcmFormat(
-                    sampleRateHz = initialOutFormat?.getIntegerOrDefault(MediaFormat.KEY_SAMPLE_RATE, sourceSampleRate)
-                        ?: sourceSampleRate,
-                    channelCount = initialOutFormat?.getIntegerOrDefault(MediaFormat.KEY_CHANNEL_COUNT, sourceChannels)
-                        ?: sourceChannels,
-                    encoding = initialEnc,
-                    effectiveBitDepth = initialEnc.effectiveBitDepth,
+                    sampleRateHz = sourceSampleRate,
+                    channelCount = sourceChannels,
+                    encoding = PcmEncodingType.PCM_16BIT,
+                    effectiveBitDepth = PcmEncodingType.PCM_16BIT.effectiveBitDepth,
                     decoderName = "MediaCodec ($codecLabel)",
                     durationMs = durationMs,
                     sourceContainer = containerLabel,
@@ -339,10 +481,10 @@ class MediaCodecAudioDecoder private constructor(
                 val decoder = MediaCodecAudioDecoder(
                     extractor = extractor,
                     codec = codec,
+                    codecName = codecLabel,
+                    requestedEncoding = requestedPcm,
                     initialFormat = initialDecoded,
-                    initialPendingPcm = null,
                 )
-                // Prime first output format/frame so diagnostics immediately reflect actual MediaCodec PCM output.
                 decoder.primeOutputFormat()
                 return decoder
             } catch (e: AudioDecodeException) {
@@ -363,16 +505,14 @@ class MediaCodecAudioDecoder private constructor(
         private fun createAndConfigureCodec(
             mime: String,
             trackFormat: MediaFormat,
-            sourceBitDepth: Int?,
+            requestedPcm: PcmEncodingType,
         ): MediaCodec {
             val codec = MediaCodec.createDecoderByType(mime)
             try {
                 codec.configure(trackFormat, null, null, 0)
                 return codec
             } catch (firstFailure: Exception) {
-                // If requesting high-precision PCM was rejected by a vendor codec, retry with default format
-                // and let runtime outputFormat inspection honestly report actual output precision.
-                if (sourceBitDepth != null && sourceBitDepth > 16) {
+                if (requestedPcm != PcmEncodingType.PCM_16BIT) {
                     runCatching { codec.release() }
                     val fallbackCodec = MediaCodec.createDecoderByType(mime)
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -410,22 +550,14 @@ class MediaCodecAudioDecoder private constructor(
             }
             if (format.containsKey(MediaFormat.KEY_PCM_ENCODING)) {
                 val enc = runCatching { format.getInteger(MediaFormat.KEY_PCM_ENCODING) }.getOrNull()
-                if (enc != null) return mapAndroidPcmEncoding(enc).effectiveBitDepth
-            }
-            return null
-        }
-
-        internal fun mapAndroidPcmEncoding(androidEncoding: Int): PcmEncodingType {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                when (androidEncoding) {
-                    AudioFormat.ENCODING_PCM_24BIT_PACKED -> return PcmEncodingType.PCM_24BIT_PACKED
-                    AudioFormat.ENCODING_PCM_32BIT -> return PcmEncodingType.PCM_32BIT
+                if (enc != null) {
+                    return PcmStreamRules.mapAndroidPcmEncoding(
+                        androidEncoding = enc,
+                        supportsApi31Encodings = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S,
+                    ).effectiveBitDepth
                 }
             }
-            return when (androidEncoding) {
-                AudioFormat.ENCODING_PCM_FLOAT -> PcmEncodingType.PCM_FLOAT
-                else -> PcmEncodingType.PCM_16BIT
-            }
+            return null
         }
 
         private fun readFlacHeaderSafely(context: Context, uri: Uri): FlacStreamInfo? {
@@ -460,42 +592,5 @@ class MediaCodecAudioDecoder private constructor(
 
         private fun MediaFormat.getIntegerOrDefault(key: String, defaultValue: Int): Int =
             if (containsKey(key)) runCatching { getInteger(key) }.getOrDefault(defaultValue) else defaultValue
-    }
-
-    private fun primeOutputFormat() {
-        val probeBuffer = ByteArray(16_384)
-        var tries = 0
-        while (tries < 12 && !outputEos) {
-            tries++
-            feedInputBufferIfAvailable()
-            val outIndex = codec.dequeueOutputBuffer(bufferInfo, DEQUEUE_TIMEOUT_US)
-            when {
-                outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
-                    updateFormatFromMediaFormat(codec.outputFormat)
-                }
-                outIndex >= 0 -> {
-                    val size = bufferInfo.size
-                    if (size > 0) {
-                        val outBuf = codec.getOutputBuffer(outIndex)
-                        if (outBuf != null) {
-                            outBuf.position(bufferInfo.offset)
-                            outBuf.limit(bufferInfo.offset + size)
-                            val saved = ByteArray(size)
-                            outBuf.get(saved)
-                            pendingBytes = saved
-                            pendingOffset = 0
-                        }
-                    }
-                    if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
-                        outputEos = true
-                    }
-                    codec.releaseOutputBuffer(outIndex, false)
-                    break
-                }
-                outIndex == MediaCodec.INFO_TRY_AGAIN_LATER -> {
-                    if (probeBuffer.isEmpty()) break
-                }
-            }
-        }
     }
 }

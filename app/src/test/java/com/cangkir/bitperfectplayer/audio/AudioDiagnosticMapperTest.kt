@@ -8,7 +8,7 @@ import org.junit.Test
 class AudioDiagnosticMapperTest {
 
     @Test
-    fun bitPerfectActiveOnApi34Usb_reportsVerifiedHalAndUnverifiableDacStage() {
+    fun bitPerfectActiveOnApi34Usb_reportsVerifiedHalExactHzAndUnverifiableDacStage() {
         val snapshot = AudioDiagnosticMapper.map(
             AudioDiagnosticInput(
                 isTrackLoaded = true,
@@ -30,7 +30,7 @@ class AudioDiagnosticMapperTest {
                 outputDeviceName = "KZ EDX Pro 2 USB-C",
                 outputConnectionType = OutputConnectionType.USB_HEADSET,
                 negotiatedMixerBehavior = NegotiatedMixerBehavior.BIT_PERFECT,
-                negotiatedMixerSummary = "MIXER_BEHAVIOR_BIT_PERFECT (96 kHz, 24-bit)",
+                negotiatedMixerSummary = "MIXER_BEHAVIOR_BIT_PERFECT (96,000 Hz, PCM_24BIT_PACKED)",
             ),
         )
 
@@ -38,6 +38,14 @@ class AudioDiagnosticMapperTest {
         assertFalse(snapshot.isBitDepthDownConvertedByDecoder)
         assertEquals(AudioDiagnosticMapper.BIT_PERFECT_ACTIVE_LABEL, snapshot.pathStatusHeadline)
         assertEquals(6, snapshot.stages.size)
+
+        // Exact Hz formatting (never kHz)
+        assertTrue(snapshot.sourceFormatSummary.contains("96,000 Hz"))
+        assertFalse(snapshot.sourceFormatSummary.contains("kHz"))
+        assertTrue(snapshot.decodedPcmSummary.contains("96,000 Hz"))
+        assertFalse(snapshot.decodedPcmSummary.contains("kHz"))
+        assertTrue(snapshot.stages[2].summary.contains("96,000 Hz"))
+        assertTrue(snapshot.stages[2].summary.contains("PCM_24BIT_PACKED"))
 
         // Stage 1..3 Verified, Stage 4 Verified (HAL negotiated), Stage 5 Indicated, Stage 6 ALWAYS Unverifiable
         assertEquals(VerificationLevel.VERIFIED, snapshot.stages[0].verificationLevel)
@@ -54,7 +62,7 @@ class AudioDiagnosticMapperTest {
     }
 
     @Test
-    fun cleanNativeFallback_whenBitPerfectUnsupportedByDevice_neverClaimsBitPerfect() {
+    fun cleanNativeFallback_deduplicatesFlacLabelAndNeverClaimsBitPerfect() {
         val snapshot = AudioDiagnosticMapper.map(
             AudioDiagnosticInput(
                 isTrackLoaded = true,
@@ -81,14 +89,14 @@ class AudioDiagnosticMapperTest {
 
         assertFalse(snapshot.isBitPerfectMixerActive)
         assertEquals(AudioDiagnosticMapper.FALLBACK_UNSUPPORTED_LABEL, snapshot.pathStatusHeadline)
-        assertTrue(snapshot.dspEqVolumeStatusSummary.contains("System Volume Active"))
-        assertFalse(snapshot.dspEqVolumeStatusSummary.contains("Fixed 100%"))
-        assertFalse(snapshot.activeEngineAndMixerSummary.contains("))"))
+        assertEquals("FLAC · 16-bit · 44,100 Hz", snapshot.sourceFormatSummary)
+        assertFalse(snapshot.sourceFormatSummary.contains("FLAC (FLAC)"))
+        assertTrue(snapshot.dspEqVolumeStatusSummary.contains("Fallback Mixer Active"))
         assertEquals(VerificationLevel.UNVERIFIABLE, snapshot.stages.last().verificationLevel)
     }
 
     @Test
-    fun safeMode_reportsSafeVolumeActive_andNeverClaimsBitPerfectEvenWithUsb() {
+    fun safeMode_reportsSafeVolumeActive_andFlagsDecoderDownConversionHonestly() {
         val snapshot = AudioDiagnosticMapper.map(
             AudioDiagnosticInput(
                 isTrackLoaded = true,
@@ -101,7 +109,7 @@ class AudioDiagnosticMapperTest {
                 decodedEffectiveBitDepth = 16,
                 decodedSampleRateHz = 48_000,
                 decodedChannelCount = 2,
-                decoderName = "MediaCodecAudioDecoder",
+                decoderName = "MediaCodec (c2.android.flac.decoder)",
                 audioTrackSampleRateHz = 48_000,
                 audioTrackEncodingLabel = "PCM_16BIT",
                 safetyMode = AudioOutputMode.SAFE_VOLUME_MODE,
@@ -115,6 +123,7 @@ class AudioDiagnosticMapperTest {
         assertFalse(snapshot.isBitPerfectMixerActive)
         assertTrue(snapshot.isBitDepthDownConvertedByDecoder)
         assertEquals(AudioDiagnosticMapper.SAFE_MODE_LABEL, snapshot.pathStatusHeadline)
+        assertTrue(snapshot.decodedPcmSummary.contains("48,000 Hz"))
         assertTrue(snapshot.decodedPcmSummary.contains("down-converted from 24-bit"))
         assertTrue(snapshot.dspEqVolumeStatusSummary.contains("Safe Mode"))
         assertEquals(VerificationLevel.UNVERIFIABLE, snapshot.stages[5].verificationLevel)
@@ -128,7 +137,7 @@ class AudioDiagnosticMapperTest {
                 safetyMode = AudioOutputMode.BIT_PERFECT_OPT_IN,
                 apiLevel = 34,
                 outputConnectionType = OutputConnectionType.INTERNAL_SPEAKER,
-                negotiatedMixerBehavior = NegotiatedMixerBehavior.BIT_PERFECT, // Even if misreported, non-USB is rejected
+                negotiatedMixerBehavior = NegotiatedMixerBehavior.BIT_PERFECT,
             ),
         )
         assertFalse(nonUsb.isBitPerfectMixerActive)
