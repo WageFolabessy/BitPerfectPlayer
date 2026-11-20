@@ -134,7 +134,7 @@ Execute unchecked `[ ]` items sequentially from top to bottom following `AGENTS.
   - Add the Safe Mode vs. Bit-Perfect (opt-in) toggle wired to `AudioSafetyController`, presenting the mandatory **Hearing Safety Warning Dialog** before enabling potentially fixed-volume Bit-Perfect Mode.
   - **Verification:** `./gradlew assembleDebug` 100% green.
 
-- [ ] **T5.3 — Synced Lyrics Screen & Real-Time Audio Diagnostics Panel**
+- [x] **T5.3 — Synced Lyrics Screen & Real-Time Audio Diagnostics Panel**
   - Build the Lyrics screen:
     - Synced `.lrc` view highlighting the active line from `AudioOutputEngine.currentPositionMs` with smooth `LazyColumn` auto-scrolling (including immediately after seek).
     - Scrollable static lyrics view for untimestamped text.
