@@ -129,7 +129,7 @@ Execute unchecked `[ ]` items sequentially from top to bottom following `AGENTS.
   - Build Library screens with tabs/sections for All Songs, Folders, Artists, Albums, Recently Played, and Favorites; SAF folder/file import action; persistent mini-player bar with quick Play/Pause; and clean runtime permission flows for `READ_MEDIA_AUDIO` (API 33+), `READ_EXTERNAL_STORAGE` (API 26–32), and `POST_NOTIFICATIONS` (API 33+).
   - **Verification:** `./gradlew assembleDebug` 100% green.
 
-- [ ] **T5.2 — Now Playing, Queue Management, & Hearing Safety Dialog**
+- [x] **T5.2 — Now Playing, Queue Management, & Hearing Safety Dialog**
   - Build the Now Playing screen: track metadata & format badge, seekable progress bar, Play/Pause/Prev/Next/Shuffle/Repeat controls, quick Pause action, Queue sheet/screen (add/remove/reorder), and quick navigation to Lyrics and Audio Diagnostics.
   - Add the Safe Mode vs. Bit-Perfect (opt-in) toggle wired to `AudioSafetyController`, presenting the mandatory **Hearing Safety Warning Dialog** before enabling potentially fixed-volume Bit-Perfect Mode.
   - **Verification:** `./gradlew assembleDebug` 100% green.
