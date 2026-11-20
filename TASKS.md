@@ -98,7 +98,7 @@ Execute unchecked `[ ]` items sequentially from top to bottom following `AGENTS.
     - Handle `AudioFocusRequest` cleanly for incoming calls and notifications.
   - **Verification:** `./gradlew testDebugUnitTest assembleDebug` 100% green.
 
-- [ ] **T3.3 — `PlaybackForegroundService` & `MediaSession` Integration**
+- [x] **T3.3 — `PlaybackForegroundService` & `MediaSession` Integration**
   - Implement `PlaybackForegroundService` declared with `android:foregroundServiceType="mediaPlayback"` in `AndroidManifest.xml`, started via `ServiceCompat.startForeground(...)` with `ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK`.
   - Expose system notification (`Notification.MediaStyle`) & `MediaSession` controls (`Play`, `Pause`, `Next`, `Previous`, `Seek`), surviving screen-off/background transitions and persisting the latest playback position to DataStore periodically and on pause/stop.
   - **Verification:** `./gradlew testDebugUnitTest assembleDebug` 100% green.

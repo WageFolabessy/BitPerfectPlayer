@@ -1,0 +1,43 @@
+package com.cangkir.bitperfectplayer
+
+import android.app.Application
+import android.content.Context
+import com.cangkir.bitperfectplayer.audio.AudioMetadataReader
+import com.cangkir.bitperfectplayer.audio.PlaybackController
+import com.cangkir.bitperfectplayer.data.BitPerfectDatabase
+import com.cangkir.bitperfectplayer.data.LocalPersistenceRepository
+import com.cangkir.bitperfectplayer.data.UserPreferencesRepository
+import com.cangkir.bitperfectplayer.lyrics.AndroidContentFingerprintProvider
+
+/**
+ * Simple manual dependency container scoped to [BitPerfectApplication] (zero reflection/network).
+ */
+class AppContainer(context: Context) {
+    private val appContext = context.applicationContext
+
+    val database: BitPerfectDatabase by lazy { BitPerfectDatabase.getInstance(appContext) }
+    val persistenceRepository: LocalPersistenceRepository by lazy { LocalPersistenceRepository(database) }
+    val preferencesRepository: UserPreferencesRepository by lazy { UserPreferencesRepository.fromContext(appContext) }
+    val fingerprintProvider: AndroidContentFingerprintProvider by lazy {
+        AndroidContentFingerprintProvider(appContext.contentResolver)
+    }
+    val metadataReader: AudioMetadataReader by lazy { AudioMetadataReader(appContext) }
+    val playbackController: PlaybackController by lazy {
+        PlaybackController(
+            context = appContext,
+            preferencesRepository = preferencesRepository,
+            persistenceRepository = persistenceRepository,
+            fingerprintProvider = fingerprintProvider,
+        )
+    }
+}
+
+class BitPerfectApplication : Application() {
+    lateinit var container: AppContainer
+        private set
+
+    override fun onCreate() {
+        super.onCreate()
+        container = AppContainer(this)
+    }
+}
