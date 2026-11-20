@@ -11,6 +11,7 @@ import com.cangkir.bitperfectplayer.data.PlaylistDao
 import com.cangkir.bitperfectplayer.data.PlaylistEntity
 import com.cangkir.bitperfectplayer.data.PlaylistTrackEntity
 import com.cangkir.bitperfectplayer.data.TrackStatsDao
+import com.cangkir.bitperfectplayer.data.UserPreferencesRepository
 import com.cangkir.bitperfectplayer.lyrics.AndroidContentFingerprintProvider
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -18,6 +19,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.withContext
 import java.io.OutputStreamWriter
@@ -51,6 +53,8 @@ data class PlaylistsUiSnapshot(
     val playlists: List<ResolvedPlaylist> = emptyList(),
     val mostPlayed: List<MostPlayedTrackItem> = emptyList(),
     val totalPlays: Int = 0,
+    val playlistDetailSort: TrackSortSpec = TrackSortScope.PLAYLIST_DETAIL.defaultSpec,
+    val isLoaded: Boolean = false,
 )
 
 data class M3u8ImportSummary(
@@ -69,6 +73,7 @@ class PlaylistRepository(
     private val playlistDao: PlaylistDao,
     private val trackStatsDao: TrackStatsDao,
     private val libraryRepository: LocalLibraryRepository,
+    private val preferencesRepository: UserPreferencesRepository,
     private val fingerprintProvider: AndroidContentFingerprintProvider,
 ) {
     private val appContext = context.applicationContext
@@ -77,10 +82,12 @@ class PlaylistRepository(
     val playlistsSnapshot: StateFlow<PlaylistsUiSnapshot> = combine(
         playlistDao.observeAllPlaylists(),
         playlistDao.observeAllPlaylistTracks(),
-        trackStatsDao.observeMostPlayed(limit = 50),
+        trackStatsDao.observeAllStats(),
         trackStatsDao.observeTotalPlayCount(),
-        libraryRepository.librarySnapshot,
-    ) { playlistEntities, allEntries, mostPlayedEntities, totalPlays, library ->
+        combine(libraryRepository.librarySnapshot, preferencesRepository.preferencesFlow) { lib, prefs ->
+            lib to prefs.sortPreferences.playlistDetail
+        },
+    ) { playlistEntities, allEntries, allStats, totalPlays, (library, playlistSortSpec) ->
         val tracksByFp = HashMap<String, PlaybackTrack>(library.allSongs.size)
         val tracksByUri = HashMap<String, PlaybackTrack>(library.allSongs.size)
         val tracksByFileName = HashMap<String, PlaybackTrack>(library.allSongs.size)
@@ -93,10 +100,21 @@ class PlaylistRepository(
             tracksByFileName.putIfAbsent(track.fileName.lowercase(), track)
         }
 
+        val playCountsByKey = HashMap<String, Int>(allStats.size * 2).apply {
+            for (stat in allStats) {
+                if (stat.playCount > 0) {
+                    put(stat.contentFingerprint.lowercase(), stat.playCount)
+                    if (stat.trackUri.isNotBlank()) {
+                        putIfAbsent(stat.trackUri, stat.playCount)
+                    }
+                }
+            }
+        }
+
         val entriesByPlaylist = allEntries.groupBy { it.playlistId }
         val resolvedPlaylists = playlistEntities.map { pl ->
             val rawEntries = entriesByPlaylist[pl.id].orEmpty()
-            val resolvedEntries = rawEntries.mapNotNull { entry ->
+            val customOrdered = rawEntries.mapNotNull { entry ->
                 val resolvedTrack = entry.contentFingerprint?.lowercase()?.let { tracksByFp[it] }
                     ?: tracksByUri[entry.trackUri]
                     ?: tracksByFileName[entry.fileName.lowercase()]
@@ -108,38 +126,61 @@ class PlaylistRepository(
                     track = resolvedTrack,
                 )
             }
+            val displayedEntries = if (playlistSortSpec.option == TrackSortOption.CUSTOM_ORDER) {
+                if (playlistSortSpec.direction == SortDirection.ASC) customOrdered else customOrdered.asReversed()
+            } else {
+                val sortedTracks = LibrarySortPolicy.sortTracks(
+                    tracks = customOrdered.map { it.track },
+                    spec = playlistSortSpec,
+                    playCountsByKey = playCountsByKey,
+                )
+                val entriesByTrackUri = customOrdered.groupBy { it.track.uriString }
+                    .mapValues { (_, list) -> ArrayDeque(list) }
+                sortedTracks.mapNotNull { track ->
+                    entriesByTrackUri[track.uriString]?.removeFirstOrNull()
+                }
+            }
             ResolvedPlaylist(
                 id = pl.id,
                 name = pl.name,
                 createdAtEpochMs = pl.createdAtEpochMs,
                 updatedAtEpochMs = pl.updatedAtEpochMs,
-                entries = resolvedEntries,
+                entries = displayedEntries,
             )
         }
 
-        val resolvedMostPlayed = mostPlayedEntities.mapNotNull { stat ->
-            val resolvedTrack = tracksByFp[stat.contentFingerprint.lowercase()]
-                ?: tracksByUri[stat.trackUri]
-                ?: tracksByFileName[stat.fileName.lowercase()]
-                ?: return@mapNotNull null
-            MostPlayedTrackItem(
-                track = resolvedTrack,
-                playCount = stat.playCount,
-                totalPlayTimeMs = stat.totalPlayTimeMs,
-                lastPlayedAtEpochMs = stat.lastPlayedAtEpochMs,
-            )
-        }
+        val resolvedMostPlayed = allStats
+            .asSequence()
+            .filter { it.playCount > 0 }
+            .take(50)
+            .mapNotNull { stat ->
+                val resolvedTrack = tracksByFp[stat.contentFingerprint.lowercase()]
+                    ?: tracksByUri[stat.trackUri]
+                    ?: tracksByFileName[stat.fileName.lowercase()]
+                    ?: return@mapNotNull null
+                MostPlayedTrackItem(
+                    track = resolvedTrack,
+                    playCount = stat.playCount,
+                    totalPlayTimeMs = stat.totalPlayTimeMs,
+                    lastPlayedAtEpochMs = stat.lastPlayedAtEpochMs,
+                )
+            }
+            .toList()
 
         PlaylistsUiSnapshot(
             playlists = resolvedPlaylists,
             mostPlayed = resolvedMostPlayed,
             totalPlays = totalPlays.coerceAtLeast(0),
+            playlistDetailSort = playlistSortSpec,
+            isLoaded = true,
         )
-    }.stateIn(
-        scope = scope,
-        started = SharingStarted.Eagerly,
-        initialValue = PlaylistsUiSnapshot(),
-    )
+    }
+        .flowOn(Dispatchers.Default)
+        .stateIn(
+            scope = scope,
+            started = SharingStarted.Eagerly,
+            initialValue = PlaylistsUiSnapshot(),
+        )
 
     suspend fun createPlaylist(rawName: String): Result<Long> = withContext(Dispatchers.IO) {
         val cleanName = rawName.trim()

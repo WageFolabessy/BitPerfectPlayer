@@ -46,6 +46,9 @@ class PersistenceAndPreferencesTest {
         assertNull(snapshot.lastPlaybackState.trackUri)
         assertNull(snapshot.lastPlaybackState.contentFingerprint)
         assertEquals(0L, snapshot.lastPlaybackState.positionMs)
+        assertEquals(com.cangkir.bitperfectplayer.audio.QueueSourceType.ALL_SONGS, snapshot.lastPlaybackState.queueSourceType)
+        assertEquals(com.cangkir.bitperfectplayer.library.TrackSortScope.ALBUM_DETAIL.defaultSpec, snapshot.sortPreferences.albumDetail)
+        assertEquals(com.cangkir.bitperfectplayer.library.TrackSortScope.ALL_SONGS.defaultSpec, snapshot.sortPreferences.allSongs)
     }
 
     @Test
@@ -67,6 +70,23 @@ class PersistenceAndPreferencesTest {
             trackUri = "  content://media/external/audio/media/42  ",
             contentFingerprint = fpUpper,
             positionMs = -500L, // Negative clamped to 0
+            queueSourceType = com.cangkir.bitperfectplayer.audio.QueueSourceType.ALBUM,
+            queueSourceKey = "21st Century Breakdown",
+            queueSourceLabel = "21st Century Breakdown",
+        )
+        repo.setTrackSort(
+            com.cangkir.bitperfectplayer.library.TrackSortScope.ALL_SONGS,
+            com.cangkir.bitperfectplayer.library.TrackSortSpec(
+                com.cangkir.bitperfectplayer.library.TrackSortOption.SAMPLE_RATE,
+                com.cangkir.bitperfectplayer.library.SortDirection.DESC,
+            ),
+        )
+        repo.setGroupSort(
+            com.cangkir.bitperfectplayer.library.GroupSortScope.ALBUMS_LIST,
+            com.cangkir.bitperfectplayer.library.GroupSortSpec(
+                com.cangkir.bitperfectplayer.library.GroupSortOption.TRACK_COUNT,
+                com.cangkir.bitperfectplayer.library.SortDirection.DESC,
+            ),
         )
 
         val snapshot = repo.getSnapshot()
@@ -88,6 +108,22 @@ class PersistenceAndPreferencesTest {
         assertEquals("content://media/external/audio/media/42", snapshot.lastPlaybackState.trackUri)
         assertEquals("a".repeat(64), snapshot.lastPlaybackState.contentFingerprint)
         assertEquals(0L, snapshot.lastPlaybackState.positionMs)
+        assertEquals(com.cangkir.bitperfectplayer.audio.QueueSourceType.ALBUM, snapshot.lastPlaybackState.queueSourceType)
+        assertEquals("21st Century Breakdown", snapshot.lastPlaybackState.queueSourceKey)
+        assertEquals("21st Century Breakdown", snapshot.lastPlaybackState.queueSourceLabel)
+        // Sorting All Songs does NOT affect Album Detail default!
+        assertEquals(
+            com.cangkir.bitperfectplayer.library.TrackSortOption.SAMPLE_RATE,
+            snapshot.sortPreferences.allSongs.option,
+        )
+        assertEquals(
+            com.cangkir.bitperfectplayer.library.TrackSortOption.TRACK_NUMBER,
+            snapshot.sortPreferences.albumDetail.option,
+        )
+        assertEquals(
+            com.cangkir.bitperfectplayer.library.GroupSortOption.TRACK_COUNT,
+            snapshot.sortPreferences.albumsList.option,
+        )
 
         // Removal & reset to Safe Mode
         repo.removePersistedSafTreeUri("content://com.android.externalstorage.documents/tree/primary%3AMusic")
@@ -102,6 +138,8 @@ class PersistenceAndPreferencesTest {
         assertNull(updated.lastPlaybackState.trackUri)
         assertNull(updated.lastPlaybackState.contentFingerprint)
         assertEquals(0L, updated.lastPlaybackState.positionMs)
+        assertEquals(com.cangkir.bitperfectplayer.audio.QueueSourceType.ALL_SONGS, updated.lastPlaybackState.queueSourceType)
+        assertNull(updated.lastPlaybackState.queueSourceKey)
     }
 
     @Test

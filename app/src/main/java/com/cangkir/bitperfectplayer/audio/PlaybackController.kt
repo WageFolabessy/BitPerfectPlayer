@@ -8,6 +8,8 @@ import com.cangkir.bitperfectplayer.data.RepeatModePreference
 import com.cangkir.bitperfectplayer.data.ReplayGainModePreference
 import com.cangkir.bitperfectplayer.data.TrackHistoryRecord
 import com.cangkir.bitperfectplayer.data.UserPreferencesRepository
+import com.cangkir.bitperfectplayer.library.LibrarySnapshot
+import com.cangkir.bitperfectplayer.library.PlaylistsUiSnapshot
 import com.cangkir.bitperfectplayer.lyrics.AndroidContentFingerprintProvider
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -23,13 +25,14 @@ import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Combined UI-observable low-frequency playback state unifying queue state, active track, resolved
- * content fingerprint, gapless & ReplayGain preferences, playback status, safety state, and 6-stage
- * diagnostics. High-frequency playback position (~20 Hz) is exposed separately via
- * [PlaybackController.playbackPositionMs].
+ * Combined UI-observable low-frequency playback state unifying queue state, active queue context,
+ * active track, resolved content fingerprint, gapless & ReplayGain preferences, playback status,
+ * safety state, and 6-stage diagnostics. High-frequency playback position (~20 Hz) is exposed
+ * separately via [PlaybackController.playbackPositionMs].
  */
 data class PlaybackControllerState(
     val queue: QueueSnapshot<PlaybackTrack> = QueueSnapshot(),
+    val queueContext: QueueContext = QueueContext.allSongs(),
     val activeTrack: PlaybackTrack? = null,
     val activeFingerprint: String? = null,
     val gaplessEnabled: Boolean = true,
@@ -94,6 +97,7 @@ class PlaybackController(
     private var positionPersistenceJob: Job? = null
     private var fingerprintJob: Job? = null
     private var hasRestoredInitialSession = false
+    private var isRestoreInFlight = false
 
     init {
         // Restore persisted shuffle/repeat/gapless/ReplayGain preferences
@@ -136,12 +140,62 @@ class PlaybackController(
         }
     }
 
-    fun playQueue(tracks: List<PlaybackTrack>, startIndex: Int = 0, startPositionMs: Long = 0L, autoPlay: Boolean = true) {
+    fun playQueue(
+        tracks: List<PlaybackTrack>,
+        startIndex: Int = 0,
+        startPositionMs: Long = 0L,
+        autoPlay: Boolean = true,
+        context: QueueContext = QueueContext.allSongs(),
+    ) {
         if (tracks.isEmpty()) return
         val snapshot = queueManager.setQueue(tracks, startIndex)
         val active = snapshot.currentItem ?: return
-        _state.update { it.copy(queue = snapshot, activeTrack = active) }
+        _state.update {
+            it.copy(
+                queue = snapshot,
+                queueContext = context,
+                activeTrack = active,
+            )
+        }
         loadActiveTrack(active, startPositionMs = startPositionMs, autoPlay = autoPlay)
+    }
+
+    /**
+     * Prepares a viewed Album/Folder/Artist/Playlist queue **paused** when playback is currently
+     * `IDLE` and the queue is empty — never auto-blasting audio.
+     */
+    fun prepareContextQueueIfIdle(
+        tracks: List<PlaybackTrack>,
+        context: QueueContext,
+    ) {
+        if (tracks.isEmpty()) return
+        if (!queueManager.isEmpty() || engine.state.value.status != PlaybackStatus.IDLE) return
+        playQueue(
+            tracks = tracks,
+            startIndex = 0,
+            startPositionMs = 0L,
+            autoPlay = false,
+            context = context,
+        )
+    }
+
+    /**
+     * Switches the active queue immediately to [context]'s ordered tracks (prepared paused at index
+     * 0 by default for hearing safety unless [autoPlay] is requested).
+     */
+    fun loadContextQueue(
+        tracks: List<PlaybackTrack>,
+        context: QueueContext,
+        autoPlay: Boolean = false,
+    ) {
+        if (tracks.isEmpty()) return
+        playQueue(
+            tracks = tracks,
+            startIndex = 0,
+            startPositionMs = 0L,
+            autoPlay = autoPlay,
+            context = context,
+        )
     }
 
     fun playTrackAt(queueIndex: Int) {
@@ -156,6 +210,7 @@ class PlaybackController(
         _state.update {
             it.copy(
                 queue = snapshot,
+                queueContext = if (wasEmpty) QueueContext.custom("Queue") else it.queueContext,
                 activeTrack = snapshot.currentItem,
             )
         }
@@ -172,6 +227,43 @@ class PlaybackController(
         _state.update {
             it.copy(
                 queue = snapshot,
+                queueContext = if (wasEmpty) QueueContext.custom("Queue") else it.queueContext,
+                activeTrack = snapshot.currentItem,
+            )
+        }
+        if (wasEmpty && snapshot.currentItem != null) {
+            loadActiveTrack(snapshot.currentItem!!, startPositionMs = 0L, autoPlay = false)
+        } else {
+            syncNextTrackToEngine()
+        }
+    }
+
+    fun enqueueAll(tracks: List<PlaybackTrack>, fallbackContext: QueueContext? = null) {
+        if (tracks.isEmpty()) return
+        val wasEmpty = queueManager.isEmpty()
+        val snapshot = queueManager.enqueueAll(tracks)
+        _state.update {
+            it.copy(
+                queue = snapshot,
+                queueContext = if (wasEmpty) (fallbackContext ?: QueueContext.custom("Queue")) else it.queueContext,
+                activeTrack = snapshot.currentItem,
+            )
+        }
+        if (wasEmpty && snapshot.currentItem != null) {
+            loadActiveTrack(snapshot.currentItem!!, startPositionMs = 0L, autoPlay = false)
+        } else {
+            syncNextTrackToEngine()
+        }
+    }
+
+    fun enqueueAllNext(tracks: List<PlaybackTrack>, fallbackContext: QueueContext? = null) {
+        if (tracks.isEmpty()) return
+        val wasEmpty = queueManager.isEmpty()
+        val snapshot = queueManager.enqueueAllNext(tracks)
+        _state.update {
+            it.copy(
+                queue = snapshot,
+                queueContext = if (wasEmpty) (fallbackContext ?: QueueContext.custom("Queue")) else it.queueContext,
                 activeTrack = snapshot.currentItem,
             )
         }
@@ -376,30 +468,73 @@ class PlaybackController(
     }
 
     /**
-     * Restores the last active track and paused playback position on app relaunch without auto-playing.
+     * Restores the last active track, exact scoped queue context (Album, Artist, Folder, Playlist,
+     * Recent, Favorites, or All Songs in its sorted order), and paused playback position on app
+     * relaunch without auto-playing.
      */
-    fun restoreLastSessionIfNeeded(libraryTracks: List<PlaybackTrack>) {
-        if (hasRestoredInitialSession || libraryTracks.isEmpty() || !queueManager.isEmpty()) return
-        hasRestoredInitialSession = true
+    fun restoreLastSessionIfNeeded(
+        library: LibrarySnapshot,
+        playlists: PlaylistsUiSnapshot,
+    ) {
+        if (hasRestoredInitialSession || isRestoreInFlight || library.allSongs.isEmpty() || !queueManager.isEmpty()) {
+            return
+        }
+        isRestoreInFlight = true
 
         scope.launch {
-            val prefs = runCatching { preferencesRepository.getSnapshot() }.getOrNull() ?: return@launch
-            val lastUri = prefs.lastPlaybackState.trackUri ?: return@launch
-            val lastPos = prefs.lastPlaybackState.positionMs
-            val index = libraryTracks.indexOfFirst { it.uriString == lastUri }
-            if (index < 0) return@launch
+            try {
+                val prefs = runCatching { preferencesRepository.getSnapshot() }.getOrNull() ?: return@launch
+                val lastUri = prefs.lastPlaybackState.trackUri
+                if (lastUri == null) {
+                    hasRestoredInitialSession = true
+                    return@launch
+                }
 
-            val snapshot = queueManager.setQueue(libraryTracks, startIndex = index)
-            val active = snapshot.currentItem ?: return@launch
-            _state.update {
-                it.copy(
-                    queue = snapshot,
-                    activeTrack = active,
-                    activeFingerprint = prefs.lastPlaybackState.contentFingerprint ?: active.contentFingerprint,
+                val savedContext = prefs.lastPlaybackState.toQueueContext()
+                // If restoring a Playlist or Most Played session, wait briefly for PlaylistRepository's
+                // first Room emission before attempting resolution so we don't fall back prematurely.
+                val needsPlaylistSnapshot = savedContext.sourceType == QueueSourceType.PLAYLIST ||
+                    (savedContext.sourceType == QueueSourceType.CUSTOM && savedContext.sourceKey == QueueContext.MOST_PLAYED_KEY)
+                if (needsPlaylistSnapshot && !playlists.isLoaded) {
+                    return@launch
+                }
+
+                if (!queueManager.isEmpty()) {
+                    hasRestoredInitialSession = true
+                    return@launch
+                }
+
+                val selection = QueueContextResolver.resolveSessionRestore(
+                    lastTrackUri = lastUri,
+                    savedContext = savedContext,
+                    allSongs = library.allSongs,
+                    albumsByName = library.albums.associate { it.name to it.tracks },
+                    artistsByName = library.artists.associate { it.name to it.tracks },
+                    foldersByName = library.folders.associate { it.name to it.tracks },
+                    playlistsById = playlists.playlists.associate { it.id.toString() to it.tracks },
+                    recentlyPlayed = library.recentlyPlayed,
+                    favorites = library.favorites,
+                    mostPlayed = playlists.mostPlayed.map { it.track },
                 )
+                hasRestoredInitialSession = true
+                if (selection == null) return@launch
+
+                val lastPos = prefs.lastPlaybackState.positionMs
+                val snapshot = queueManager.setQueue(selection.tracks, startIndex = selection.startIndex)
+                val active = snapshot.currentItem ?: return@launch
+                _state.update {
+                    it.copy(
+                        queue = snapshot,
+                        queueContext = selection.context,
+                        activeTrack = active,
+                        activeFingerprint = prefs.lastPlaybackState.contentFingerprint ?: active.contentFingerprint,
+                    )
+                }
+                // Prepare paused at restored position (never blast audio automatically on app relaunch).
+                loadActiveTrack(active, startPositionMs = lastPos, autoPlay = false)
+            } finally {
+                isRestoreInFlight = false
             }
-            // Prepare paused at restored position (never blast audio automatically on app relaunch).
-            loadActiveTrack(active, startPositionMs = lastPos, autoPlay = false)
         }
     }
 
@@ -603,11 +738,15 @@ class PlaybackController(
                 }
             }
 
+            val qCtx = _state.value.queueContext
             runCatching {
                 preferencesRepository.saveLastPlaybackState(
                     trackUri = track.uriString,
                     contentFingerprint = resolvedFp,
                     positionMs = playbackPositionMs.value,
+                    queueSourceType = qCtx.sourceType,
+                    queueSourceKey = qCtx.sourceKey,
+                    queueSourceLabel = qCtx.sourceLabel,
                 )
             }
         }
@@ -620,11 +759,15 @@ class PlaybackController(
                 delay(5_000L)
                 val snap = _state.value
                 val track = snap.activeTrack ?: continue
+                val qCtx = snap.queueContext
                 runCatching {
                     preferencesRepository.saveLastPlaybackState(
                         trackUri = track.uriString,
                         contentFingerprint = snap.activeFingerprint ?: track.contentFingerprint,
                         positionMs = playbackPositionMs.value,
+                        queueSourceType = qCtx.sourceType,
+                        queueSourceKey = qCtx.sourceKey,
+                        queueSourceLabel = qCtx.sourceLabel,
                     )
                 }
             }
@@ -641,12 +784,16 @@ class PlaybackController(
         val snap = _state.value
         val track = snap.activeTrack ?: return
         val currentPos = playbackPositionMs.value
+        val qCtx = snap.queueContext
         scope.launch(Dispatchers.IO) {
             runCatching {
                 preferencesRepository.saveLastPlaybackState(
                     trackUri = track.uriString,
                     contentFingerprint = snap.activeFingerprint ?: track.contentFingerprint,
                     positionMs = currentPos,
+                    queueSourceType = qCtx.sourceType,
+                    queueSourceKey = qCtx.sourceKey,
+                    queueSourceLabel = qCtx.sourceLabel,
                 )
             }
         }

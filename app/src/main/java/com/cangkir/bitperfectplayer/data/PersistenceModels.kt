@@ -1,5 +1,9 @@
 package com.cangkir.bitperfectplayer.data
 
+import com.cangkir.bitperfectplayer.audio.QueueContext
+import com.cangkir.bitperfectplayer.audio.QueueSourceType
+import com.cangkir.bitperfectplayer.library.LibrarySortPreferences
+
 /**
  * Origin of a locally persisted lyrics entry. Strictly offline (manual editor or local `.lrc` file).
  */
@@ -143,13 +147,23 @@ enum class ReplayGainModePreference {
 }
 
 /**
- * Snapshot of the last active track and playback position for restoration on app relaunch.
+ * Snapshot of the last active track, playback position, and queue origin context for scoped
+ * restoration on app relaunch.
  */
 data class LastPlaybackState(
     val trackUri: String? = null,
     val contentFingerprint: String? = null,
     val positionMs: Long = 0L,
-)
+    val queueSourceType: QueueSourceType = QueueSourceType.ALL_SONGS,
+    val queueSourceKey: String? = null,
+    val queueSourceLabel: String? = null,
+) {
+    fun toQueueContext(): QueueContext = QueueContext(
+        sourceType = queueSourceType,
+        sourceKey = queueSourceKey,
+        sourceLabel = queueSourceLabel?.takeIf { it.isNotBlank() } ?: queueSourceType.displayPrefix,
+    )
+}
 
 /**
  * Complete local user preferences snapshot.
@@ -165,6 +179,7 @@ data class UserPreferences(
     val persistedSafTreeUris: Set<String> = emptySet(),
     val persistedSafFileUris: Set<String> = emptySet(),
     val lastPlaybackState: LastPlaybackState = LastPlaybackState(),
+    val sortPreferences: LibrarySortPreferences = LibrarySortPreferences(),
 )
 
 /**

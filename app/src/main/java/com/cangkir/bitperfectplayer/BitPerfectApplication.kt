@@ -54,6 +54,7 @@ class AppContainer(context: Context) {
             playlistDao = database.playlistDao(),
             trackStatsDao = database.trackStatsDao(),
             libraryRepository = libraryRepository,
+            preferencesRepository = preferencesRepository,
             fingerprintProvider = fingerprintProvider,
         )
     }

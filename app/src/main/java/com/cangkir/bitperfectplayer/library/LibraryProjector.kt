@@ -26,6 +26,7 @@ data class LibrarySnapshot(
     val favoriteFingerprints: Set<String> = emptySet(),
     val favoriteUris: Set<String> = emptySet(),
     val persistedSafTreeUris: Set<String> = emptySet(),
+    val sortPreferences: LibrarySortPreferences = LibrarySortPreferences(),
     val isScanning: Boolean = false,
     val scanWarning: String? = null,
 )
@@ -88,50 +89,69 @@ object LibraryProjector {
         favoriteRecords: List<FavoriteTrackRecord>,
         optimisticFavorites: Map<String, Boolean> = emptyMap(),
         persistedSafTreeUris: Set<String> = emptySet(),
+        sortPreferences: LibrarySortPreferences = LibrarySortPreferences(),
+        playCountsByKey: Map<String, Int> = emptyMap(),
         isScanning: Boolean = false,
         scanWarning: String? = null,
     ): LibrarySnapshot {
-        val sortedSongs = allTracks.sortedWith(
-            compareBy<PlaybackTrack> { it.title.lowercase() }.thenBy { it.fileName.lowercase() },
+        val sortedSongs = LibrarySortPolicy.sortTracks(
+            tracks = allTracks,
+            spec = sortPreferences.allSongs,
+            playCountsByKey = playCountsByKey,
         )
 
-        val folders = sortedSongs
+        val foldersRaw = allTracks
             .groupBy { it.folderName.ifBlank { "Internal Storage" } }
             .entries
-            .sortedBy { it.key.lowercase() }
             .map { (name, items) ->
+                val ordered = LibrarySortPolicy.sortTracks(
+                    tracks = items,
+                    spec = sortPreferences.folderDetail,
+                    playCountsByKey = playCountsByKey,
+                )
                 LibraryGroup(
                     name = name,
-                    subtitle = "${items.size} ${if (items.size == 1) "track" else "tracks"}",
-                    tracks = items,
+                    subtitle = "${ordered.size} ${if (ordered.size == 1) "track" else "tracks"}",
+                    tracks = ordered,
                 )
             }
+        val folders = LibrarySortPolicy.sortGroups(foldersRaw, sortPreferences.foldersList)
 
-        val artists = sortedSongs
+        val artistsRaw = allTracks
             .groupBy { it.artist.ifBlank { "Unknown Artist" } }
             .entries
-            .sortedBy { it.key.lowercase() }
             .map { (name, items) ->
-                val albumCount = items.map { it.album }.distinct().size
+                val ordered = LibrarySortPolicy.sortTracks(
+                    tracks = items,
+                    spec = sortPreferences.artistDetail,
+                    playCountsByKey = playCountsByKey,
+                )
+                val albumCount = ordered.map { it.album }.distinct().size
                 LibraryGroup(
                     name = name,
-                    subtitle = "${items.size} ${if (items.size == 1) "song" else "songs"} · $albumCount ${if (albumCount == 1) "album" else "albums"}",
-                    tracks = items,
+                    subtitle = "${ordered.size} ${if (ordered.size == 1) "song" else "songs"} · $albumCount ${if (albumCount == 1) "album" else "albums"}",
+                    tracks = ordered,
                 )
             }
+        val artists = LibrarySortPolicy.sortGroups(artistsRaw, sortPreferences.artistsList)
 
-        val albums = sortedSongs
+        val albumsRaw = allTracks
             .groupBy { it.album.ifBlank { "Unknown Album" } }
             .entries
-            .sortedBy { it.key.lowercase() }
             .map { (name, items) ->
-                val primaryArtist = items.firstOrNull()?.artist ?: "Unknown Artist"
+                val ordered = LibrarySortPolicy.sortTracks(
+                    tracks = items,
+                    spec = sortPreferences.albumDetail,
+                    playCountsByKey = playCountsByKey,
+                )
+                val primaryArtist = ordered.firstOrNull()?.artist ?: "Unknown Artist"
                 LibraryGroup(
                     name = name,
-                    subtitle = "$primaryArtist · ${items.size} ${if (items.size == 1) "track" else "tracks"}",
-                    tracks = items,
+                    subtitle = "$primaryArtist · ${ordered.size} ${if (ordered.size == 1) "track" else "tracks"}",
+                    tracks = ordered,
                 )
             }
+        val albums = LibrarySortPolicy.sortGroups(albumsRaw, sortPreferences.albumsList)
 
         val trackByUri = sortedSongs.associateBy { it.uriString }
         val trackByFp = sortedSongs
@@ -140,7 +160,7 @@ object LibraryProjector {
         val trackByFileName = sortedSongs.associateBy { it.fileName.lowercase() }
 
         // Resolve Recently Played entries against currently accessible library tracks.
-        val recentlyPlayed = historyRecords
+        val chronologicalRecent = historyRecords
             .sortedByDescending { it.playedAtEpochMs }
             .mapNotNull { rec ->
                 val fp = rec.contentFingerprint.lowercase()
@@ -150,11 +170,21 @@ object LibraryProjector {
                 match?.copy(contentFingerprint = match.contentFingerprint ?: fp)
             }
             .distinctBy { it.uriString }
+        val recentlyPlayed = LibrarySortPolicy.sortTracks(
+            tracks = chronologicalRecent,
+            spec = sortPreferences.recent,
+            playCountsByKey = playCountsByKey,
+        )
 
         val resolvedFavs = FavoriteStateReducer.resolve(
             allTracks = sortedSongs,
             persistedFavorites = favoriteRecords,
             optimisticOverrides = optimisticFavorites,
+        )
+        val sortedFavorites = LibrarySortPolicy.sortTracks(
+            tracks = resolvedFavs.favoriteTracks,
+            spec = sortPreferences.favorites,
+            playCountsByKey = playCountsByKey,
         )
 
         return LibrarySnapshot(
@@ -163,10 +193,11 @@ object LibraryProjector {
             artists = artists,
             albums = albums,
             recentlyPlayed = recentlyPlayed,
-            favorites = resolvedFavs.favoriteTracks,
+            favorites = sortedFavorites,
             favoriteFingerprints = resolvedFavs.favoriteFingerprints,
             favoriteUris = resolvedFavs.favoriteUris,
             persistedSafTreeUris = persistedSafTreeUris,
+            sortPreferences = sortPreferences,
             isScanning = isScanning,
             scanWarning = scanWarning,
         )
@@ -180,5 +211,7 @@ object LibraryProjector {
             durationMs = incoming.durationMs.takeIf { it > 0L } ?: base.durationMs,
             dateModifiedSeconds = maxOf(base.dateModifiedSeconds, incoming.dateModifiedSeconds),
             contentFingerprint = incoming.contentFingerprint ?: base.contentFingerprint,
+            discNumber = incoming.discNumber.takeIf { it > 0 } ?: base.discNumber,
+            trackNumber = incoming.trackNumber.takeIf { it > 0 } ?: base.trackNumber,
         )
 }

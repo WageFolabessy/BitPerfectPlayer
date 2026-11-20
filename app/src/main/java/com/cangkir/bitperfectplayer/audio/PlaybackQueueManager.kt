@@ -141,6 +141,44 @@ class PlaybackQueueManager<T : Any>(
         return snapshot()
     }
 
+    /**
+     * Appends all [items] in order to the end of the queue.
+     */
+    fun enqueueAll(items: List<T>): QueueSnapshot<T> {
+        if (items.isEmpty()) return snapshot()
+        val entries = items.map { QueueEntry(nextEntryId++, it) }
+        originalOrder.addAll(entries)
+        activeOrder.addAll(entries)
+        if (currentIndex == -1) {
+            currentIndex = 0
+        }
+        return snapshot()
+    }
+
+    /**
+     * Inserts all [items] in exact order immediately after the currently active track.
+     */
+    fun enqueueAllNext(items: List<T>): QueueSnapshot<T> {
+        if (items.isEmpty()) return snapshot()
+        val entries = items.map { QueueEntry(nextEntryId++, it) }
+        if (activeOrder.isEmpty() || currentIndex !in activeOrder.indices) {
+            originalOrder.addAll(entries)
+            activeOrder.addAll(entries)
+            currentIndex = 0
+        } else {
+            val insertActiveAt = currentIndex + 1
+            activeOrder.addAll(insertActiveAt, entries)
+            val currentEntry = activeOrder[currentIndex]
+            val origIdx = originalOrder.indexOfFirst { it.id == currentEntry.id }
+            if (origIdx >= 0) {
+                originalOrder.addAll(origIdx + 1, entries)
+            } else {
+                originalOrder.addAll(entries)
+            }
+        }
+        return snapshot()
+    }
+
     fun removeAt(activeIndex: Int): T? {
         if (activeIndex !in activeOrder.indices) return null
         val removed = activeOrder.removeAt(activeIndex)
