@@ -33,7 +33,7 @@ Execute unchecked `[ ]` items sequentially from top to bottom following `AGENTS.
   - Write JVM unit tests (`ContentFingerprintGeneratorTest` under `app/src/test/java/com/cangkir/bitperfectplayer/lyrics/`) covering: empty file (`0` bytes), `< 128 KB`, exact `128 KB`, `> 128 KB` (both seekable and streaming paths producing identical hashes), identical content with different filenames producing identical hashes, 1-byte mutation at start/end/size producing distinct hashes, and I/O failure handling.
   - **Verification:** `./gradlew testDebugUnitTest` 100% green.
 
-- [ ] **T1.2 — Fault-Tolerant `.lrc` Parser & Active Line Resolver**
+- [x] **T1.2 — Fault-Tolerant `.lrc` Parser & Active Line Resolver**
   - Implement pure-Kotlin `LrcParser` (zero `android.*` imports) under `app/src/main/java/com/cangkir/bitperfectplayer/lyrics/` supporting:
     - Standard timestamps (`[mm:ss.xx]`, `[mm:ss.xxx]`) and multi-timestamp lines (e.g., `[00:10.00][01:20.50]Chorus`).
     - Metadata tags (`[ti:]`, `[ar:]`, `[al:]`) and millisecond `[offset:]` application.
