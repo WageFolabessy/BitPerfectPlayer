@@ -505,6 +505,7 @@ class AudioOutputEngine(
                 }
                 resumeAfterTransientFocusLoss = false
                 isPausedFlag.set(false)
+                runCatching { track.setVolume(1.0f) }
                 safePlayTrack(track)
                 _state.update {
                     it.copy(
@@ -521,6 +522,21 @@ class AudioOutputEngine(
                 }
             }
         }
+    }
+
+    /**
+     * Adjusts [AudioTrack] output volume strictly for Safe Mode features (e.g., 3-second Sleep
+     * Timer fade-out). Strictly ignores attenuation in [AudioOutputMode.BIT_PERFECT_OPT_IN].
+     */
+    fun setSafeModeOutputVolume(volume: Float) {
+        val clamped = volume.coerceIn(0.0f, 1.0f)
+        if (safetyController.state().mode == AudioOutputMode.BIT_PERFECT_OPT_IN) {
+            if (clamped >= 1.0f) {
+                runCatching { activeAudioTrack?.setVolume(1.0f) }
+            }
+            return
+        }
+        runCatching { activeAudioTrack?.setVolume(clamped) }
     }
 
     fun pause() {

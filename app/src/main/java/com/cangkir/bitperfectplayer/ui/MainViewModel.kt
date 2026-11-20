@@ -8,11 +8,15 @@ import com.cangkir.bitperfectplayer.AppContainer
 import com.cangkir.bitperfectplayer.audio.PlaybackControllerState
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
 import com.cangkir.bitperfectplayer.audio.ReplayGainMode
+import com.cangkir.bitperfectplayer.audio.SleepTimerPreset
+import com.cangkir.bitperfectplayer.audio.SleepTimerState
 import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
 import com.cangkir.bitperfectplayer.library.LibrarySnapshot
 import com.cangkir.bitperfectplayer.library.PlaylistsUiSnapshot
 import com.cangkir.bitperfectplayer.library.ResolvedPlaylist
+import com.cangkir.bitperfectplayer.library.TrackTechnicalInfo
 import com.cangkir.bitperfectplayer.lyrics.TrackLyricsState
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -42,6 +46,7 @@ class MainViewModel(
     val playlistsState: StateFlow<PlaylistsUiSnapshot> = container.playlistRepository.playlistsSnapshot
     val playbackState: StateFlow<PlaybackControllerState> = container.playbackController.state
     val playbackPositionMs: StateFlow<Long> = container.playbackController.playbackPositionMs
+    val sleepTimerState: StateFlow<SleepTimerState> = container.playbackController.sleepTimerState
     val albumArtworkLoader: AlbumArtworkLoader = container.albumArtworkLoader
 
     /**
@@ -58,6 +63,10 @@ class MainViewModel(
 
     private val _lyricsUiState = MutableStateFlow(LyricsUiState())
     val lyricsUiState: StateFlow<LyricsUiState> = _lyricsUiState.asStateFlow()
+
+    private val _trackInfoState = MutableStateFlow<TrackTechnicalInfo?>(null)
+    val trackInfoState: StateFlow<TrackTechnicalInfo?> = _trackInfoState.asStateFlow()
+    private var trackInfoJob: Job? = null
 
     private val _uiMessage = MutableStateFlow<String?>(null)
     val uiMessage: StateFlow<String?> = _uiMessage.asStateFlow()
@@ -164,6 +173,65 @@ class MainViewModel(
     fun setReplayGainPreampDb(preampDb: Float) = container.playbackController.setReplayGainPreampDb(preampDb)
     fun setReplayGainPreventClipping(preventClipping: Boolean) =
         container.playbackController.setReplayGainPreventClipping(preventClipping)
+
+    fun setSleepTimerPreset(preset: SleepTimerPreset) {
+        container.playbackController.setSleepTimerPreset(preset)
+        _uiMessage.value = when (preset) {
+            SleepTimerPreset.OFF -> "Sleep timer off"
+            SleepTimerPreset.END_OF_TRACK -> "Sleep timer: pause after current track"
+            else -> "Sleep timer set for ${preset.label}"
+        }
+    }
+
+    fun exportLocalBackup(destinationUri: Uri) {
+        viewModelScope.launch {
+            container.backupRepository.exportBackupToUri(destinationUri)
+                .onSuccess { summary ->
+                    _uiMessage.value =
+                        "Backup saved (${summary.playlistsCount} playlists, ${summary.lyricsCount} lyrics, ${summary.favoritesCount} favorites, ${summary.statsCount} stats)"
+                }
+                .onFailure { err ->
+                    _uiMessage.value = err.message ?: "Unable to export local backup"
+                }
+        }
+    }
+
+    fun importLocalBackup(sourceUri: Uri) {
+        viewModelScope.launch {
+            container.backupRepository.importBackupFromUri(sourceUri)
+                .onSuccess { summary ->
+                    _uiMessage.value =
+                        "Backup restored (${summary.playlistsMerged} playlists, ${summary.lyricsUpserted} lyrics, ${summary.favoritesMerged} favorites, ${summary.statsMerged} stats)"
+                }
+                .onFailure { err ->
+                    _uiMessage.value = err.message ?: "Invalid or unreadable backup file"
+                }
+        }
+    }
+
+    fun openTrackInfo(track: PlaybackTrack) {
+        trackInfoJob?.cancel()
+        _trackInfoState.value = TrackTechnicalInfo(
+            track = track,
+            isLoadingDetails = true,
+        )
+        trackInfoJob = viewModelScope.launch {
+            val loaded = container.trackInfoLoader.loadFullDetails(track)
+            if (_trackInfoState.value?.track?.uriString == track.uriString) {
+                _trackInfoState.value = loaded
+            }
+        }
+    }
+
+    fun dismissTrackInfo() {
+        trackInfoJob?.cancel()
+        trackInfoJob = null
+        _trackInfoState.value = null
+    }
+
+    fun showUiMessage(message: String) {
+        _uiMessage.value = message
+    }
 
     fun requestBitPerfectMode() {
         container.playbackController.requestBitPerfectMode()

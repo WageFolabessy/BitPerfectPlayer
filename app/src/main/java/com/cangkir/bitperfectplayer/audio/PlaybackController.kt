@@ -70,12 +70,26 @@ class PlaybackController(
         onActivePlaybackElapsedMs = { deltaMs -> handleActivePlaybackElapsed(deltaMs) },
     )
 
+    private val sleepTimerController = SleepTimerController(
+        scope = scope,
+        isBitPerfectOptIn = { safetyController.state().mode == AudioOutputMode.BIT_PERFECT_OPT_IN },
+        setSafeModeVolume = { vol -> engine.setSafeModeOutputVolume(vol) },
+        pausePlayback = { pause() },
+        onEndOfTrackArmedChanged = { syncNextTrackToEngine() },
+    )
+
     private val _state = MutableStateFlow(
         PlaybackControllerState(engineState = engine.state.value),
     )
     val state: StateFlow<PlaybackControllerState> = _state.asStateFlow()
 
     val playbackPositionMs: StateFlow<Long> = engine.playbackPositionMs
+
+    /**
+     * Decoupled Sleep Timer state collected ONLY by narrow leaf composables in NowPlayingScreen
+     * and SettingsScreen so 1-second countdown ticks never recompose Library, Playlists, or BottomNav.
+     */
+    val sleepTimerState: StateFlow<SleepTimerState> = sleepTimerController.state
 
     private var positionPersistenceJob: Job? = null
     private var fingerprintJob: Job? = null
@@ -323,6 +337,14 @@ class PlaybackController(
         }
     }
 
+    fun setSleepTimerPreset(preset: SleepTimerPreset) {
+        sleepTimerController.setPreset(preset)
+    }
+
+    fun cancelSleepTimer() {
+        sleepTimerController.cancel()
+    }
+
     fun requestBitPerfectMode(): SafetyCommand = engine.requestBitPerfectMode()
 
     fun confirmBitPerfectWarning(): SafetyCommand {
@@ -387,6 +409,7 @@ class PlaybackController(
     }
 
     fun release() {
+        sleepTimerController.release()
         playCountTracker.clearSession()?.let { persistPlayCountFlush(it) }
         persistCurrentPositionAsync()
         positionPersistenceJob?.cancel()
@@ -396,6 +419,10 @@ class PlaybackController(
 
     private fun handleTrackCompleted() {
         playCountTracker.onNaturalCompletion()?.let { persistPlayCountFlush(it) }
+        if (sleepTimerController.consumeEndOfTrackTrigger()) {
+            persistCurrentPositionAsync()
+            return
+        }
         next(userInitiated = false)
     }
 
@@ -439,6 +466,11 @@ class PlaybackController(
     }
 
     private fun syncNextTrackToEngine() {
+        // When End-of-Track sleep timer is armed, do NOT pre-load or gaplessly chain into the next track.
+        if (sleepTimerController.state.value.isEndOfTrackArmed) {
+            engine.setNextTrack(null)
+            return
+        }
         val nextTrack = queueManager.peekNext(userInitiated = false)
         if (nextTrack == null) {
             engine.setNextTrack(null)
