@@ -56,7 +56,7 @@ Execute unchecked `[ ]` items sequentially from top to bottom following `AGENTS.
 
 ## Milestone 2: Playback Domain, Hearing Safety Policy, & Diagnostics Model
 
-- [ ] **T2.1 — Playback Queue Manager (`PlaybackQueueManager`)**
+- [x] **T2.1 — Playback Queue Manager (`PlaybackQueueManager`)**
   - Implement pure-Kotlin queue logic (zero `android.*` imports) under `app/src/main/java/com/cangkir/bitperfectplayer/audio/`: set queue, enqueue/add, remove, reorder, next/previous, non-destructive `Shuffle` toggle, `Repeat` (`OFF`, `ALL`, `ONE`), and active index restoration.
   - Write JVM unit tests (`PlaybackQueueManagerTest`) covering empty queue, single track, multi-track navigation, shuffle on/off preservation, and all repeat modes.
   - **Verification:** `./gradlew testDebugUnitTest` 100% green.
