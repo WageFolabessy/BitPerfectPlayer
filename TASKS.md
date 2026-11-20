@@ -87,7 +87,7 @@ Execute unchecked `[ ]` items sequentially from top to bottom following `AGENTS.
   - Write JVM unit tests (`WavHeaderParserTest`) testing valid 16-bit WAV, valid 24-bit WAV, 24-bit-to-float32 conversion accuracy, extra/non-standard RIFF chunks, and truncated/malformed WAV headers.
   - **Verification:** `./gradlew testDebugUnitTest assembleDebug` 100% green.
 
-- [ ] **T3.2 — `AudioOutputEngine` (`AudioTrack` + Android 14+ Mixer Attributes)**
+- [x] **T3.2 — `AudioOutputEngine` (`AudioTrack` + Android 14+ Mixer Attributes)**
   - Implement `AudioOutputEngine` under `app/src/main/java/com/cangkir/bitperfectplayer/audio/`:
     - Inspect active output devices via `AudioManager.getDevices()`, monitor changes via `AudioDeviceCallback`, and listen for `AudioManager.ACTION_AUDIO_BECOMING_NOISY`.
     - When `Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE` (API 34+), Bit-Perfect Mode is explicitly enabled, and a USB audio device is active: query `AudioManager.getSupportedMixerAttributes(device)` for `AudioMixerAttributes.MIXER_BEHAVIOR_BIT_PERFECT` matching the PCM format/sample rate and apply via `setPreferredMixerAttributes()`.
