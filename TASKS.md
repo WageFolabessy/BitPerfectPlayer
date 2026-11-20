@@ -107,7 +107,7 @@ Execute unchecked `[ ]` items sequentially from top to bottom following `AGENTS.
 
 ## Milestone 4: Local Library Scanner & Lyrics Integration
 
-- [ ] **T4.1 — `LocalLibraryRepository` (`MediaStore` + SAF Scanner)**
+- [x] **T4.1 — `LocalLibraryRepository` (`MediaStore` + SAF Scanner)**
   - Scan MVP audio formats (`.flac`, `.wav`, `.mp3`, `.m4a`, `.ogg`, `.opus`) via `MediaStore.Audio.Media`.
   - Support adding folders and individual audio files via SAF (`ACTION_OPEN_DOCUMENT_TREE` / `ACTION_OPEN_DOCUMENT`) with defensive `takePersistableUriPermission`.
   - Provide grouped projections for All Songs, Folders, Artists, Albums, Recently Played, and Favorites, handling moved/deleted files gracefully.

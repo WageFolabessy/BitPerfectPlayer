@@ -7,6 +7,7 @@ import com.cangkir.bitperfectplayer.audio.PlaybackController
 import com.cangkir.bitperfectplayer.data.BitPerfectDatabase
 import com.cangkir.bitperfectplayer.data.LocalPersistenceRepository
 import com.cangkir.bitperfectplayer.data.UserPreferencesRepository
+import com.cangkir.bitperfectplayer.library.LocalLibraryRepository
 import com.cangkir.bitperfectplayer.lyrics.AndroidContentFingerprintProvider
 
 /**
@@ -22,6 +23,15 @@ class AppContainer(context: Context) {
         AndroidContentFingerprintProvider(appContext.contentResolver)
     }
     val metadataReader: AudioMetadataReader by lazy { AudioMetadataReader(appContext) }
+    val libraryRepository: LocalLibraryRepository by lazy {
+        LocalLibraryRepository(
+            context = appContext,
+            metadataReader = metadataReader,
+            preferencesRepository = preferencesRepository,
+            persistenceRepository = persistenceRepository,
+            fingerprintProvider = fingerprintProvider,
+        )
+    }
     val playbackController: PlaybackController by lazy {
         PlaybackController(
             context = appContext,
