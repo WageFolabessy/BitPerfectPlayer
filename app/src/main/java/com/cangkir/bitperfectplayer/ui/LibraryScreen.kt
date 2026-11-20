@@ -3,6 +3,7 @@ package com.cangkir.bitperfectplayer.ui
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -14,9 +15,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
@@ -57,6 +60,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.PrimaryScrollableTabRow
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.ScaffoldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
@@ -90,7 +94,6 @@ import com.cangkir.bitperfectplayer.ui.theme.AmberIndicated
 import com.cangkir.bitperfectplayer.ui.theme.EmeraldSafe
 import com.cangkir.bitperfectplayer.ui.theme.IcePrimary
 import com.cangkir.bitperfectplayer.ui.theme.TextMuted
-import kotlinx.coroutines.flow.StateFlow
 
 enum class LibraryTab(val label: String) {
     ALL_SONGS("All Songs"),
@@ -107,7 +110,6 @@ fun LibraryScreen(
     libraryState: LibrarySnapshot,
     favoriteTrackUris: Set<String>,
     playbackState: PlaybackControllerState,
-    playbackPositionMsFlow: StateFlow<Long>,
     albumArtworkLoader: AlbumArtworkLoader,
     onRefreshLibrary: () -> Unit,
     onImportFolder: (android.net.Uri) -> Unit,
@@ -115,12 +117,10 @@ fun LibraryScreen(
     onPlayTracks: (List<PlaybackTrack>, Int) -> Unit,
     onEnqueueTrack: (PlaybackTrack) -> Unit,
     onEnqueueNext: (PlaybackTrack) -> Unit,
+    onAddToPlaylist: (PlaybackTrack) -> Unit,
     onToggleFavorite: (PlaybackTrack) -> Unit,
-    onOpenNowPlaying: () -> Unit,
     onOpenQueue: () -> Unit,
     onOpenDiagnostics: () -> Unit,
-    onTogglePlayPause: () -> Unit,
-    onNext: () -> Unit,
 ) {
     val context = LocalContext.current
     var selectedTab by rememberSaveable { mutableStateOf(LibraryTab.ALL_SONGS) }
@@ -203,8 +203,15 @@ fun LibraryScreen(
     val onSelectGroup = remember { { group: LibraryGroup -> openedGroupName = group.name } }
     val onPlayGroup = remember(onPlayTracks) { { group: LibraryGroup -> onPlayTracks(group.tracks, 0) } }
 
+    BackHandler(enabled = openedGroup != null) {
+        openedGroupName = null
+    }
+
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
+        contentWindowInsets = ScaffoldDefaults.contentWindowInsets.only(
+            WindowInsetsSides.Top + WindowInsetsSides.Horizontal,
+        ),
         topBar = {
             TopAppBar(
                 title = {
@@ -294,16 +301,6 @@ fun LibraryScreen(
                 ),
             )
         },
-        bottomBar = {
-            MiniPlayerBar(
-                playbackState = playbackState,
-                playbackPositionMsFlow = playbackPositionMsFlow,
-                artworkLoader = albumArtworkLoader,
-                onOpenNowPlaying = onOpenNowPlaying,
-                onTogglePlayPause = onTogglePlayPause,
-                onNext = onNext,
-            )
-        },
     ) { innerPadding ->
         Column(
             modifier = Modifier
@@ -388,6 +385,7 @@ fun LibraryScreen(
                     onPlayTracks = onPlayTracks,
                     onEnqueueTrack = onEnqueueTrack,
                     onEnqueueNext = onEnqueueNext,
+                    onAddToPlaylist = onAddToPlaylist,
                     onToggleFavorite = onToggleFavorite,
                 )
             } else {
@@ -428,6 +426,7 @@ fun LibraryScreen(
                             onPlayTracks = onPlayTracks,
                             onEnqueueTrack = onEnqueueTrack,
                             onEnqueueNext = onEnqueueNext,
+                            onAddToPlaylist = onAddToPlaylist,
                             onToggleFavorite = onToggleFavorite,
                             onImportFolder = if (searchQuery.isBlank()) launchImportFolder else null,
                         )
@@ -470,6 +469,7 @@ fun LibraryScreen(
                         onPlayTracks = onPlayTracks,
                         onEnqueueTrack = onEnqueueTrack,
                         onEnqueueNext = onEnqueueNext,
+                        onAddToPlaylist = onAddToPlaylist,
                         onToggleFavorite = onToggleFavorite,
                         onImportFolder = null,
                     )
@@ -484,6 +484,7 @@ fun LibraryScreen(
                         onPlayTracks = onPlayTracks,
                         onEnqueueTrack = onEnqueueTrack,
                         onEnqueueNext = onEnqueueNext,
+                        onAddToPlaylist = onAddToPlaylist,
                         onToggleFavorite = onToggleFavorite,
                         onImportFolder = null,
                     )
@@ -774,6 +775,7 @@ private fun GroupDetailTrackList(
     onPlayTracks: (List<PlaybackTrack>, Int) -> Unit,
     onEnqueueTrack: (PlaybackTrack) -> Unit,
     onEnqueueNext: (PlaybackTrack) -> Unit,
+    onAddToPlaylist: (PlaybackTrack) -> Unit,
     onToggleFavorite: (PlaybackTrack) -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
@@ -813,6 +815,7 @@ private fun GroupDetailTrackList(
             onPlayTracks = onPlayTracks,
             onEnqueueTrack = onEnqueueTrack,
             onEnqueueNext = onEnqueueNext,
+            onAddToPlaylist = onAddToPlaylist,
             onToggleFavorite = onToggleFavorite,
             onImportFolder = null,
         )
@@ -831,6 +834,7 @@ private fun TrackListView(
     onPlayTracks: (List<PlaybackTrack>, Int) -> Unit,
     onEnqueueTrack: (PlaybackTrack) -> Unit,
     onEnqueueNext: (PlaybackTrack) -> Unit,
+    onAddToPlaylist: (PlaybackTrack) -> Unit,
     onToggleFavorite: (PlaybackTrack) -> Unit,
     onImportFolder: (() -> Unit)?,
 ) {
@@ -901,6 +905,7 @@ private fun TrackListView(
                 onToggleFavorite = onToggleFavorite,
                 onEnqueueNext = onEnqueueNext,
                 onEnqueueTrack = onEnqueueTrack,
+                onAddToPlaylist = onAddToPlaylist,
             )
             HorizontalDivider(
                 thickness = 0.5.dp,
@@ -921,6 +926,7 @@ private fun TrackListRow(
     onToggleFavorite: (PlaybackTrack) -> Unit,
     onEnqueueNext: (PlaybackTrack) -> Unit,
     onEnqueueTrack: (PlaybackTrack) -> Unit,
+    onAddToPlaylist: (PlaybackTrack) -> Unit,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
 
@@ -1025,6 +1031,13 @@ private fun TrackListRow(
                     expanded = true,
                     onDismissRequest = { menuExpanded = false },
                 ) {
+                    DropdownMenuItem(
+                        text = { Text("Add to Playlist") },
+                        onClick = {
+                            menuExpanded = false
+                            onAddToPlaylist(track)
+                        },
+                    )
                     DropdownMenuItem(
                         text = { Text("Play Next") },
                         onClick = {

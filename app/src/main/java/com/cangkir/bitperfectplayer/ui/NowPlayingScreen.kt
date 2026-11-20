@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Favorite
@@ -102,6 +103,7 @@ fun NowPlayingScreen(
     isFavorite: Boolean,
     onBack: () -> Unit,
     onToggleFavorite: (PlaybackTrack) -> Unit,
+    onAddToPlaylist: (PlaybackTrack) -> Unit,
     onTogglePlayPause: () -> Unit,
     onQuickPause: () -> Unit,
     onPrevious: () -> Unit,
@@ -205,6 +207,16 @@ fun NowPlayingScreen(
                         }
                     }
                     if (track != null) {
+                        IconButton(
+                            onClick = { onAddToPlaylist(track) },
+                            modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.PlaylistAdd,
+                                contentDescription = "Add ${track.title} to playlist",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                         IconButton(
                             onClick = { onToggleFavorite(track) },
                             modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),

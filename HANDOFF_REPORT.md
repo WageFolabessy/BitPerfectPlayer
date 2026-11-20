@@ -240,5 +240,38 @@ Following physical profiling on POCO F4 (Android 14 / HyperOS) — which confirm
 - **Pure-Kotlin Domain Boundary:** **PASS** — **0 `android.*` imports** across all 18 pure-Kotlin domain modules (`ContentFingerprintGenerator`, `LrcParser`, `PersistenceModels`, `PlaybackQueueManager`, `AudioSafetyController`, `AudioDiagnosticMapper`, `AudioDecoderModels`, `WavHeaderParser`, `PlaybackTrack`, `PcmStreamRules`, `AudioFormatFormatter`, `MediaSessionUpdatePolicy`, `MetadataScanPolicy`, `LibraryProjector`, `LibrarySyncDiffer`, `FavoriteStateReducer`, `AlbumArtworkHelper`, `MediaScanFilter`).
 - **Physical Hardware Verification Pending (Not Executed in Cloud):** Re-install the rebuilt debug APK on POCO F4 (Android 14 / HyperOS) + KZ EDX Pro 2 USB-C to verify 60 fps scrolling during active playback, fast initial MediaStore scan duration, and zero `WindowOnBackDispatcher` logcat warnings.
 
+---
+
+## 8. Full APK Phase 1 Summary (Room v3, Anti-Skip Play Count, Playlists & `.m3u8`, 3-Tab Navigation)
+
+Graduated `BitPerfectPlayer` into Full APK Phase 1 on `feat/mvp-overnight` while strictly maintaining all offline, hearing safety, exact `Hz`, and 120 Hz UI smoothness invariants:
+
+1. **Specification & Room Database v2 -> v3 Non-Destructive Migration (`SPEC.md`, `DECISIONS.md`, `BitPerfectDatabase.kt`, `LocalEntities.kt`, `LocalDaos.kt`, `LocalPersistenceRepository.kt`):**
+   - Added Section 6 (*Full APK Phase Extensions*) to `SPEC.md` and `D7.1` to `DECISIONS.md`.
+   - Upgraded `BitPerfectDatabase` to `version = 3` with explicit SQLite `MIGRATION_2_3` adding `playlists`, `playlist_tracks` (`ON DELETE CASCADE` FK to `playlists.id` + `(playlist_id, position_index)` index), and `track_stats` (SHA-256 `content_fingerprint` PK + `play_count` / `last_played_at_epoch_ms` indices) while preserving `cached_tracks`, `lyrics`, `track_history`, and `favorite_tracks` untouched (100% parity with KSP-generated schema, 0 KSP warnings).
+2. **Accurate Anti-Skip Play Count Engine (`PlayCountTracker.kt`, `AudioOutputEngine.kt`, `PlaybackController.kt`, `PlayCountTrackerTest.kt`):**
+   - Pure-Kotlin `PlayCountTracker` (zero `android.*` imports) measures strictly real active `AudioTrack` playback head deltas (ignoring pause time and seek jumps; single-tick capped at `2,000 ms`).
+   - Enforces `< 5s` hard floor (skips strictly never increment play count), `(durationMs / 2).coerceIn(10s, 30s)` for `>= 10s` tracks, `max(5s, 80%)` or natural EOS `>= 5s` for `< 10s` tracks, `30s` for unknown duration, max 1 count per session, and clean session reset on track switch, replay after completion, or `RepeatMode.ONE` loop.
+   - Persists `play_count` and real accumulated `total_play_time_ms` into Room `track_stats` bound to SHA-256 `content_fingerprint`.
+3. **Offline Playlists & `.m3u8` Import/Export (`M3u8PlaylistCodec.kt`, `PlaylistRepository.kt`, `PlaylistsScreen.kt`, `M3u8PlaylistCodecTest.kt`):**
+   - Pure-Kotlin `M3u8PlaylistCodec` (zero `android.*` imports) exports standard `#EXTM3U` / `#PLAYLIST` / `#EXTINF` playlists with optional `#EXT-X-BITPERFECT-URI` and `#EXT-X-BITPERFECT-SHA256` hints, parses external `.m3u8`/`.m3u` files (including UTF-8 BOM, Windows backslashes, URL-encoded paths), matches back to library tracks by fingerprint -> URI -> relative path -> filename, and provides deterministic entry reordering.
+   - Room-backed `PlaylistRepository` delivers reactive `playlistsSnapshot` (playlists, resolved tracks, ranked `Most Played`, and total plays) + CRUD + SAF `CreateDocument` export and `OpenDocument` import.
+   - Minimalist obsidian `PlaylistsScreen` displays compact **Most Played** preview + full ranked view at top, user playlists with counts/Play All/Rename/Export `.m3u8`/Delete, playlist detail view with Move Up/Down/Remove, and reusable `AddToPlaylistDialog` wired into both `LibraryScreen` (3-dot menu) and `NowPlayingScreen` (`TopAppBar` action).
+4. **Clean 3-Tab Bottom Navigation & Minimalist `SettingsScreen` (`BitPerfectAppNav.kt`, `SettingsScreen.kt`, `LibraryScreen.kt`):**
+   - Docked flat Material 3 `NavigationBar` (`Library` · `Playlists` · `Settings`) directly under `MiniPlayerBar` on top-level routes only (automatically hidden on `NowPlaying`, `Queue`, `Lyrics`, and `Diagnostics`), with top-only child `Scaffold` insets preventing double navigation-bar padding.
+   - Kept all 6 `LibraryScreen` tabs (`All Songs`, `Folders`, `Artists`, `Albums`, `Recent`, `Favorites`) clean without Sort or Filter chrome on `All Songs`.
+   - Added `SettingsScreen` hosting linked SAF folder management (view/link/unlink), library rescan, 6-Stage Diagnostics shortcut, and 100% offline privacy summary.
+   - Preserved 20 Hz `playbackPositionMs` isolation: `LibraryScreen`, `PlaylistsScreen`, `SettingsScreen`, `QueueScreen`, `DiagnosticsScreen`, and `BitPerfectBottomNavBar` have zero references to `playbackPositionMs`.
+
+### Full APK Phase 1 Software Verification (`./gradlew testDebugUnitTest lintDebug assembleDebug`)
+- **JVM Unit Tests:** **90 / 90 passed** across **18 suites** (`0` failed, `0` errors, `0` skipped, `0` `@Ignore`), including `PlayCountTrackerTest` (7/7) and `M3u8PlaylistCodecTest` (4/4).
+- **Kotlin & KSP Compiler Warnings:** `0` Kotlin warnings, `0` KSP warnings.
+- **Android Lint (`lintDebug`):** **0 errors**, **0 warnings across all `/app/src/` Kotlin, manifest, and resource files** (15 remaining informational notices are strictly upstream dependency version notices in `gradle/libs.versions.toml` and AAR `ObsoleteLintCustomCheck`).
+- **Debug APK:** `app/build/outputs/apk/debug/app-debug.apk` (`19.95 MB`).
+- **Strict Offline Privacy Audit (Source + All Merged Debug Manifests):** **PASS** — **0 `android.permission.INTERNET`**, **0 `android.permission.MANAGE_EXTERNAL_STORAGE`**.
+- **Pure-Kotlin Domain Boundary:** **PASS** — **0 `android.*` imports** across all **20** pure-Kotlin domain modules (adding `PlayCountTracker` and `M3u8PlaylistCodec`).
+- **Physical Hardware Verification Pending (Not Executed in Cloud):** On POCO F4 (Android 14 / HyperOS) + KZ EDX Pro 2 USB-C, verify in-place Room v2 -> v3 upgrade preservation, live `Most Played` increment after 30s real listening (vs. non-increment on 3s skip or seek-to-end), SAF `.m3u8` export/import round-trip, and smooth 3-tab switching during active playback.
+
+
 
 
