@@ -43,7 +43,7 @@ Execute unchecked `[ ]` items sequentially from top to bottom following `AGENTS.
   - Write comprehensive JVM unit tests (`LrcParserTest`) covering all formats, encodings, offsets, seeks, and corrupted inputs.
   - **Verification:** `./gradlew testDebugUnitTest` 100% green.
 
-- [ ] **T1.3 — Local Persistence Layer (Database & DataStore Preferences)**
+- [x] **T1.3 — Local Persistence Layer (Database & DataStore Preferences)**
   - Implement local database schema under `app/src/main/java/com/cangkir/bitperfectplayer/data/`:
     - `LyricsRecord` / `LyricsEntity` (Primary Key = `contentFingerprint`, raw lyrics text, `isSyncedLrc`, source type `MANUAL`/`LRC_FILE`, filename, file size, duration, `updatedAt`).
     - `TrackHistoryRecord` (recently played tracks with timestamp) and `FavoriteTrackRecord` (keyed by `contentFingerprint`).
