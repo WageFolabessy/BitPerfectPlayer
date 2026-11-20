@@ -98,6 +98,7 @@ class PlaybackController(
     private var fingerprintJob: Job? = null
     private var hasRestoredInitialSession = false
     private var isRestoreInFlight = false
+    private var hasRecordedHistoryForActiveTrack = false
 
     init {
         // Restore persisted shuffle/repeat/gapless/ReplayGain preferences
@@ -276,18 +277,19 @@ class PlaybackController(
 
     fun removeQueueItem(activeIndex: Int) {
         val previousActiveIndex = queueManager.snapshot().currentIndex
-        val removed = queueManager.removeAt(activeIndex) ?: return
+        queueManager.removeAt(activeIndex) ?: return
         val snapshot = queueManager.snapshot()
         val newActive = snapshot.currentItem
         _state.update { it.copy(queue = snapshot, activeTrack = newActive) }
 
         if (snapshot.isEmpty) {
+            hasRecordedHistoryForActiveTrack = false
             playCountTracker.clearSession()?.let { persistPlayCountFlush(it) }
             engine.setNextTrack(null)
             engine.stop()
             _state.update { it.copy(activeFingerprint = null) }
             PlaybackForegroundService.stopService(appContext)
-        } else if (activeIndex == previousActiveIndex && newActive != null && newActive.uriString != removed.uriString) {
+        } else if (activeIndex == previousActiveIndex && newActive != null) {
             loadActiveTrack(newActive, startPositionMs = 0L, autoPlay = engine.state.value.isPlaying)
         } else {
             syncNextTrackToEngine()
@@ -308,8 +310,13 @@ class PlaybackController(
             loadActiveTrack(active, startPositionMs = playbackPositionMs.value, autoPlay = true)
             return
         }
-        if (engine.state.value.status == PlaybackStatus.COMPLETED) {
+        val wasCompleted = engine.state.value.status == PlaybackStatus.COMPLETED
+        if (wasCompleted) {
             playCountTracker.resetSessionForReplay()?.let { persistPlayCountFlush(it) }
+        }
+        if (!hasRecordedHistoryForActiveTrack || wasCompleted) {
+            hasRecordedHistoryForActiveTrack = true
+            resolveFingerprintAndRecordHistory(active, recordHistory = true)
         }
         syncNextTrackToEngine()
         PlaybackForegroundService.startService(appContext)
@@ -519,9 +526,14 @@ class PlaybackController(
                 hasRestoredInitialSession = true
                 if (selection == null) return@launch
 
-                val lastPos = prefs.lastPlaybackState.positionMs
+                val rawLastPos = prefs.lastPlaybackState.positionMs
                 val snapshot = queueManager.setQueue(selection.tracks, startIndex = selection.startIndex)
                 val active = snapshot.currentItem ?: return@launch
+                val restoredPos = if (active.durationMs > 0L && rawLastPos >= (active.durationMs - 1_500L).coerceAtLeast(1L)) {
+                    0L
+                } else {
+                    rawLastPos.coerceAtLeast(0L)
+                }
                 _state.update {
                     it.copy(
                         queue = snapshot,
@@ -531,7 +543,7 @@ class PlaybackController(
                     )
                 }
                 // Prepare paused at restored position (never blast audio automatically on app relaunch).
-                loadActiveTrack(active, startPositionMs = lastPos, autoPlay = false)
+                loadActiveTrack(active, startPositionMs = restoredPos, autoPlay = false)
             } finally {
                 isRestoreInFlight = false
             }
@@ -569,6 +581,7 @@ class PlaybackController(
      */
     private fun handleGaplessTransition(transitionedRequest: EngineTrackRequest) {
         playCountTracker.onNaturalCompletion()?.let { persistPlayCountFlush(it) }
+        val pauseAfterTransition = sleepTimerController.consumeEndOfTrackTrigger()
         val nextTrack = queueManager.next(userInitiated = false)
         val snapshot = queueManager.snapshot()
 
@@ -583,10 +596,11 @@ class PlaybackController(
         // If the queue mutated right as the transition fired, resync cleanly via standard load.
         if (nextTrack.uriString != transitionedRequest.uri.toString()) {
             _state.update { it.copy(queue = snapshot, activeTrack = nextTrack) }
-            loadActiveTrack(nextTrack, startPositionMs = 0L, autoPlay = true)
+            loadActiveTrack(nextTrack, startPositionMs = 0L, autoPlay = !pauseAfterTransition)
             return
         }
 
+        hasRecordedHistoryForActiveTrack = !pauseAfterTransition
         trackedTracksByUri[nextTrack.uriString] = nextTrack
         playCountTracker.startSession(nextTrack.uriString, nextTrack.durationMs)?.let { persistPlayCountFlush(it) }
         _state.update {
@@ -597,7 +611,7 @@ class PlaybackController(
             )
         }
         syncNextTrackToEngine()
-        resolveFingerprintAndRecordHistory(nextTrack, recordHistory = true)
+        resolveFingerprintAndRecordHistory(nextTrack, recordHistory = !pauseAfterTransition)
     }
 
     private fun syncNextTrackToEngine() {
@@ -672,6 +686,7 @@ class PlaybackController(
         startPositionMs: Long,
         autoPlay: Boolean,
     ) {
+        hasRecordedHistoryForActiveTrack = autoPlay
         trackedTracksByUri[track.uriString] = track
         playCountTracker.startSession(track.uriString, track.durationMs)?.let { persistPlayCountFlush(it) }
         if (autoPlay) {

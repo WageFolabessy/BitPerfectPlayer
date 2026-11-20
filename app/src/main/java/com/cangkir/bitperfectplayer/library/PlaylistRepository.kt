@@ -263,13 +263,37 @@ class PlaylistRepository(
         toIndex: Int,
     ): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
-            val current = playlistDao.getTracksForPlaylist(playlistId)
-            val reorderedIds = M3u8PlaylistCodec.reorderList(
-                items = current.map { it.id },
-                fromIndex = fromIndex,
-                toIndex = toIndex,
-            )
-            if (reorderedIds != current.map { it.id }) {
+            val currentIds = playlistDao.getTracksForPlaylist(playlistId).map { it.id }
+            val resolvedIds = playlistsSnapshot.value.playlists
+                .firstOrNull { it.id == playlistId }
+                ?.entries
+                ?.map { it.entryId }
+            val reorderedIds = if (resolvedIds != null &&
+                resolvedIds.size in 2..currentIds.size &&
+                resolvedIds.size < currentIds.size &&
+                fromIndex in resolvedIds.indices &&
+                toIndex in resolvedIds.indices
+            ) {
+                // Preserve any temporarily unresolved rows in place while reordering visible entries.
+                val reorderedVisible = ArrayDeque(
+                    M3u8PlaylistCodec.reorderList(
+                        items = resolvedIds,
+                        fromIndex = fromIndex,
+                        toIndex = toIndex,
+                    ),
+                )
+                val visibleSet = resolvedIds.toHashSet()
+                currentIds.map { id ->
+                    if (id in visibleSet) reorderedVisible.removeFirst() else id
+                }
+            } else {
+                M3u8PlaylistCodec.reorderList(
+                    items = currentIds,
+                    fromIndex = fromIndex,
+                    toIndex = toIndex,
+                )
+            }
+            if (reorderedIds != currentIds) {
                 playlistDao.replacePlaylistTrackOrder(
                     playlistId = playlistId,
                     orderedEntryIds = reorderedIds,
@@ -306,7 +330,19 @@ class PlaylistRepository(
     ): Result<M3u8ImportSummary> = withContext(Dispatchers.IO) {
         runCatching {
             val rawText = appContext.contentResolver.openInputStream(sourceUri)?.use { input ->
-                input.readBytes().toString(Charsets.UTF_8)
+                val buffer = ByteArray(8192)
+                val out = java.io.ByteArrayOutputStream()
+                var total = 0
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read < 0) break
+                    total += read
+                    if (total > MAX_M3U8_FILE_BYTES) {
+                        throw IllegalArgumentException(".m3u8 file exceeds 4 MB safety limit")
+                    }
+                    out.write(buffer, 0, read)
+                }
+                out.toString(Charsets.UTF_8.name())
             } ?: throw IllegalStateException("Unable to read selected .m3u8 file")
 
             val parsed = M3u8PlaylistCodec.parseM3u8(rawText)
@@ -369,4 +405,8 @@ class PlaylistRepository(
             }
         }
     }.getOrNull()
+
+    companion object {
+        private const val MAX_M3U8_FILE_BYTES = 4 * 1024 * 1024 // 4 MB OOM safety cap
+    }
 }

@@ -237,24 +237,48 @@ class LocalLibraryRepository(
                     }
                 }
 
-                // Parse only new/changed SAF tree files
+                // Parse only new/changed SAF tree files; zero-I/O filename backfill for unchanged SAF rows missing disc/track numbers
                 for (entry in safTreeDiscovered) {
-                    if (entry.uriString !in plan.toParseUris) continue
-                    val prevFp = cachedByUri[entry.uriString]?.contentFingerprint
-                    entitiesToUpsert.add(
-                        parseSafEntry(entry, existingFingerprint = prevFp)
-                            .toCachedEntity(CachedTrackSourceKind.SAF_TREE, nowEpoch),
-                    )
+                    val existing = cachedByUri[entry.uriString]
+                    if (entry.uriString in plan.toParseUris) {
+                        entitiesToUpsert.add(
+                            parseSafEntry(entry, existingFingerprint = existing?.contentFingerprint)
+                                .toCachedEntity(CachedTrackSourceKind.SAF_TREE, nowEpoch),
+                        )
+                    } else if (existing != null && existing.discNumber == 0 && existing.trackNumber == 0) {
+                        val resolved = TrackNumberParser.parseFilenamePosition(entry.fileName)
+                        if (resolved.hasPosition) {
+                            positionBackfills.add(
+                                TrackPositionBackfill(
+                                    uriString = entry.uriString,
+                                    discNumber = resolved.discNumber,
+                                    trackNumber = resolved.trackNumber,
+                                ),
+                            )
+                        }
+                    }
                 }
 
-                // Parse only new/changed single SAF files
+                // Parse only new/changed single SAF files; zero-I/O filename backfill for unchanged rows
                 for (entry in safFileDiscovered) {
-                    if (entry.uriString !in plan.toParseUris) continue
-                    val prevFp = cachedByUri[entry.uriString]?.contentFingerprint
-                    entitiesToUpsert.add(
-                        parseSafEntry(entry, existingFingerprint = prevFp)
-                            .toCachedEntity(CachedTrackSourceKind.SAF_FILE, nowEpoch),
-                    )
+                    val existing = cachedByUri[entry.uriString]
+                    if (entry.uriString in plan.toParseUris) {
+                        entitiesToUpsert.add(
+                            parseSafEntry(entry, existingFingerprint = existing?.contentFingerprint)
+                                .toCachedEntity(CachedTrackSourceKind.SAF_FILE, nowEpoch),
+                        )
+                    } else if (existing != null && existing.discNumber == 0 && existing.trackNumber == 0) {
+                        val resolved = TrackNumberParser.parseFilenamePosition(entry.fileName)
+                        if (resolved.hasPosition) {
+                            positionBackfills.add(
+                                TrackPositionBackfill(
+                                    uriString = entry.uriString,
+                                    discNumber = resolved.discNumber,
+                                    trackNumber = resolved.trackNumber,
+                                ),
+                            )
+                        }
+                    }
                 }
 
                 if (entitiesToUpsert.isNotEmpty()) {

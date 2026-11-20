@@ -122,7 +122,7 @@ fun DiagnosticsScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             // 1. Live Output Status & Mode Switcher (Flat Utilitarian Panel)
-            item(key = "headline") {
+            item(key = "headline", contentType = "diag_headline") {
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(12.dp),
@@ -167,7 +167,7 @@ fun DiagnosticsScreen(
             }
 
             // 2. Real-Time Signal Summary (SPEC Section 3.5 — Flat Hairline Grouped Table)
-            item(key = "realtime_summary") {
+            item(key = "realtime_summary", contentType = "diag_summary") {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
                         text = "SIGNAL SUMMARY",
@@ -212,7 +212,7 @@ fun DiagnosticsScreen(
             }
 
             // 3. 6-Stage Header & Confidence Legend
-            item(key = "legend") {
+            item(key = "legend", contentType = "diag_legend") {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
                         text = "6-STAGE SIGNAL CHAIN",
@@ -235,6 +235,7 @@ fun DiagnosticsScreen(
             itemsIndexed(
                 items = diagnostics.stages,
                 key = { _, entry -> entry.stage.stageNumber },
+                contentType = { _, _ -> "diag_stage_row" },
             ) { index, entry ->
                 DiagnosticStageRow(entry = entry)
                 if (index < diagnostics.stages.lastIndex) {
@@ -247,7 +248,7 @@ fun DiagnosticsScreen(
             }
 
             // 5. Mandatory Verbatim Maximum Verification Claim Notice (SPEC Section 3.5)
-            item(key = "claim_notice") {
+            item(key = "claim_notice", contentType = "diag_claim") {
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(12.dp),

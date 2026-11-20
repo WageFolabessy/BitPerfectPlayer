@@ -214,7 +214,16 @@ class LyricsRepository(
         upsertStoredLyrics = { rec -> persistenceRepository.upsertLyrics(rec) },
         deleteStoredLyrics = { fp -> persistenceRepository.deleteLyricsByFingerprint(fp) },
         resolveFingerprint = { track ->
-            fingerprintProvider.computeFingerprint(track.uriString.toUri()).getOrNull()
+            val computed = fingerprintProvider.computeFingerprint(track.uriString.toUri()).getOrNull()
+            if (computed != null && track.contentFingerprint != computed) {
+                runCatching {
+                    persistenceRepository.updateCachedTrackFingerprint(
+                        uriString = track.uriString,
+                        fingerprint = computed,
+                    )
+                }
+            }
+            computed
         },
         findAutoDetectLrcBytes = { track -> findMatchingSidecarLrcBytes(track) },
     )

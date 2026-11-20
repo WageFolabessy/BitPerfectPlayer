@@ -408,3 +408,50 @@ Implemented metadata disc/track extraction (zero scan regression), scoped contex
 - **Android Lint (`lintDebug`):** **0 errors**, **0 warnings across all `/app/src/` Kotlin, manifest, and resource files**.
 - **Debug APK:** `app/build/outputs/apk/debug/app-debug.apk` (`20.01 MB` / `20,982,352 bytes`).
 - **Strict Offline Privacy Audit (Source + All Merged Debug & UnitTest Manifests):** **PASS** — **0 `android.permission.INTERNET`**, **0 `android.permission.MANAGE_EXTERNAL_STORAGE`**.
+
+---
+
+## 13. Final Pre-Hardware Deep Audit Report
+
+### 1. Bugs, Edge Cases & Inefficiencies Discovered & Fixed
+1. **Deferred `play()` After `autoPlay = false` Preparation Did Not Record `Recently Played` History (`PlaybackController.kt`):**
+   - **Discovery:** Tracks prepared in a paused state (`autoPlay = false` during cold-start session restoration, `prepareContextQueueIfIdle`, `loadContextQueue(autoPlay = false)`, or enqueuing into an empty queue) skipped `recordTrackPlayed` during preparation, and subsequent calls to `play()` saw `engine.state.value.activeTrackUri != null` and started the engine without recording the track into `track_history`.
+   - **Fix:** Added `hasRecordedHistoryForActiveTrack` tracking in `PlaybackController` so calling `play()` on a prepared-paused track (or replaying after `PlaybackStatus.COMPLETED`) records `recordTrackPlayed` immediately upon actual playback start.
+2. **Post-Completion (`PlaybackStatus.COMPLETED`) Replay & Near-EOS Session Restore (`AudioOutputEngine.kt`, `PlaybackController.kt`):**
+   - **Discovery:** When the final track in a queue finished naturally (`PlaybackStatus.COMPLETED`), `drainAudioTrackCleanly` called `AudioTrack.stop()` (leaving `AudioTrack` in `PLAYSTATE_STOPPED` and `MediaCodec` at `outputEos = true`). Pressing `Play` afterward previously called `decoder.seekToMs(0L)` on the post-EOS codec and reused the stopped `AudioTrack` without resetting its playback head base. Additionally, if the app was closed at natural EOS (`positionMs == durationMs`), cold-start restoration restored the track at the very end (`0 ms` left).
+   - **Fix:** Updated `AudioOutputEngine.play()` to reload `currentRequest` from `startPositionMs = 0L, autoPlay = true` via `loadTrackLocked` whenever `status == PlaybackStatus.COMPLETED` (initializing a fresh decoder and fresh `AudioTrack` at `0L`), and updated `PlaybackController.restoreLastSessionIfNeeded()` to reset `restoredPos = 0L` when `rawLastPos >= durationMs - 1,500 ms`.
+3. **EOS Buffer Drain Responsiveness to Pause/Seek & OEM `playbackHeadPosition` Reset (`AudioOutputEngine.kt`):**
+   - **Discovery:** `drainAudioTrackCleanly()` only checked `!stopWorkerFlag.get() && !releasedFlag.get()`, ignoring `isPausedFlag.get()` and `pendingSeekMs.get() >= 0L` during the tail drain window (~250–1,500 ms). Furthermore, OEM HALs that reset `AudioTrack.playbackHeadPosition` to `0` upon completing `AudioTrack.stop()` drain could cause the post-drain `accumulateActivePlayTime(forceFlush = true)` call to see `headFrames = 0 < countHeadFrames` and drop the final ~100–300 ms of listening time.
+   - **Fix:** Updated `drainAudioTrackCleanly()` to break immediately on `isPausedFlag.get()`, `pendingSeekMs.get() >= 0L`, or `head < headBefore`, return `maxReachedHead`, credit `maxReachedHead` in `accumulateActivePlayTime`, and honor any seek requested during drain by continuing the playback loop instead of marking the track `COMPLETED`.
+4. **Gapless Preloader Trigger When Seeking Directly Into the Final 8 Seconds (`AudioOutputEngine.kt`):**
+   - **Discovery:** Seeking directly into the final 8 seconds of a track did not reset `lastUiUpdateNano = 0L` or immediately check `GaplessTransitionPolicy.shouldStartPreload(...)`, allowing very short remaining buffers (< 1.5s) to hit decoder EOS before the next 50 ms UI tick launched the preloader.
+   - **Fix:** Reset `lastUiUpdateNano = 0L` and immediately check `GaplessTransitionPolicy.shouldStartPreload(...)` upon completing a seek in `runPlaybackLoop` as well as in `setNextTrack(...)` when already playing inside the final 8-second window.
+5. **End-of-Track Sleep Timer Guard on Seamless Gapless Transition (`PlaybackController.kt`):**
+   - **Discovery:** If `SleepTimerPreset.END_OF_TRACK` raced with an in-flight same-format `SEAMLESS_REUSE` transition callback, `handleGaplessTransition()` did not check `sleepTimerController.consumeEndOfTrackTrigger()`.
+   - **Fix:** Added `sleepTimerController.consumeEndOfTrackTrigger()` handling to `handleGaplessTransition()`.
+6. **Playlist Reordering With Unresolved Entries & `.m3u8` Import OOM Cap (`PlaylistRepository.kt`, `PlaybackController.kt`):**
+   - **Discovery:** `PlaylistRepository.moveEntryInPlaylist()` indexed directly into `playlistDao.getTracksForPlaylist(playlistId)` rather than aligning with `PlaylistsUiSnapshot` visible resolved entries when orphaned rows exist; `importPlaylistFromM3u8()` used unbounded `input.readBytes()`; and `PlaybackController.removeQueueItem()` skipped reloading when two identical track URIs were queued consecutively and the active first slot was removed.
+   - **Fix:** Aligned `moveEntryInPlaylist` with visible resolved entry IDs while preserving unresolved rows in place, added a 4 MB OOM safety cap (`MAX_M3U8_FILE_BYTES`) to `importPlaylistFromM3u8()`, and removed the `newActive.uriString != removed.uriString` guard when `activeIndex == previousActiveIndex` in `PlaybackController.removeQueueItem()`.
+7. **Zero-I/O SAF Filename Track/Disc Backfill & Lyrics Fingerprint Caching (`LocalLibraryRepository.kt`, `LyricsRepository.kt`):**
+   - **Discovery:** After upgrading to Room v4, unchanged `SAF_TREE`/`SAF_FILE` rows with `discNumber == 0 && trackNumber == 0` were not backfilled from numbered filenames (`"01 - Track.flac"`), and `LyricsRepository` did not cache newly computed SHA-256 fingerprints back into `cached_tracks`/`playlist_tracks`.
+   - **Fix:** Added zero-I/O `TrackNumberParser.parseFilenamePosition(entry.fileName)` backfill for unchanged SAF rows in `LocalLibraryRepository.refreshLibrary()` and cached newly computed fingerprints via `persistenceRepository.updateCachedTrackFingerprint(...)` in `LyricsRepository`.
+8. **Edge-to-Edge System Navigation Bar Inset & `LazyColumn` Key/ContentType Hygiene (`LyricsScreen.kt`, `QueueScreen.kt`, `DiagnosticsScreen.kt`):**
+   - **Discovery:** Under `enableEdgeToEdge()`, `LyricsScreen`'s custom `bottomBar` (`LyricsCompactSeekBar`) lacked `.navigationBarsPadding()`, `QueueScreen`'s `LazyColumn` lacked an explicit item `key`, and `DiagnosticsScreen` / `LyricsScreen` static `LazyColumn` items lacked `contentType`.
+   - **Fix:** Added `.navigationBarsPadding()` to `LyricsCompactSeekBar`, `key = { index, track -> "${index}_${track.uriString}" }` to `QueueScreen`, and explicit `contentType` to all items in `DiagnosticsScreen` and `LyricsScreen`.
+
+### 2. Final Room Database Schema & Verified Migration Chain
+- **Schema Version:** **v4** (`BitPerfectDatabase.kt`, 7 entities: `cached_tracks`, `lyrics`, `track_history`, `favorite_tracks`, `playlists`, `playlist_tracks`, `track_stats`).
+- **Verified Migration Chain (`BitPerfectDatabaseMigrationTest.kt` — Robolectric + real SQLite + `RoomOpenDelegate.onValidateSchema`):**
+  - `MIGRATION_1_2` (v1 -> v2): Creates `cached_tracks` + `index_cached_tracks_title`, preserving `lyrics`, `track_history`, and `favorite_tracks`.
+  - `MIGRATION_2_3` (v2 -> v3): Creates `playlists`, `playlist_tracks` (with `FOREIGN KEY(playlist_id) REFERENCES playlists(id) ON UPDATE NO ACTION ON DELETE CASCADE` + `index_playlist_tracks_playlist_id_position_index`), and `track_stats` (+ `index_track_stats_play_count`, `index_track_stats_last_played_at_epoch_ms`).
+  - `MIGRATION_3_4` (v3 -> v4): Executes `ALTER TABLE cached_tracks ADD COLUMN disc_number INTEGER NOT NULL DEFAULT 0` and `ALTER TABLE cached_tracks ADD COLUMN track_number INTEGER NOT NULL DEFAULT 0`, preserving all 7 tables and user data intact.
+
+### 3. Final Verification & Build Results (`./gradlew clean testDebugUnitTest lintDebug assembleDebug assembleRelease`)
+- **Automated JVM Unit + Robolectric SQLite Migration + Headless Compose UI Tests:** **141 / 141 passed** across **29 test suites** (`0` failed, `0` errors, `0` skipped, `0` `@Ignore`).
+- **Compiler & R8 Warnings:** `0` Kotlin compiler warnings (production + test), `0` KSP warnings, `0` R8 warnings.
+- **Android Lint (`lintDebug` & `lintVitalRelease`):** **0 errors**, **0 warnings across all `/app/src/` Kotlin, manifest, and resource files**.
+- **Debug APK (`assembleDebug`):** `app/build/outputs/apk/debug/app-debug.apk` (`20.03 MB` / `20,998,736 bytes`).
+- **Release APK (`assembleRelease` with R8 code & resource optimization):** `app/build/outputs/apk/release/app-release-unsigned.apk` (`2.40 MB` / `2,518,182 bytes`).
+- **Strict Offline Privacy Audit (Source + All 5 Merged Debug, Release & UnitTest Manifests):** **PASS** — **0 `android.permission.INTERNET`**, **0 `android.permission.MANAGE_EXTERNAL_STORAGE`**.
+- **Pure-Kotlin Domain Boundary:** **PASS** — **0 `android.*`, `androidx.*`, or `org.json.*` imports** across all **28** pure-Kotlin domain modules.
+

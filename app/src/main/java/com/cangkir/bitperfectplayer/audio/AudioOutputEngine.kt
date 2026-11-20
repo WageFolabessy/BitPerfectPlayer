@@ -346,6 +346,19 @@ class AudioOutputEngine(
         if (staleDecoder != null) {
             closeDecoderOffMainThread(staleDecoder)
         }
+        val currentState = _state.value
+        if (request != null &&
+            currentState.isPlaying &&
+            GaplessTransitionPolicy.shouldStartPreload(
+                gaplessEnabled = gaplessEnabled,
+                hasNextTrack = true,
+                isAlreadyPreloadingOrReady = isNextPreloadedOrLoading(request.uri),
+                currentPositionMs = _playbackPositionMs.value,
+                durationMs = currentState.durationMs,
+            )
+        ) {
+            triggerPreloadAsync(request, loadGeneration.get())
+        }
     }
 
     fun loadTrack(request: EngineTrackRequest) {
@@ -479,21 +492,19 @@ class AudioOutputEngine(
         enqueueControlTask {
             if (releasedFlag.get()) return@enqueueControlTask
             engineLock.withLock {
-                val decoder = activeDecoder ?: return@withLock
-                val track = activeAudioTrack ?: run {
+                if (activeDecoder == null || activeAudioTrack == null || _state.value.status == PlaybackStatus.COMPLETED) {
                     val req = currentRequest ?: return@withLock
+                    val restartFromZero = _state.value.status == PlaybackStatus.COMPLETED
+                    val resumePos = if (restartFromZero) 0L else _playbackPositionMs.value
                     val generation = loadGeneration.incrementAndGet()
                     loadTrackLocked(
-                        request = req.copy(startPositionMs = _playbackPositionMs.value, autoPlay = true),
+                        request = req.copy(startPositionMs = resumePos, autoPlay = true),
                         generation = generation,
                         preserveAutoPauseNotice = false,
                     )
                     return@withLock
                 }
-                if (_state.value.status == PlaybackStatus.COMPLETED) {
-                    decoder.seekToMs(0L)
-                    _playbackPositionMs.value = 0L
-                }
+                val track = activeAudioTrack ?: return@withLock
                 if (!requestAudioFocusLocked()) {
                     _state.update {
                         it.copy(
@@ -1007,8 +1018,8 @@ class AudioOutputEngine(
         var wasPausedInLoop = false
         var lastUiUpdateNano = 0L
 
-        fun accumulateActivePlayTime(forceFlush: Boolean) {
-            val headFrames = readUnsignedPlaybackHeadFrames(currentTrack)
+        fun accumulateActivePlayTime(forceFlush: Boolean, overrideHeadFrames: Long? = null) {
+            val headFrames = overrideHeadFrames ?: readUnsignedPlaybackHeadFrames(currentTrack)
             val stepFrames = (headFrames - countHeadFrames).coerceAtLeast(0L)
             if (stepFrames > 0L) {
                 val stepMs = (stepFrames * 1000L) / sampleRate.toLong()
@@ -1039,9 +1050,21 @@ class AudioOutputEngine(
                     headBaseFrames = readUnsignedPlaybackHeadFrames(currentTrack)
                     totalFramesWrittenToTrack = headBaseFrames
                     countHeadFrames = headBaseFrames
+                    lastUiUpdateNano = 0L
                     _playbackPositionMs.value = actualSeekMs
                     if (wasPlaying) {
                         safePlayTrack(currentTrack)
+                    }
+                    val nextReq = queuedNextRequest
+                    if (GaplessTransitionPolicy.shouldStartPreload(
+                            gaplessEnabled = gaplessEnabled,
+                            hasNextTrack = nextReq != null,
+                            isAlreadyPreloadingOrReady = isNextPreloadedOrLoading(nextReq?.uri),
+                            currentPositionMs = actualSeekMs,
+                            durationMs = durationMs,
+                        )
+                    ) {
+                        triggerPreloadAsync(nextReq, expectedGeneration)
                     }
                     continue
                 }
@@ -1135,12 +1158,16 @@ class AudioOutputEngine(
                     // close any unused preloaded decoder and cleanly drain AudioTrack's tail buffer
                     // so the final ~100-300 ms of audio is NEVER truncated.
                     preloaded?.let { runCatching { it.decoder.close() } }
-                    drainAudioTrackCleanly(
+                    val drainedHeadFrames = drainAudioTrackCleanly(
                         track = currentTrack,
                         totalFramesWritten = totalFramesWrittenToTrack,
                         sampleRateHz = sampleRate,
                     )
-                    accumulateActivePlayTime(forceFlush = true)
+                    accumulateActivePlayTime(forceFlush = true, overrideHeadFrames = drainedHeadFrames)
+                    // If user sought back into the track while the tail buffer was draining, honor the seek.
+                    if (!stopWorkerFlag.get() && !releasedFlag.get() && pendingSeekMs.get() >= 0L) {
+                        continue
+                    }
                     if (!stopWorkerFlag.get() && !releasedFlag.get()) {
                         val finalPos = durationMs.takeIf { it > 0L } ?: _playbackPositionMs.value
                         _playbackPositionMs.value = finalPos
@@ -1299,16 +1326,18 @@ class AudioOutputEngine(
     /**
      * Cleanly drains any remaining PCM frames buffered inside [track] upon natural EOS so the last
      * ~100–300 ms of audio is never truncated by an abrupt `pause() + flush()`.
+     * Returns the highest observed playback head frame count (preserving tail play-count accounting
+     * even if the OEM HAL resets `playbackHeadPosition` to `0` upon entering `PLAYSTATE_STOPPED`).
      */
     private fun drainAudioTrackCleanly(
         track: AudioTrack,
         totalFramesWritten: Long,
         sampleRateHz: Int,
-    ) {
-        if (track.state != AudioTrack.STATE_INITIALIZED || track.playState != AudioTrack.PLAYSTATE_PLAYING) {
-            return
-        }
+    ): Long {
         val headBefore = readUnsignedPlaybackHeadFrames(track)
+        if (track.state != AudioTrack.STATE_INITIALIZED || track.playState != AudioTrack.PLAYSTATE_PLAYING) {
+            return headBefore
+        }
         val remainingFrames = (totalFramesWritten - headBefore).coerceAtLeast(0L)
         val timeoutMs = GaplessTransitionPolicy.computeDrainTimeoutMs(remainingFrames, sampleRateHz)
 
@@ -1317,9 +1346,23 @@ class AudioOutputEngine(
 
         val deadlineNano = System.nanoTime() + timeoutMs * 1_000_000L
         var lastHead = headBefore
+        var maxReachedHead = headBefore
         var stagnantTicks = 0
-        while (!stopWorkerFlag.get() && !releasedFlag.get() && System.nanoTime() < deadlineNano) {
+        while (!stopWorkerFlag.get() &&
+            !releasedFlag.get() &&
+            !isPausedFlag.get() &&
+            pendingSeekMs.get() < 0L &&
+            System.nanoTime() < deadlineNano
+        ) {
             val head = readUnsignedPlaybackHeadFrames(track)
+            if (head < headBefore) {
+                // HAL finished draining and reset playbackHeadPosition to 0 upon PLAYSTATE_STOPPED.
+                maxReachedHead = maxOf(maxReachedHead, totalFramesWritten)
+                break
+            }
+            if (head > maxReachedHead) {
+                maxReachedHead = head
+            }
             if (head >= totalFramesWritten) break
             if (head == lastHead) {
                 stagnantTicks++
@@ -1334,6 +1377,7 @@ class AudioOutputEngine(
                 break
             }
         }
+        return maxReachedHead
     }
 
     /**

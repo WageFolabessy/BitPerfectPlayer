@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
@@ -263,7 +264,10 @@ fun LyricsScreen(
                         contentPadding = PaddingValues(horizontal = 22.dp, vertical = 20.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        itemsIndexed(parsed.plainLines) { _, line ->
+                        itemsIndexed(
+                            items = parsed.plainLines,
+                            contentType = { _, _ -> "plain_lyric_line" },
+                        ) { _, line ->
                             if (line.isBlank()) {
                                 Spacer(modifier = Modifier.height(10.dp))
                             } else {
@@ -387,6 +391,7 @@ private fun LyricsCompactSeekBar(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .navigationBarsPadding()
                 .padding(horizontal = 12.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {

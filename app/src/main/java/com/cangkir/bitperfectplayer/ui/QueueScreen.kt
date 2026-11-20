@@ -266,6 +266,7 @@ fun QueueScreen(
             ) {
                 itemsIndexed(
                     items = queue.items,
+                    key = { index, track -> "${index}_${track.uriString}" },
                     contentType = { _, _ -> "queue_row" },
                 ) { index, track ->
                     val isCurrent = index == queue.currentIndex
