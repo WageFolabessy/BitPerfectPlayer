@@ -3,6 +3,7 @@ package com.cangkir.bitperfectplayer.ui
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,13 +24,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Lyrics
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -42,6 +43,8 @@ import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.FilledTonalButton
@@ -70,6 +73,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -80,6 +86,8 @@ import com.cangkir.bitperfectplayer.audio.AudioSafetyController
 import com.cangkir.bitperfectplayer.audio.PlaybackControllerState
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
 import com.cangkir.bitperfectplayer.audio.RepeatMode
+import com.cangkir.bitperfectplayer.audio.SleepTimerPreset
+import com.cangkir.bitperfectplayer.audio.SleepTimerState
 import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
 import com.cangkir.bitperfectplayer.ui.theme.AmberIndicated
 import com.cangkir.bitperfectplayer.ui.theme.AmberIndicatedContainer
@@ -99,11 +107,14 @@ import kotlinx.coroutines.flow.StateFlow
 fun NowPlayingScreen(
     playbackState: PlaybackControllerState,
     playbackPositionMsFlow: StateFlow<Long>,
+    sleepTimerStateFlow: StateFlow<SleepTimerState>,
     albumArtworkLoader: AlbumArtworkLoader,
     isFavorite: Boolean,
     onBack: () -> Unit,
     onToggleFavorite: (PlaybackTrack) -> Unit,
     onAddToPlaylist: (PlaybackTrack) -> Unit,
+    onShowTrackInfo: (PlaybackTrack) -> Unit,
+    onSelectSleepTimerPreset: (SleepTimerPreset) -> Unit,
     onTogglePlayPause: () -> Unit,
     onQuickPause: () -> Unit,
     onPrevious: () -> Unit,
@@ -126,6 +137,8 @@ fun NowPlayingScreen(
     val durationMs = playbackState.durationMs.coerceAtLeast(0L)
 
     var showAudioModeSheet by remember { mutableStateOf(false) }
+    var showSleepTimerSheet by remember { mutableStateOf(false) }
+    var overflowMenuExpanded by remember { mutableStateOf(false) }
 
     // Mandatory Hearing Safety Warning Dialog before activating potentially fixed-volume Bit-Perfect Mode.
     if (safetyState.isPendingSafetyWarning) {
@@ -133,6 +146,15 @@ fun NowPlayingScreen(
             deviceName = safetyState.activeDeviceName,
             onConfirmBitPerfect = onConfirmBitPerfectWarning,
             onDismissStaySafe = onDismissSafetyWarning,
+        )
+    }
+
+    if (showSleepTimerSheet) {
+        SleepTimerBottomSheet(
+            sleepTimerStateFlow = sleepTimerStateFlow,
+            isBitPerfectOptIn = safetyState.mode == AudioOutputMode.BIT_PERFECT_OPT_IN,
+            onSelectPreset = onSelectSleepTimerPreset,
+            onDismiss = { showSleepTimerSheet = false },
         )
     }
 
@@ -206,17 +228,12 @@ fun NowPlayingScreen(
                             Text("Pause", maxLines = 1, softWrap = false)
                         }
                     }
+                    // Isolated 1-second tick leaf: only this button recomposes while sleep timer counts down.
+                    SleepTimerTopBarButton(
+                        sleepTimerStateFlow = sleepTimerStateFlow,
+                        onClick = { showSleepTimerSheet = true },
+                    )
                     if (track != null) {
-                        IconButton(
-                            onClick = { onAddToPlaylist(track) },
-                            modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
-                        ) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.PlaylistAdd,
-                                contentDescription = "Add ${track.title} to playlist",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
                         IconButton(
                             onClick = { onToggleFavorite(track) },
                             modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
@@ -226,6 +243,46 @@ fun NowPlayingScreen(
                                 contentDescription = if (isFavorite) "Remove from favorites" else "Add to favorites",
                                 tint = if (isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                             )
+                        }
+                        Box {
+                            IconButton(
+                                onClick = { overflowMenuExpanded = true },
+                                modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.MoreVert,
+                                    contentDescription = "More track actions",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            if (overflowMenuExpanded) {
+                                DropdownMenu(
+                                    expanded = true,
+                                    onDismissRequest = { overflowMenuExpanded = false },
+                                ) {
+                                    DropdownMenuItem(
+                                        text = { Text("Add to Playlist") },
+                                        onClick = {
+                                            overflowMenuExpanded = false
+                                            onAddToPlaylist(track)
+                                        },
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Track Info") },
+                                        onClick = {
+                                            overflowMenuExpanded = false
+                                            onShowTrackInfo(track)
+                                        },
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Sleep Timer") },
+                                        onClick = {
+                                            overflowMenuExpanded = false
+                                            showSleepTimerSheet = true
+                                        },
+                                    )
+                                }
+                            }
                         }
                     }
                 },
@@ -281,6 +338,9 @@ fun NowPlayingScreen(
                 ?: track.formatBadge
         }
 
+        val swipeThresholdPx = with(LocalDensity.current) { 76.dp.toPx() }
+        var artworkDragOffsetPx by remember(track.uriString) { mutableFloatStateOf(0f) }
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -306,14 +366,40 @@ fun NowPlayingScreen(
                 Spacer(modifier = Modifier.height(12.dp))
             }
 
-            // Hero Album Cover Art Centerpiece (100% offline local extraction)
-            TrackArtworkThumbnail(
-                track = track,
-                artworkLoader = albumArtworkLoader,
-                size = 272.dp,
-                cornerRadius = 16.dp,
-                targetSizePx = AlbumArtworkLoader.HERO_SIZE_PX,
-            )
+            // Hero Album Cover Art Centerpiece with horizontal swipe-to-skip gesture (100% offline)
+            Box(
+                modifier = Modifier
+                    .pointerInput(track.uriString, swipeThresholdPx) {
+                        detectHorizontalDragGestures(
+                            onDragEnd = {
+                                val finalDrag = artworkDragOffsetPx
+                                artworkDragOffsetPx = 0f
+                                when {
+                                    finalDrag <= -swipeThresholdPx -> onNext()
+                                    finalDrag >= swipeThresholdPx -> onPrevious()
+                                }
+                            },
+                            onDragCancel = {
+                                artworkDragOffsetPx = 0f
+                            },
+                            onHorizontalDrag = { _, dragAmount ->
+                                artworkDragOffsetPx = (artworkDragOffsetPx + dragAmount)
+                                    .coerceIn(-swipeThresholdPx * 1.6f, swipeThresholdPx * 1.6f)
+                            },
+                        )
+                    }
+                    .graphicsLayer {
+                        translationX = artworkDragOffsetPx * 0.32f
+                    },
+            ) {
+                TrackArtworkThumbnail(
+                    track = track,
+                    artworkLoader = albumArtworkLoader,
+                    size = 272.dp,
+                    cornerRadius = 16.dp,
+                    targetSizePx = AlbumArtworkLoader.HERO_SIZE_PX,
+                )
+            }
 
             Spacer(modifier = Modifier.height(24.dp))
 

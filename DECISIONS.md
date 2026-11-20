@@ -90,5 +90,16 @@ This file records autonomous architectural, dependency, and environment decision
 - **Rationale:** Reusing a single running `AudioTrack` for matching PCM streams guarantees genuine 0 ms silence gap without injecting crossfades or DSP, while `track.stop()` draining on EOS eliminates abrupt tail truncation. Keeping ReplayGain strictly opt-in (`OFF` by default) and strictly Safe-Mode-only preserves pristine unmodified PCM bits in Bit-Perfect Opt-In mode while solving loud-mastering jumps during casual Safe Mode IEM listening.
 - **Rejected Alternatives:** Artificial audio crossfading (modifies PCM samples and violates bit-perfect design); full-file memory reads for tag parsing (risks OOM on large 24-bit FLAC/WAV files); allowing ReplayGain attenuation inside `BIT_PERFECT_OPT_IN` mode (violates unmodified PCM bit-perfect invariant).
 
+---
+
+## D7.3 — Full APK Phase 3: Zero-Dependency `LocalBackupCodec`, Decoupled `SleepTimerController`, & Lazy `TrackInfoBottomSheet`
+- **Decision:**
+  1. Built a pure-Kotlin, zero-dependency RFC 8259 JSON encoder and strict validating recursive-descent parser inside `LocalBackupCodec` (`schemaVersion = 1`) rather than using Android's `org.json` or adding Gson/Moshi/kotlinx-serialization. Restores use non-destructive Room merge/upsert semantics (idempotent `max` merge for `track_stats`, union merge for `favorites`, recency-preserving upsert for `lyrics`, name-matched deduplicated append for `playlists`) with a `16 MB` SAF read safety cap.
+  2. Implemented pure-Kotlin `SleepTimerController` exposed on a dedicated `sleepTimerState: StateFlow<SleepTimerState>` decoupled from `PlaybackControllerState` and collected exclusively inside narrow leaf composables (`SleepTimerTopBarButton`, `SleepTimerSettingsValueLeaf`, `SleepTimerBottomSheet`) so 1-second ticks never recompose `LibraryScreen`, `PlaylistsScreen`, or `BottomNavigationBar`. In `SAFE_VOLUME_MODE`, performs a smooth 3-second linear `AudioTrack.setVolume(...)` fade-out before pausing and restoring `1.0f`; in `BIT_PERFECT_OPT_IN`, pauses cleanly with zero volume scaling. When `End of current track` is armed, suppresses gapless next-track preloading so the active track drains cleanly and pauses without chaining into the next song.
+  3. Added on-demand `TrackInfoLoader` executing file-size lookup, header-only `ReplayGainTagParser`, SHA-256 fingerprinting, and Room `track_stats` lookup strictly on `Dispatchers.IO` ONLY when the user opens `TrackInfoBottomSheet` (zero I/O in `LazyColumn` composition).
+- **Rationale:** Avoiding `org.json` makes `LocalBackupCodec` 100% deterministic under plain JVM JUnit 4 tests (where Android stubs throw `Method not mocked`) while adding zero external dependencies or APK bloat. Decoupling `sleepTimerState` preserves silky 120 Hz scrolling across all top-level tabs even while a sleep timer counts down.
+- **Rejected Alternatives:** Adding Gson/Moshi/Jackson (unnecessary dependency weight); collecting `sleepTimerState` in `BitPerfectAppRoot` (would trigger 1 Hz full-tree recompositions across `LibraryScreen` and `BottomNavigationBar`); reading ReplayGain tags or SHA-256 hashes inside `TrackListRow` (would cause scroll jank).
+
+
 
 

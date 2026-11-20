@@ -1,6 +1,7 @@
 package com.cangkir.bitperfectplayer.ui
 
 import android.net.Uri
+import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -22,16 +23,18 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.FileOpen
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.SaveAlt
 import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -51,10 +54,14 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -63,6 +70,9 @@ import com.cangkir.bitperfectplayer.audio.PlaybackControllerState
 import com.cangkir.bitperfectplayer.audio.ReplayGainConfig
 import com.cangkir.bitperfectplayer.audio.ReplayGainMode
 import com.cangkir.bitperfectplayer.audio.ReplayGainProcessor
+import com.cangkir.bitperfectplayer.audio.SleepTimerPreset
+import com.cangkir.bitperfectplayer.audio.SleepTimerState
+import com.cangkir.bitperfectplayer.data.LocalBackupRepository
 import com.cangkir.bitperfectplayer.library.LibrarySnapshot
 import com.cangkir.bitperfectplayer.ui.theme.AmberIndicated
 import com.cangkir.bitperfectplayer.ui.theme.EmeraldSafe
@@ -70,6 +80,7 @@ import com.cangkir.bitperfectplayer.ui.theme.IcePrimary
 import com.cangkir.bitperfectplayer.ui.theme.IcePrimaryContainer
 import com.cangkir.bitperfectplayer.ui.theme.OnIcePrimaryContainer
 import com.cangkir.bitperfectplayer.ui.theme.TextMuted
+import kotlinx.coroutines.flow.StateFlow
 import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -77,6 +88,7 @@ import kotlin.math.roundToInt
 fun SettingsScreen(
     libraryState: LibrarySnapshot,
     playbackState: PlaybackControllerState,
+    sleepTimerStateFlow: StateFlow<SleepTimerState>,
     onImportFolder: (Uri) -> Unit,
     onRemoveSafFolder: (String) -> Unit,
     onRefreshLibrary: () -> Unit,
@@ -84,8 +96,14 @@ fun SettingsScreen(
     onSetReplayGainMode: (ReplayGainMode) -> Unit,
     onSetReplayGainPreampDb: (Float) -> Unit,
     onSetReplayGainPreventClipping: (Boolean) -> Unit,
+    onSelectSleepTimerPreset: (SleepTimerPreset) -> Unit,
+    onExportLocalBackup: (Uri) -> Unit,
+    onImportLocalBackup: (Uri) -> Unit,
     onOpenDiagnostics: () -> Unit,
 ) {
+    val context = LocalContext.current
+    var showSleepTimerSheet by remember { mutableStateOf(false) }
+
     val folderPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree(),
     ) { treeUri ->
@@ -94,8 +112,40 @@ fun SettingsScreen(
         }
     }
 
+    val backupExportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json"),
+    ) { destinationUri ->
+        if (destinationUri != null) {
+            onExportLocalBackup(destinationUri)
+        }
+    }
+
+    // Wildcard MIME fallback ensures HyperOS / Android SAF always allows selecting .json backups.
+    val backupImportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+    ) { sourceUri ->
+        if (sourceUri != null) {
+            onImportLocalBackup(sourceUri)
+        }
+    }
+
     val sortedFolders = remember(libraryState.persistedSafTreeUris) {
         libraryState.persistedSafTreeUris.sorted()
+    }
+
+    val appVersionName = remember(context) {
+        runCatching {
+            val pkgInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                context.packageManager.getPackageInfo(
+                    context.packageName,
+                    android.content.pm.PackageManager.PackageInfoFlags.of(0L),
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                context.packageManager.getPackageInfo(context.packageName, 0)
+            }
+            pkgInfo.versionName ?: "1.0"
+        }.getOrDefault("1.0")
     }
 
     val safetyState = playbackState.engineState.safetyState
@@ -112,6 +162,15 @@ fun SettingsScreen(
         diagnostics.isBitPerfectMixerActive -> IcePrimary
         isBitPerfectOptIn -> AmberIndicated
         else -> EmeraldSafe
+    }
+
+    if (showSleepTimerSheet) {
+        SleepTimerBottomSheet(
+            sleepTimerStateFlow = sleepTimerStateFlow,
+            isBitPerfectOptIn = isBitPerfectOptIn,
+            onSelectPreset = onSelectSleepTimerPreset,
+            onDismiss = { showSleepTimerSheet = false },
+        )
     }
 
     Scaffold(
@@ -139,460 +198,540 @@ fun SettingsScreen(
                 .fillMaxSize()
                 .padding(innerPadding),
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            // Audio Output & Diagnostics Section
-            item(key = "header_audio", contentType = "section_header") {
-                SectionLabel("AUDIO & DIAGNOSTICS")
-            }
-
-            item(key = "card_diagnostics", contentType = "settings_card") {
-                Surface(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable(onClick = onOpenDiagnostics),
-                    shape = RoundedCornerShape(12.dp),
-                    color = MaterialTheme.colorScheme.surface,
-                    border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.6f)),
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .sizeIn(minHeight = 64.dp)
-                            .padding(horizontal = 14.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.GraphicEq,
-                            contentDescription = null,
-                            tint = if (diagnostics.isBitPerfectMixerActive) IcePrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(22.dp),
-                        )
-                        Spacer(modifier = Modifier.width(14.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "6-Stage Audio Path & Mode",
-                                style = MaterialTheme.typography.titleSmall,
-                                color = MaterialTheme.colorScheme.onSurface,
-                            )
-                            Spacer(modifier = Modifier.height(3.dp))
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(6.dp)
-                                        .clip(CircleShape)
-                                        .background(modeDotColor),
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = "$modeLabel · ${safetyState.activeDeviceName}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
-                        }
-                        Icon(
-                            imageVector = Icons.Filled.ChevronRight,
-                            contentDescription = "Open Audio Diagnostics",
-                            tint = TextMuted,
-                        )
-                    }
-                }
-            }
-
-            // Playback Engine & Safe-Mode-Only ReplayGain
-            item(key = "header_playback", contentType = "section_header") {
-                Spacer(modifier = Modifier.height(4.dp))
-                SectionLabel("PLAYBACK & REPLAYGAIN")
-            }
-
-            item(key = "card_gapless", contentType = "settings_card") {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
-                    color = MaterialTheme.colorScheme.surface,
-                    border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.6f)),
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .sizeIn(minHeight = 60.dp)
-                            .padding(horizontal = 14.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Gapless Playback",
-                                style = MaterialTheme.typography.titleSmall,
-                                color = MaterialTheme.colorScheme.onSurface,
-                            )
-                            Spacer(modifier = Modifier.height(2.dp))
-                            Text(
-                                text = "Pre-loads next track for zero-gap transitions when format & sample rate match.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Switch(
-                            checked = playbackState.gaplessEnabled,
-                            onCheckedChange = onSetGaplessEnabled,
-                        )
-                    }
-                }
-            }
-
-            item(key = "card_replaygain", contentType = "settings_card") {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
-                    color = MaterialTheme.colorScheme.surface,
-                    border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.6f)),
-                ) {
-                    Column(modifier = Modifier.padding(14.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                text = "ReplayGain (Safe Mode Only)",
-                                style = MaterialTheme.typography.titleSmall,
-                                color = MaterialTheme.colorScheme.onSurface,
-                            )
-                            if (isBitPerfectOptIn && rgConfig.mode != ReplayGainMode.OFF) {
-                                Text(
-                                    text = "Bypassed",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = IcePrimary,
-                                    maxLines = 1,
-                                    softWrap = false,
-                                )
-                            }
-                        }
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = if (isBitPerfectOptIn) {
-                                "Automatically bypassed in Bit-Perfect Opt-In mode so PCM samples remain bit-exact."
-                            } else {
-                                "Normalizes loudness from local FLAC/OGG/MP3/M4A tags in Safe Mode; always bypassed in Bit-Perfect Mode."
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Spacer(modifier = Modifier.height(10.dp))
-
-                        // Flat 3-way selector (Off / Track / Album)
-                        Surface(
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(10.dp),
-                            color = MaterialTheme.colorScheme.surfaceContainerHighest,
-                            border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.65f)),
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(3.dp),
-                                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                            ) {
-                                ReplayGainMode.entries.forEach { option ->
-                                    val selected = rgConfig.mode == option
-                                    Button(
-                                        onClick = { onSetReplayGainMode(option) },
-                                        shape = RoundedCornerShape(8.dp),
-                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .sizeIn(minHeight = 48.dp),
-                                        colors = if (selected) {
-                                            ButtonDefaults.buttonColors(
-                                                containerColor = IcePrimaryContainer,
-                                                contentColor = OnIcePrimaryContainer,
-                                            )
-                                        } else {
-                                            ButtonDefaults.textButtonColors(
-                                                contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            )
-                                        },
-                                    ) {
-                                        Text(
-                                            text = option.displayName,
-                                            maxLines = 1,
-                                            softWrap = false,
-                                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                                        )
-                                    }
-                                }
-                            }
-                        }
-
-                        if (rgConfig.mode != ReplayGainMode.OFF) {
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Text(
-                                    text = "Preamp",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                                Text(
-                                    text = ReplayGainProcessor.formatSignedDb(rgConfig.clampedPreampDb),
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    maxLines = 1,
-                                    softWrap = false,
-                                )
-                            }
-                            Slider(
-                                value = rgConfig.clampedPreampDb,
-                                onValueChange = { raw ->
-                                    val snapped = (raw * 2f).roundToInt() / 2f
-                                    onSetReplayGainPreampDb(snapped)
-                                },
-                                valueRange = ReplayGainConfig.MIN_PREAMP_DB..ReplayGainConfig.MAX_PREAMP_DB,
-                                steps = 23, // 0.5 dB increments across -6.0..+6.0 dB
-                                colors = SliderDefaults.colors(
-                                    thumbColor = MaterialTheme.colorScheme.onSurface,
-                                    activeTrackColor = MaterialTheme.colorScheme.primary,
-                                    inactiveTrackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                                ),
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                            HorizontalDivider(
-                                thickness = 0.5.dp,
-                                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .sizeIn(minHeight = 48.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = "Prevent Clipping",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.onSurface,
-                                    )
-                                    Text(
-                                        text = "Clamps gain using track/album peak tag",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = TextMuted,
-                                    )
-                                }
-                                Spacer(modifier = Modifier.width(12.dp))
-                                Switch(
-                                    checked = rgConfig.preventClipping,
-                                    onCheckedChange = onSetReplayGainPreventClipping,
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            // SAF Music Folders Section
-            item(key = "header_folders", contentType = "section_header") {
-                Spacer(modifier = Modifier.height(4.dp))
-                SectionLabel("MUSIC FOLDERS (SAF)")
-            }
-
-            item(key = "folder_actions", contentType = "action_row") {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    OutlinedButton(
-                        onClick = { folderPickerLauncher.launch(null) },
-                        modifier = Modifier
-                            .weight(1f)
-                            .sizeIn(minHeight = 48.dp),
-                    ) {
-                        Icon(Icons.Filled.CreateNewFolder, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Link Folder", maxLines = 1, softWrap = false)
-                    }
-                    OutlinedButton(
-                        onClick = onRefreshLibrary,
-                        modifier = Modifier
-                            .weight(1f)
-                            .sizeIn(minHeight = 48.dp),
-                    ) {
-                        Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Rescan", maxLines = 1, softWrap = false)
-                    }
-                }
-            }
-
-            if (sortedFolders.isEmpty()) {
-                item(key = "folders_empty", contentType = "empty_hint") {
-                    Surface(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp),
-                        color = MaterialTheme.colorScheme.surface,
-                        border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.55f)),
-                    ) {
-                        Text(
-                            text = "No SAF music folders linked. MediaStore tracks are scanned automatically; link extra folders anytime without broad storage permissions.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = TextMuted,
-                            modifier = Modifier.padding(14.dp),
-                        )
-                    }
-                }
-            } else {
-                items(
-                    items = sortedFolders,
-                    key = { "saf_$it" },
-                    contentType = { "saf_folder_row" },
-                ) { uriString ->
-                    Surface(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(10.dp),
-                        color = MaterialTheme.colorScheme.surface,
-                        border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.55f)),
-                    ) {
+            // =================================================================
+            // 1. AUDIO ENGINE
+            // =================================================================
+            item(key = "section_audio_engine", contentType = "settings_group") {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SettingsSectionHeader("AUDIO ENGINE")
+                    SettingsGroupCard {
+                        // Gapless Playback toggle
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(start = 14.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+                                .sizeIn(minHeight = 60.dp)
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Gapless Playback",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = "Seamless zero-gap transitions when consecutive tracks share format and sample rate.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Switch(
+                                checked = playbackState.gaplessEnabled,
+                                onCheckedChange = onSetGaplessEnabled,
+                            )
+                        }
+
+                        SettingsHairline()
+
+                        // ReplayGain controls
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    text = "ReplayGain",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                                if (isBitPerfectOptIn && rgConfig.mode != ReplayGainMode.OFF) {
+                                    Text(
+                                        text = "Bypassed",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = IcePrimary,
+                                        maxLines = 1,
+                                        softWrap = false,
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(3.dp))
+                            Text(
+                                text = "Automatically bypassed in Bit-Perfect Opt-In mode.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            Surface(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(10.dp),
+                                color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                                border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.65f)),
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(3.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                ) {
+                                    ReplayGainMode.entries.forEach { option ->
+                                        val selected = rgConfig.mode == option
+                                        Button(
+                                            onClick = { onSetReplayGainMode(option) },
+                                            shape = RoundedCornerShape(8.dp),
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .sizeIn(minHeight = 48.dp),
+                                            colors = if (selected) {
+                                                ButtonDefaults.buttonColors(
+                                                    containerColor = IcePrimaryContainer,
+                                                    contentColor = OnIcePrimaryContainer,
+                                                )
+                                            } else {
+                                                ButtonDefaults.textButtonColors(
+                                                    contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                )
+                                            },
+                                        ) {
+                                            Text(
+                                                text = option.displayName,
+                                                maxLines = 1,
+                                                softWrap = false,
+                                                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            if (rgConfig.mode != ReplayGainMode.OFF) {
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        text = "Pre-amp",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    Text(
+                                        text = ReplayGainProcessor.formatSignedDb(rgConfig.clampedPreampDb),
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        maxLines = 1,
+                                        softWrap = false,
+                                    )
+                                }
+                                Slider(
+                                    value = rgConfig.clampedPreampDb,
+                                    onValueChange = { raw ->
+                                        val snapped = (raw * 2f).roundToInt() / 2f
+                                        onSetReplayGainPreampDb(snapped)
+                                    },
+                                    valueRange = ReplayGainConfig.MIN_PREAMP_DB..ReplayGainConfig.MAX_PREAMP_DB,
+                                    steps = 23,
+                                    colors = SliderDefaults.colors(
+                                        thumbColor = MaterialTheme.colorScheme.onSurface,
+                                        activeTrackColor = MaterialTheme.colorScheme.primary,
+                                        inactiveTrackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                                    ),
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .sizeIn(minHeight = 48.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "Prevent Clipping",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                        )
+                                        Text(
+                                            text = "Clamps gain against track/album peak tag",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = TextMuted,
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Switch(
+                                        checked = rgConfig.preventClipping,
+                                        onCheckedChange = onSetReplayGainPreventClipping,
+                                    )
+                                }
+                            }
+                        }
+
+                        SettingsHairline()
+
+                        // Sleep Timer shortcut (isolated leaf collects 1s countdown ticks)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .sizeIn(minHeight = 56.dp)
+                                .clickable { showSleepTimerSheet = true }
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Icon(
-                                imageVector = Icons.Filled.Folder,
+                                imageVector = Icons.Filled.Bedtime,
                                 contentDescription = null,
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(20.dp),
                             )
-                            Spacer(modifier = Modifier.width(12.dp))
+                            Spacer(modifier = Modifier.width(14.dp))
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = formatReadableSafLabel(uriString),
-                                    style = MaterialTheme.typography.bodyMedium,
+                                    text = "Sleep Timer",
+                                    style = MaterialTheme.typography.titleSmall,
                                     color = MaterialTheme.colorScheme.onSurface,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
                                 )
-                                Text(
-                                    text = "Persisted SAF directory",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = TextMuted,
-                                    maxLines = 1,
-                                    softWrap = false,
-                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                SleepTimerSettingsValueLeaf(sleepTimerStateFlow = sleepTimerStateFlow)
                             }
-                            IconButton(
-                                onClick = { onRemoveSafFolder(uriString) },
-                                modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.DeleteOutline,
-                                    contentDescription = "Unlink folder",
-                                    tint = TextMuted,
-                                    modifier = Modifier.size(20.dp),
+                            Icon(
+                                imageVector = Icons.Filled.ChevronRight,
+                                contentDescription = "Configure sleep timer",
+                                tint = TextMuted,
+                            )
+                        }
+
+                        SettingsHairline()
+
+                        // 6-Stage Audio Diagnostics shortcut
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .sizeIn(minHeight = 60.dp)
+                                .clickable(onClick = onOpenDiagnostics)
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.GraphicEq,
+                                contentDescription = null,
+                                tint = if (diagnostics.isBitPerfectMixerActive) IcePrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(20.dp),
+                            )
+                            Spacer(modifier = Modifier.width(14.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "6-Stage Audio Diagnostics",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.onSurface,
                                 )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(6.dp)
+                                            .clip(CircleShape)
+                                            .background(modeDotColor),
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "$modeLabel · ${safetyState.activeDeviceName}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                            Icon(
+                                imageVector = Icons.Filled.ChevronRight,
+                                contentDescription = "Open 6-Stage Audio Diagnostics",
+                                tint = TextMuted,
+                            )
+                        }
+                    }
+                }
+            }
+
+            // =================================================================
+            // 2. LIBRARY & STORAGE (100% OFFLINE)
+            // =================================================================
+            item(key = "section_library_storage", contentType = "settings_group") {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SettingsSectionHeader("LIBRARY & STORAGE (100% OFFLINE)")
+                    SettingsGroupCard {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            OutlinedButton(
+                                onClick = { folderPickerLauncher.launch(null) },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .sizeIn(minHeight = 48.dp),
+                            ) {
+                                Icon(Icons.Filled.CreateNewFolder, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Add Folder (SAF)", maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
+                            }
+                            OutlinedButton(
+                                onClick = onRefreshLibrary,
+                                modifier = Modifier
+                                    .weight(0.95f)
+                                    .sizeIn(minHeight = 48.dp),
+                            ) {
+                                Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Refresh Library", maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+
+                        SettingsHairline()
+
+                        if (sortedFolders.isEmpty()) {
+                            Text(
+                                text = "No SAF folders linked. MediaStore tracks are scanned automatically; link additional local folders anytime without broad storage permissions.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = TextMuted,
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                            )
+                        } else {
+                            sortedFolders.forEachIndexed { idx, uriString ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(start = 14.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Folder,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(20.dp),
+                                    )
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = formatReadableSafLabel(uriString),
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                        Text(
+                                            text = uriString,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = TextMuted,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                                    IconButton(
+                                        onClick = { onRemoveSafFolder(uriString) },
+                                        modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.DeleteOutline,
+                                            contentDescription = "Remove SAF folder ${formatReadableSafLabel(uriString)}",
+                                            tint = TextMuted,
+                                            modifier = Modifier.size(20.dp),
+                                        )
+                                    }
+                                }
+                                if (idx < sortedFolders.lastIndex) {
+                                    SettingsHairline()
+                                }
                             }
                         }
                     }
                 }
             }
 
-            // Offline Privacy & About Section
-            item(key = "header_about", contentType = "section_header") {
-                Spacer(modifier = Modifier.height(4.dp))
-                SectionLabel("PRIVACY & ABOUT")
-            }
-
-            item(key = "card_privacy", contentType = "settings_card") {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
-                    color = MaterialTheme.colorScheme.surface,
-                    border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.6f)),
-                ) {
-                    Column(modifier = Modifier.padding(14.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                imageVector = Icons.Filled.VerifiedUser,
-                                contentDescription = null,
-                                tint = EmeraldSafe,
-                                modifier = Modifier.size(20.dp),
-                            )
-                            Spacer(modifier = Modifier.width(10.dp))
+            // =================================================================
+            // 3. LOCAL BACKUP & RESTORE (100% OFFLINE VIA SAF)
+            // =================================================================
+            item(key = "section_local_backup", contentType = "settings_group") {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SettingsSectionHeader("LOCAL BACKUP & RESTORE")
+                    SettingsGroupCard {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                        ) {
                             Text(
-                                text = "100% Offline Architecture",
+                                text = "Playlists, Saved Lyrics (SHA-256), Favorites & Play Stats",
                                 style = MaterialTheme.typography.titleSmall,
                                 color = MaterialTheme.colorScheme.onSurface,
                             )
-                        }
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Text(
-                            text = "Zero INTERNET permission, zero telemetry, zero trackers, and zero cloud dependencies. All playlists, lyrics, and play statistics remain strictly on-device.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Spacer(modifier = Modifier.height(10.dp))
-                        HorizontalDivider(
-                            thickness = 0.5.dp,
-                            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
-                        )
-                        Spacer(modifier = Modifier.height(10.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                        ) {
+                            Spacer(modifier = Modifier.height(3.dp))
                             Text(
-                                text = "Indexed Local Tracks",
+                                text = "Export a portable offline .json backup via Android Storage Access Framework, or restore with non-destructive merge.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
-                            Text(
-                                text = "${libraryState.allSongs.size}",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurface,
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                        ) {
-                            Text(
-                                text = "Supported Formats",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Text(
-                                text = "FLAC · WAV · MP3 · M4A · OGG",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurface,
-                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                OutlinedButton(
+                                    onClick = {
+                                        backupExportLauncher.launch(LocalBackupRepository.suggestBackupFileName())
+                                    },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .sizeIn(minHeight = 48.dp),
+                                ) {
+                                    Icon(Icons.Filled.SaveAlt, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Export .json", maxLines = 1, softWrap = false)
+                                }
+                                OutlinedButton(
+                                    onClick = {
+                                        backupImportLauncher.launch(arrayOf("application/json", "*/*"))
+                                    },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .sizeIn(minHeight = 48.dp),
+                                ) {
+                                    Icon(Icons.Filled.FileOpen, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Restore .json", maxLines = 1, softWrap = false)
+                                }
+                            }
                         }
                     }
                 }
+            }
+
+            // =================================================================
+            // 4. ABOUT & PRIVACY
+            // =================================================================
+            item(key = "section_about_privacy", contentType = "settings_group") {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SettingsSectionHeader("ABOUT & PRIVACY")
+                    SettingsGroupCard {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(14.dp),
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Filled.VerifiedUser,
+                                        contentDescription = null,
+                                        tint = EmeraldSafe,
+                                        modifier = Modifier.size(20.dp),
+                                    )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Text(
+                                        text = "100% Offline · Zero Network Permissions",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = "BitPerfectPlayer declares no INTERNET permission, collects zero telemetry, and keeps all audio indexing, playlists, lyrics, and listening statistics strictly on-device.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Spacer(modifier = Modifier.height(10.dp))
+                            HorizontalDivider(
+                                thickness = 0.5.dp,
+                                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f),
+                            )
+                            Spacer(modifier = Modifier.height(10.dp))
+                            SettingsKeyValueRow("App Version", "BitPerfectPlayer v$appVersionName")
+                            Spacer(modifier = Modifier.height(4.dp))
+                            SettingsKeyValueRow("Indexed Local Tracks", "${libraryState.allSongs.size}")
+                            Spacer(modifier = Modifier.height(4.dp))
+                            SettingsKeyValueRow("Supported Formats", "FLAC · WAV · MP3 · M4A · OGG")
+                        }
+                    }
+                }
+            }
+
+            item(key = "settings_bottom_spacer", contentType = "spacer") {
+                Spacer(modifier = Modifier.height(8.dp))
             }
         }
     }
 }
 
 @Composable
-private fun SectionLabel(text: String) {
+private fun SettingsSectionHeader(text: String) {
     Text(
         text = text,
         style = MaterialTheme.typography.labelMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         maxLines = 1,
         softWrap = false,
-        modifier = Modifier.padding(horizontal = 2.dp, vertical = 2.dp),
+        modifier = Modifier.padding(horizontal = 2.dp),
     )
+}
+
+@Composable
+private fun SettingsGroupCard(content: @Composable () -> Unit) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.6f)),
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            content()
+        }
+    }
+}
+
+@Composable
+private fun SettingsHairline() {
+    HorizontalDivider(
+        thickness = 0.5.dp,
+        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f),
+        modifier = Modifier.padding(horizontal = 14.dp),
+    )
+}
+
+@Composable
+private fun SettingsKeyValueRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            softWrap = false,
+        )
+    }
 }
 
 private fun formatReadableSafLabel(uriString: String): String {

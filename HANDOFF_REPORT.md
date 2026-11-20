@@ -302,6 +302,51 @@ Implemented true gapless playback, eliminated end-of-track audio truncation, and
 - **Pure-Kotlin Domain Boundary:** **PASS** — **0 `android.*` imports** across all **23** pure-Kotlin domain modules (adding `GaplessTransitionPolicy`, `ReplayGainProcessor`, and `ReplayGainTagParser`).
 - **Physical Hardware Verification Pending (Not Executed in Cloud):** On POCO F4 (Android 14 / HyperOS) + KZ EDX Pro 2 USB-C, verify continuous live-album/gapless FLAC transitions with 0 ms silence gap, clean unclipped track endings on sample-rate switches (e.g., 96,000 Hz -> 44,100 Hz), audible ReplayGain leveling in Safe Mode, and instant automatic ReplayGain bypass upon opting into Bit-Perfect Mode (verified in Diagnostics Stage 3).
 
+---
+
+## 10. Full APK Phase 3 Summary (Full Settings Screen, Offline Local Backup & Restore, Sleep Timer, Track Info Sheet, & Daily UX Polish)
+
+Completed the Full-APK daily user experience on `feat/mvp-overnight` while keeping the 100% offline boundary, hearing safety invariants, and 120 Hz scroll/UI isolation strictly intact:
+
+1. **Full Utilitarian `SettingsScreen` (`SettingsScreen.kt`):**
+   - Replaced the earlier Settings shell with a flat, grouped obsidian dark screen (`#0E0E10` background, `#141417` grouped cards, `0.5.dp` hairline dividers, `#7BA7D9` accent, zero neon clutter, `>= 48.dp` touch targets) structured into four sections:
+     - **Audio Engine:** Gapless Playback toggle, ReplayGain mode selector (`Off` / `Track` / `Album`), Pre-amp slider (`-6 dB` to `+6 dB`), Prevent Clipping toggle with explicit note *"Automatically bypassed in Bit-Perfect Opt-In mode."*, Sleep Timer row with isolated countdown leaf (`SleepTimerSettingsValueLeaf`), and 6-Stage Audio Diagnostics shortcut.
+     - **Library & Storage (100% Offline):** Linked SAF folders list displaying persisted folder name/URI with per-folder Remove action (`viewModel.removeSafFolder(...)`), plus **Add Folder (SAF)** and **Refresh Library** controls.
+     - **Local Backup & Restore (100% Offline via SAF):** **Export Backup (`.json`)** via `CreateDocument("application/json")` and **Import / Restore Backup (`.json`)** via `OpenDocument` using non-destructive merge/upsert.
+     - **About & Privacy:** Concise offline verification badge confirming zero `INTERNET` / `MANAGE_EXTERNAL_STORAGE` permissions plus app version (`BuildConfig.VERSION_NAME`).
+2. **100% Offline Local Backup & Restore (`LocalBackupCodec.kt`, `LocalBackupRepository.kt`, `LocalDaos.kt`, `LocalEntities.kt`, `LocalPersistenceRepository.kt`):**
+   - Built pure-Kotlin `LocalBackupCodec` (zero `android.*` / zero `org.json.*` / zero external serialization dependencies) implementing an RFC 8259 JSON encoder and strict validating recursive-descent parser with `schemaVersion = 1` and explicit rejection of malformed JSON or unsupported schema versions.
+   - Backs up and restores **Playlists** (with ordered track entries), **Saved Lyrics (keyed by SHA-256 content fingerprint)**, **Favorites**, and **Play Count / Listening Stats** via SAF `content://` streams with a 16 MB read guard.
+   - Non-destructive merge/upsert preserves existing playlists/favorites/lyrics while deduplicating playlist names/entries and taking `max(playCount)` / `max(totalPlayTimeMs)` / `max(lastPlayedAtEpochMs)` on track stats conflicts.
+3. **Sleep Timer Engine & Safe-Mode Linear Fade (`SleepTimerController.kt`, `AudioOutputEngine.kt`, `PlaybackController.kt`, `SleepTimerSheet.kt`):**
+   - Added pure-Kotlin `SleepTimerController` supporting presets `Off`, `15 min`, `30 min`, `45 min`, `60 min`, and `End of current track`.
+   - In `SAFE_VOLUME_MODE`: applies a smooth 3-second linear volume fade-out (`1.0f -> 0.0f` over 30 steps) via `AudioOutputEngine.setSafeModeOutputVolume(...)` before pausing and immediately restoring unity gain (`1.0f`).
+   - In `BIT_PERFECT_OPT_IN`: strictly performs **zero** digital volume scaling (`AudioOutputEngine.setSafeModeOutputVolume` refuses scaling in Bit-Perfect mode) and pauses cleanly on timer expiration.
+   - In `End of current track` mode: `PlaybackController.syncNextTrackToEngine()` suppresses gapless next-track preloading (`setNextTrack(null)`) so the active track drains cleanly and pauses at natural track completion without advancing.
+   - Exposed `sleepTimerState: StateFlow<SleepTimerState>` independently of `playbackState` and collected it exclusively inside narrow leaf composables (`SleepTimerTopBarButton`, `SleepTimerSettingsValueLeaf`, and `SleepTimerBottomSheet`) so 1 Hz countdown ticks never recompose `LibraryScreen`, `PlaylistsScreen`, `SettingsScreen` root, `QueueScreen`, `DiagnosticsScreen`, `BottomNavigationBar`, or `BitPerfectAppRoot`.
+4. **Track Info / Technical Details Bottom Sheet (`TrackInfoLoader.kt`, `TrackInfoSheet.kt`):**
+   - Accessible from `"Track Info"` inside both `LibraryScreen`'s 3-dot `DropdownMenu` and `NowPlayingScreen`'s overflow menu.
+   - Lazily loads file size, header-only ReplayGain Track/Album Gain & Peak tags (`ReplayGainTagParser`), deterministic SHA-256 content fingerprint, and Room `track_stats` on `Dispatchers.IO` ONLY when the sheet is opened (zero I/O during `LazyColumn` scroll).
+   - Displays Metadata & File details (Title, Artist, Album, Folder/Relative Path, Filename, File Size in MB/KB, Duration), Audio Stream details (Container/Codec, exact Sample Rate in `Hz`, Bit Depth, ReplayGain tags), and Local Identity & Stats (abbreviated SHA-256 with tap-to-copy to clipboard, Play Count, Total Listening Time, Last Played date).
+5. **Now Playing & Library UX Polish (`NowPlayingScreen.kt`, `LibraryScreen.kt`, `BitPerfectAppNav.kt`):**
+   - Added horizontal swipe-to-skip (`detectHorizontalDragGestures`, `76.dp` threshold with damped artwork `translationX` feedback) on the `NowPlayingScreen` artwork hero so vertical scroll never triggers accidental skips.
+   - Added `"Add to Playlist"`, `"Track Info"`, and `"Sleep Timer"` inside `NowPlayingScreen`'s conditionally-mounted overflow `DropdownMenu` (`if (overflowMenuExpanded)`), alongside the compact `SleepTimerTopBarButton` badge.
+   - Decluttered `LibraryScreen`'s `TopAppBar` to three balanced icon actions (`Import Folder`, `Queue`, `Diagnostics`), removing the redundant single-file import icon.
+
+### Full APK Phase 3 Software Verification (`./gradlew testDebugUnitTest lintDebug assembleDebug`)
+- **JVM Unit Tests:** **115 / 115 passed** across **23 suites** (`0` failed, `0` errors, `0` skipped, `0` `@Ignore`), including `LocalBackupCodecTest` (3/3) and `SleepTimerControllerTest` (4/4).
+- **Kotlin & KSP Compiler Warnings:** `0` Kotlin warnings, `0` KSP warnings.
+- **Android Lint (`lintDebug`):** **0 errors**, **0 warnings across all `/app/src/` Kotlin, manifest, and resource files** (15 remaining findings are strictly upstream dependency version notices in `gradle/libs.versions.toml` and AAR `ObsoleteLintCustomCheck`).
+- **Debug APK:** `app/build/outputs/apk/debug/app-debug.apk` (`20.02 MB` / `20,988,012 bytes`).
+- **Strict Offline Privacy Audit (Source + All Merged Debug Manifests):** **PASS** — **0 `android.permission.INTERNET`**, **0 `android.permission.MANAGE_EXTERNAL_STORAGE`**.
+- **Pure-Kotlin Domain Boundary:** **PASS** — **0 `android.*` or `org.json.*` imports** across all **25** pure-Kotlin domain modules (adding `LocalBackupCodec` and `SleepTimerController`).
+- **120 Hz UI Hygiene Audit:** **PASS** — `0` `playbackPositionMs` or `sleepTimerState` collections in `LibraryScreen`, `PlaylistsScreen`, `SettingsScreen` root, `QueueScreen`, `DiagnosticsScreen`, `BottomNavigationBar`, or `BitPerfectAppNav`; all `DropdownMenu` instances strictly gated by `if (expanded)`.
+- **Physical Hardware Verification Pending (Not Executed in Cloud):** On POCO F4 (Android 14 / HyperOS) + KZ EDX Pro 2 USB-C, verify:
+  1. Settings SAF folder add/remove + full `.json` backup export/restore round-trip via system document picker.
+  2. Audible 3-second Safe-Mode linear fade-out on Sleep Timer expiry (and zero digital volume scaling in Bit-Perfect Opt-In mode), plus clean `End of current track` pause with gapless enabled.
+  3. Lazy Track Info sheet opening smoothly from both `LibraryScreen` and `NowPlayingScreen`, copying the SHA-256 fingerprint, and rendering real ReplayGain tags and play stats.
+  4. Artwork horizontal swipe-to-skip feel on `NowPlayingScreen` and 120 Hz scroll smoothness on `LibraryScreen` while Sleep Timer and playback are active simultaneously.
+
 
 
 

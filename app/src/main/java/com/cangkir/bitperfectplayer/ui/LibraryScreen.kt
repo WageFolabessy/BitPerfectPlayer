@@ -34,7 +34,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.Album
-import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Favorite
@@ -113,11 +112,11 @@ fun LibraryScreen(
     albumArtworkLoader: AlbumArtworkLoader,
     onRefreshLibrary: () -> Unit,
     onImportFolder: (android.net.Uri) -> Unit,
-    onImportFile: (android.net.Uri) -> Unit,
     onPlayTracks: (List<PlaybackTrack>, Int) -> Unit,
     onEnqueueTrack: (PlaybackTrack) -> Unit,
     onEnqueueNext: (PlaybackTrack) -> Unit,
     onAddToPlaylist: (PlaybackTrack) -> Unit,
+    onShowTrackInfo: (PlaybackTrack) -> Unit,
     onToggleFavorite: (PlaybackTrack) -> Unit,
     onOpenQueue: () -> Unit,
     onOpenDiagnostics: () -> Unit,
@@ -167,14 +166,6 @@ fun LibraryScreen(
         }
     }
 
-    val filePickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument(),
-    ) { fileUri ->
-        if (fileUri != null) {
-            onImportFile(fileUri)
-        }
-    }
-
     val activeGroups = when (selectedTab) {
         LibraryTab.FOLDERS -> libraryState.folders
         LibraryTab.ARTISTS -> libraryState.artists
@@ -199,7 +190,6 @@ fun LibraryScreen(
     }
 
     val launchImportFolder = remember(folderPickerLauncher) { { folderPickerLauncher.launch(null) } }
-    val launchImportFile = remember(filePickerLauncher) { { filePickerLauncher.launch(arrayOf("audio/*")) } }
     val onSelectGroup = remember { { group: LibraryGroup -> openedGroupName = group.name } }
     val onPlayGroup = remember(onPlayTracks) { { group: LibraryGroup -> onPlayTracks(group.tracks, 0) } }
 
@@ -261,16 +251,6 @@ fun LibraryScreen(
                         Icon(
                             imageVector = Icons.Filled.CreateNewFolder,
                             contentDescription = "Import music folder via SAF",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    IconButton(
-                        onClick = launchImportFile,
-                        modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.AudioFile,
-                            contentDescription = "Import audio file via SAF",
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
@@ -386,6 +366,7 @@ fun LibraryScreen(
                     onEnqueueTrack = onEnqueueTrack,
                     onEnqueueNext = onEnqueueNext,
                     onAddToPlaylist = onAddToPlaylist,
+                    onShowTrackInfo = onShowTrackInfo,
                     onToggleFavorite = onToggleFavorite,
                 )
             } else {
@@ -427,6 +408,7 @@ fun LibraryScreen(
                             onEnqueueTrack = onEnqueueTrack,
                             onEnqueueNext = onEnqueueNext,
                             onAddToPlaylist = onAddToPlaylist,
+                            onShowTrackInfo = onShowTrackInfo,
                             onToggleFavorite = onToggleFavorite,
                             onImportFolder = if (searchQuery.isBlank()) launchImportFolder else null,
                         )
@@ -470,6 +452,7 @@ fun LibraryScreen(
                         onEnqueueTrack = onEnqueueTrack,
                         onEnqueueNext = onEnqueueNext,
                         onAddToPlaylist = onAddToPlaylist,
+                        onShowTrackInfo = onShowTrackInfo,
                         onToggleFavorite = onToggleFavorite,
                         onImportFolder = null,
                     )
@@ -485,6 +468,7 @@ fun LibraryScreen(
                         onEnqueueTrack = onEnqueueTrack,
                         onEnqueueNext = onEnqueueNext,
                         onAddToPlaylist = onAddToPlaylist,
+                        onShowTrackInfo = onShowTrackInfo,
                         onToggleFavorite = onToggleFavorite,
                         onImportFolder = null,
                     )
@@ -776,6 +760,7 @@ private fun GroupDetailTrackList(
     onEnqueueTrack: (PlaybackTrack) -> Unit,
     onEnqueueNext: (PlaybackTrack) -> Unit,
     onAddToPlaylist: (PlaybackTrack) -> Unit,
+    onShowTrackInfo: (PlaybackTrack) -> Unit,
     onToggleFavorite: (PlaybackTrack) -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
@@ -816,6 +801,7 @@ private fun GroupDetailTrackList(
             onEnqueueTrack = onEnqueueTrack,
             onEnqueueNext = onEnqueueNext,
             onAddToPlaylist = onAddToPlaylist,
+            onShowTrackInfo = onShowTrackInfo,
             onToggleFavorite = onToggleFavorite,
             onImportFolder = null,
         )
@@ -835,6 +821,7 @@ private fun TrackListView(
     onEnqueueTrack: (PlaybackTrack) -> Unit,
     onEnqueueNext: (PlaybackTrack) -> Unit,
     onAddToPlaylist: (PlaybackTrack) -> Unit,
+    onShowTrackInfo: (PlaybackTrack) -> Unit,
     onToggleFavorite: (PlaybackTrack) -> Unit,
     onImportFolder: (() -> Unit)?,
 ) {
@@ -906,6 +893,7 @@ private fun TrackListView(
                 onEnqueueNext = onEnqueueNext,
                 onEnqueueTrack = onEnqueueTrack,
                 onAddToPlaylist = onAddToPlaylist,
+                onShowTrackInfo = onShowTrackInfo,
             )
             HorizontalDivider(
                 thickness = 0.5.dp,
@@ -927,6 +915,7 @@ private fun TrackListRow(
     onEnqueueNext: (PlaybackTrack) -> Unit,
     onEnqueueTrack: (PlaybackTrack) -> Unit,
     onAddToPlaylist: (PlaybackTrack) -> Unit,
+    onShowTrackInfo: (PlaybackTrack) -> Unit,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
 
@@ -1050,6 +1039,13 @@ private fun TrackListRow(
                         onClick = {
                             menuExpanded = false
                             onEnqueueTrack(track)
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Track Info") },
+                        onClick = {
+                            menuExpanded = false
+                            onShowTrackInfo(track)
                         },
                     )
                 }

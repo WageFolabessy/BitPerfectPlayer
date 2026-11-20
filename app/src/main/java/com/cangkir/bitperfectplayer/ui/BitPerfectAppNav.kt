@@ -85,6 +85,7 @@ fun BitPerfectAppRoot(
     val favoriteTrackUris by viewModel.favoriteTrackUris.collectAsStateWithLifecycle()
     val playbackState by viewModel.playbackState.collectAsStateWithLifecycle()
     val lyricsUiState by viewModel.lyricsUiState.collectAsStateWithLifecycle()
+    val trackInfoState by viewModel.trackInfoState.collectAsStateWithLifecycle()
     val uiMessage by viewModel.uiMessage.collectAsStateWithLifecycle()
 
     var trackPendingAddToPlaylist by remember { mutableStateOf<PlaybackTrack?>(null) }
@@ -142,6 +143,14 @@ fun BitPerfectAppRoot(
         )
     }
 
+    trackInfoState?.let { info ->
+        TrackInfoBottomSheet(
+            info = info,
+            onCopiedMessage = viewModel::showUiMessage,
+            onDismiss = viewModel::dismissTrackInfo,
+        )
+    }
+
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
@@ -189,13 +198,13 @@ fun BitPerfectAppRoot(
                     albumArtworkLoader = viewModel.albumArtworkLoader,
                     onRefreshLibrary = viewModel::refreshLibrary,
                     onImportFolder = viewModel::importSafFolder,
-                    onImportFile = viewModel::importSafAudioFile,
                     onPlayTracks = { tracks, index ->
                         viewModel.playTracks(tracks, index)
                     },
                     onEnqueueTrack = viewModel::enqueueTrack,
                     onEnqueueNext = viewModel::enqueueTrackNext,
                     onAddToPlaylist = openAddToPlaylist,
+                    onShowTrackInfo = viewModel::openTrackInfo,
                     onToggleFavorite = viewModel::toggleFavorite,
                     onOpenQueue = openQueue,
                     onOpenDiagnostics = openDiagnostics,
@@ -224,6 +233,7 @@ fun BitPerfectAppRoot(
                 SettingsScreen(
                     libraryState = libraryState,
                     playbackState = playbackState,
+                    sleepTimerStateFlow = viewModel.sleepTimerState,
                     onImportFolder = viewModel::importSafFolder,
                     onRemoveSafFolder = viewModel::removeSafFolder,
                     onRefreshLibrary = viewModel::refreshLibrary,
@@ -231,6 +241,9 @@ fun BitPerfectAppRoot(
                     onSetReplayGainMode = viewModel::setReplayGainMode,
                     onSetReplayGainPreampDb = viewModel::setReplayGainPreampDb,
                     onSetReplayGainPreventClipping = viewModel::setReplayGainPreventClipping,
+                    onSelectSleepTimerPreset = viewModel::setSleepTimerPreset,
+                    onExportLocalBackup = viewModel::exportLocalBackup,
+                    onImportLocalBackup = viewModel::importLocalBackup,
                     onOpenDiagnostics = openDiagnostics,
                 )
             }
@@ -244,11 +257,14 @@ fun BitPerfectAppRoot(
                 NowPlayingScreen(
                     playbackState = playbackState,
                     playbackPositionMsFlow = viewModel.playbackPositionMs,
+                    sleepTimerStateFlow = viewModel.sleepTimerState,
                     albumArtworkLoader = viewModel.albumArtworkLoader,
                     isFavorite = isFav,
                     onBack = { navController.popBackStack() },
                     onToggleFavorite = viewModel::toggleFavorite,
                     onAddToPlaylist = openAddToPlaylist,
+                    onShowTrackInfo = viewModel::openTrackInfo,
+                    onSelectSleepTimerPreset = viewModel::setSleepTimerPreset,
                     onTogglePlayPause = viewModel::togglePlayPause,
                     onQuickPause = viewModel::pause,
                     onPrevious = viewModel::previous,
