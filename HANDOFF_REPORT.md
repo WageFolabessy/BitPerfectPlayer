@@ -163,3 +163,50 @@ Every library added or upgraded in `gradle/libs.versions.toml` uses a permissive
 7. **Background Playback & Resume State:**
    - Play audio, lock screen, test notification & lock-screen Play/Pause/Next/Previous/Seek controls via `MediaSession`.
    - Force-close or swipe app away while paused, relaunch, and confirm last track & playback position restore cleanly in paused state.
+
+---
+
+## 7. Post-Hardware-Test Bugfix Summary (POCO F4 Android 14 / HyperOS 1.0.9.0 + KZ EDX Pro 2 USB-C)
+
+Following initial physical testing and logcat/screenshot analysis on POCO F4 (`HyperOS 1.0.9.0`, Android 14) with KZ EDX Pro 2 USB-C, all P0/P1/P2 audio, persistence, state, artwork, UI/UX, lint, and branding issues were resolved on `feat/mvp-overnight` in 5 logical commits:
+
+| Priority | Commit | Scope & Root-Cause Resolution |
+| :--- | :--- | :--- |
+| **P0 + P2** | `087a7dc` | **Fixed full-scale static/white-noise audio bug & exact `Hz` formatting:** Eliminated dual root cause where (1) `MediaCodecAudioDecoder` requested `ENCODING_PCM_24BIT_PACKED` on 24-bit FLAC while `c2.android.flac.decoder` emitted 16-bit PCM (absent `KEY_PCM_ENCODING` previously fell back to `requestedEncoding` instead of strictly `ENCODING_PCM_16BIT`), and (2) `AudioOutputEngine` used an unaligned `8192`-byte read buffer (`8192 % 6 == 2`) for 24-bit stereo. Now requests `ENCODING_PCM_FLOAT` for `>16-bit` MediaCodec sources, resolves absent `KEY_PCM_ENCODING` strictly to `ENCODING_PCM_16BIT`, defers `AudioTrack` creation/reconfiguration until confirmed `codec.outputFormat` (`formatVersion`), writes `ENCODING_PCM_FLOAT` via `FloatArray` and integer PCM via direct little-endian `ByteBuffer` with partial-write loops and strict frame alignment (`PcmStreamRules`), makes `AudioTrack` teardown idempotent, adds concise `Log.d("BitPerfectAudio", ...)` start diagnostics, standardizes exact `Hz` sample-rate labels (`96,000 Hz`, `44,100 Hz`), and de-duplicates identical container/codec pairs (`FLAC (FLAC)` -> `FLAC`). |
+| **P1** | `336e6d0` | **Library persistence & instant optimistic favorites:** Added Room `CachedTrackEntity` + `CachedTrackDao` with non-destructive `MIGRATION_1_2` (preserving `lyrics`, `track_history`, and `favorite_tracks`), immediate SQLite-backed rendering on launch (zero empty-screen flash), incremental background diff sync (`LibrarySyncDiffer` on `uri` + `size` + `dateModified`) preserving SAF tracks across restarts, and single reactive `StateFlow<Set<String>>` + instant optimistic heart toggling (`FavoriteStateReducer`) across `LibraryScreen`, `NowPlayingScreen`, and `Favorites` tab with rollback on DB error. |
+| **P1** | `d033a74` | **100% offline local album cover art:** Added zero-dependency `AlbumArtworkLoader` + pure-Kotlin `AlbumArtworkHelper` extracting embedded tags (`MediaMetadataRetriever.embeddedPicture`), API 29+ MediaStore thumbnails (`ContentResolver.loadThumbnail`), and SAF sibling cover images (`cover.jpg`, `cover.png`, `folder.jpg`, `front.jpg`, `album.jpg`, case-insensitive), downsampled with power-of-2 `inSampleSize` into `160px`/`600px` buckets with memory `LruCache` + `cacheDir/artwork/` disk cache, semaphore-bounded IO, and `PlaybackForegroundService` `MediaMetadata.METADATA_KEY_ALBUM_ART` + notification large icon wiring. |
+| **P2** | `768a836` | **Minimalist native utilitarian dark UI/UX overhaul:** Replaced navy/neon palette with neutral matte obsidian/charcoal (`#0E0E10` / `#141417` / `#1B1B20` / `#24242A`), `0.5.dp` hairline dividers, and a single restrained slate-ice accent (`#7BA7D9`); wired local album artwork thumbnails across Library, Albums, MiniPlayer, Queue, and Now Playing hero; fixed duration wrapping (`05:5\n1`) with `maxLines = 1, softWrap = false` aligned cleanly on the title row; replaced colored format pills with subtle muted technical metadata (`FLAC · 24-bit · 96,000 Hz`); compacted search bar to `48.dp` single-line + clean track count (`268 tracks`); replaced the oversized Now Playing mode card with a compact clickable audio-mode status strip opening a `ModalBottomSheet` (preserving `HearingSafetyWarningDialog` & quick `Pause`); flattened nested Diagnostics cards while preserving all 6 stages and verbatim SPEC Section 3.5 notice. |
+| **P2** | `a125989` | **Custom minimalist adaptive launcher icon & zero-warning resource cleanup:** Replaced the default Android icon with a custom obsidian geometric PCM impulse + concentric signal ring emblem centered inside the inner `66dp` safe zone (`[29.5..78.5]` on `108dp` canvas, zero text, zero neon glow), and removed all 7 unused Android Studio template colors from `res/values/colors.xml` (replacing with used `app_window_background = #FF0E0E10` referenced by `res/values/themes.xml`). |
+
+### Custom Launcher Icon Assets Delivered
+- **Adaptive Vector Layers (`108dp` canvas, emblem strictly inside `66dp` safe zone):**
+  - `app/src/main/res/drawable/ic_launcher_background.xml` (matte obsidian subtle gradient `#19191E` -> `#0E0E10`)
+  - `app/src/main/res/drawable/ic_launcher_foreground.xml` (concentric `#3D3D47` ring + 5 quantized symmetric PCM impulse bars in `#F2F2F5` with `#7BA7D9` center peak)
+  - `app/src/main/res/drawable/ic_launcher_monochrome.xml` (solid `#FFFFFF` vector for Android 13+ Material You themed icons)
+  - `app/src/main/res/mipmap-anydpi/ic_launcher.xml` & `app/src/main/res/mipmap-anydpi/ic_launcher_round.xml` (wired to background, foreground, and monochrome layers)
+- **Legacy Raster Lossless `.webp` Mipmaps (zero duplicate `.png` files):**
+  - `mipmap-mdpi` (`48x48`), `mipmap-hdpi` (`72x72`), `mipmap-xhdpi` (`96x96`), `mipmap-xxhdpi` (`144x144`), `mipmap-xxxhdpi` (`192x192`) — both `ic_launcher.webp` and `ic_launcher_round.webp`.
+
+### Build, Compiler, KSP & Lint Warning Comparison (Before vs. After)
+
+| Check Category | Before (`6932746`) | After (`a125989`) | Notes |
+| :--- | :---: | :---: | :--- |
+| **Kotlin Compiler Warnings** (`compileDebugKotlin` + `compileDebugUnitTestKotlin`) | `0` | `0` | Clean across all production & test sources |
+| **KSP Warnings** (`kspDebugKotlin`) | `0` | `0` | Room `2.8.5` v2 + `MIGRATION_1_2` compiles cleanly |
+| **Android Lint Errors** (`lintDebug`) | `0` | `0` | Zero errors |
+| **Actionable Code/Resource Lint Warnings** | `7` | `0` | Eliminated all 7 `UnusedResources` template colors in `res/values/colors.xml` |
+| **Total `lint-results-debug.txt` Issues** | `21` *(7 unused colors + 14 version notices)* | `0` *(No issues found)* | SDK 37, AGP `9.4.1`, Kotlin `2.2.10`, Compose BOM `2026.02.01` baseline preserved untouched |
+
+### Updated Software Verification Results (`./gradlew clean testDebugUnitTest lintDebug assembleDebug`)
+- **JVM Unit Tests:** **69 / 69 passed** (`0` failed, `0` errors, `0` skipped, `0` `@Ignore`) across 14 test classes (including newly added `PcmStreamRulesTest` [7/7], `LibraryPersistenceAndFavoritesTest` [3/3], and `AlbumArtworkHelperTest` [4/4]).
+- **Android Lint:** `No issues found.` (`0` errors, `0` warnings in `app/build/reports/lint-results-debug.txt` & `.xml`).
+- **Debug APK:** `app/build/outputs/apk/debug/app-debug.apk` (`20 MB`, built cleanly from `clean`).
+- **Strict Offline Privacy Audit (Source + All Merged Debug Manifests):** **PASS** — **0 occurrences** of `android.permission.INTERNET` or `android.permission.MANAGE_EXTERNAL_STORAGE`.
+- **Pure-Kotlin Domain Boundary:** **PASS** — **0 `android.*` imports** across all 16 pure-Kotlin domain modules (`ContentFingerprintGenerator`, `LrcParser`, `PersistenceModels`, `PlaybackQueueManager`, `AudioSafetyController`, `AudioDiagnosticMapper`, `AudioDecoderModels`, `WavHeaderParser`, `PlaybackTrack`, `PcmStreamRules`, `AudioFormatFormatter`, `LibraryProjector`, `LibrarySyncDiffer`, `FavoriteStateReducer`, `AlbumArtworkHelper`, `MediaScanFilter`).
+- **Physical Hardware Re-Test Still Required (Not Executed in Cloud):** Re-install the rebuilt debug APK on POCO F4 + KZ EDX Pro 2 USB-C (IEMs out of ears first!) to confirm:
+  1. Clean, distortion-free audio on 24-bit/96,000 Hz FLAC & WAV across both internal speaker and USB-C IEM (inspect `BitPerfectAudio` logcat tag for confirmed `MediaCodec` output encoding and `AudioTrack` encoding),
+  2. Instant cached library display on cold restart without blank flash,
+  3. Next-frame heart icon toggle reactivity & Favorites tab sync,
+  4. Local embedded/SAF cover art rendering in Library, MiniPlayer, Now Playing, and Lock Screen Notification,
+  5. Custom obsidian PCM icon on HyperOS launcher.
+
