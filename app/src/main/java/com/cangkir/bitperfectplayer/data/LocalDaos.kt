@@ -7,6 +7,12 @@ import androidx.room.Query
 import androidx.room.Transaction
 import kotlinx.coroutines.flow.Flow
 
+data class TrackPositionBackfill(
+    val uriString: String,
+    val discNumber: Int,
+    val trackNumber: Int,
+)
+
 @Dao
 interface CachedTrackDao {
     @Query("SELECT * FROM cached_tracks ORDER BY title COLLATE NOCASE ASC")
@@ -20,6 +26,20 @@ interface CachedTrackDao {
 
     @Query("UPDATE cached_tracks SET content_fingerprint = :fingerprint WHERE uri_string = :uriString")
     suspend fun updateFingerprint(uriString: String, fingerprint: String)
+
+    @Query("UPDATE cached_tracks SET disc_number = :discNumber, track_number = :trackNumber WHERE uri_string = :uriString")
+    suspend fun updateTrackPosition(uriString: String, discNumber: Int, trackNumber: Int)
+
+    @Transaction
+    suspend fun backfillTrackPositions(updates: List<TrackPositionBackfill>) {
+        for (item in updates) {
+            updateTrackPosition(
+                uriString = item.uriString,
+                discNumber = item.discNumber,
+                trackNumber = item.trackNumber,
+            )
+        }
+    }
 
     @Query("DELETE FROM cached_tracks WHERE uri_string IN (:uris)")
     suspend fun deleteByUris(uris: List<String>): Int

@@ -15,10 +15,12 @@ import com.cangkir.bitperfectplayer.audio.AudioFormatClassifier
 import com.cangkir.bitperfectplayer.audio.AudioMetadataReader
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
 import com.cangkir.bitperfectplayer.audio.SupportedAudioFormat
+import com.cangkir.bitperfectplayer.audio.TrackNumberParser
 import com.cangkir.bitperfectplayer.data.CachedTrackEntity
 import com.cangkir.bitperfectplayer.data.CachedTrackSourceKind
 import com.cangkir.bitperfectplayer.data.FavoriteTrackRecord
 import com.cangkir.bitperfectplayer.data.LocalPersistenceRepository
+import com.cangkir.bitperfectplayer.data.TrackPositionBackfill
 import com.cangkir.bitperfectplayer.data.UserPreferencesRepository
 import com.cangkir.bitperfectplayer.data.toCachedEntity
 import com.cangkir.bitperfectplayer.data.toPlaybackTrack
@@ -31,6 +33,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -43,7 +46,8 @@ import kotlinx.coroutines.withContext
  * immediately on app launch with zero empty-screen flash, followed by incremental background diffing
  * (`uri` + `size` + `dateModified`) across `MediaStore.Audio.Media` and persisted SAF folders/files.
  *
- * Also coordinates instant optimistic heart-icon favorite toggling backed by Room.
+ * Also coordinates instant optimistic heart-icon favorite toggling backed by Room and executes all
+ * context-aware sorting strictly on `Dispatchers.Default` for jank-free 120 Hz scrolling.
  */
 class LocalLibraryRepository(
     context: Context,
@@ -78,27 +82,51 @@ class LocalLibraryRepository(
             )
         }
 
+    private val playCountsFlow: Flow<Map<String, Int>> =
+        persistenceRepository.observeAllTrackStats().map { stats ->
+            if (stats.isEmpty()) {
+                emptyMap()
+            } else {
+                HashMap<String, Int>(stats.size * 2).apply {
+                    for (rec in stats) {
+                        if (rec.playCount > 0) {
+                            put(rec.contentFingerprint.lowercase(), rec.playCount)
+                            if (rec.trackUri.isNotBlank()) {
+                                putIfAbsent(rec.trackUri, rec.playCount)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
     val librarySnapshot: StateFlow<LibrarySnapshot> = combine(
         combinedTracksFlow,
         persistenceRepository.observeRecentlyPlayed(limit = 50),
         persistenceRepository.observeAllFavorites(),
         preferencesRepository.preferencesFlow,
-        combine(isScanning, optimisticFavorites) { scanning, optimistic -> scanning to optimistic },
-    ) { tracks, history, favorites, prefs, (scanning, optimistic) ->
+        combine(isScanning, optimisticFavorites, playCountsFlow) { scanning, optimistic, playCounts ->
+            Triple(scanning, optimistic, playCounts)
+        },
+    ) { tracks, history, favorites, prefs, (scanning, optimistic, playCounts) ->
         LibraryProjector.buildSnapshot(
             allTracks = tracks,
             historyRecords = history,
             favoriteRecords = favorites,
             optimisticFavorites = optimistic,
             persistedSafTreeUris = prefs.persistedSafTreeUris,
+            sortPreferences = prefs.sortPreferences,
+            playCountsByKey = playCounts,
             isScanning = scanning,
             scanWarning = scanWarning.value,
         )
-    }.stateIn(
-        scope = scope,
-        started = SharingStarted.Eagerly,
-        initialValue = LibrarySnapshot(),
-    )
+    }
+        .flowOn(Dispatchers.Default)
+        .stateIn(
+            scope = scope,
+            started = SharingStarted.Eagerly,
+            initialValue = LibrarySnapshot(),
+        )
 
     /**
      * Runs an incremental background library synchronization without ever clearing the displayed
@@ -180,15 +208,33 @@ class LocalLibraryRepository(
 
                 val nowEpoch = System.currentTimeMillis()
                 val entitiesToUpsert = mutableListOf<CachedTrackEntity>()
+                val positionBackfills = mutableListOf<TrackPositionBackfill>()
 
-                // Parse only new/changed MediaStore files
+                // Parse only new/changed MediaStore files; cursor-only backfill for unchanged rows missing disc/track numbers
                 for (candidate in mediaStorePass.candidates) {
-                    if (candidate.uriString !in plan.toParseUris) continue
-                    val prevFp = cachedByUri[candidate.uriString]?.contentFingerprint
-                    entitiesToUpsert.add(
-                        parseMediaStoreCandidate(candidate, existingFingerprint = prevFp)
-                            .toCachedEntity(CachedTrackSourceKind.MEDIA_STORE, nowEpoch),
-                    )
+                    val existing = cachedByUri[candidate.uriString]
+                    if (candidate.uriString in plan.toParseUris) {
+                        entitiesToUpsert.add(
+                            parseMediaStoreCandidate(candidate, existingFingerprint = existing?.contentFingerprint)
+                                .toCachedEntity(CachedTrackSourceKind.MEDIA_STORE, nowEpoch),
+                        )
+                    } else if (existing != null && existing.discNumber == 0 && existing.trackNumber == 0) {
+                        val resolved = TrackNumberParser.resolve(
+                            mediaStorePackedTrack = candidate.packedTrack,
+                            trackNumberTag = candidate.cdTrackNumber,
+                            discNumberTag = candidate.discNumber,
+                            fileName = candidate.displayName,
+                        )
+                        if (resolved.hasPosition) {
+                            positionBackfills.add(
+                                TrackPositionBackfill(
+                                    uriString = candidate.uriString,
+                                    discNumber = resolved.discNumber,
+                                    trackNumber = resolved.trackNumber,
+                                ),
+                            )
+                        }
+                    }
                 }
 
                 // Parse only new/changed SAF tree files
@@ -213,6 +259,9 @@ class LocalLibraryRepository(
 
                 if (entitiesToUpsert.isNotEmpty()) {
                     persistenceRepository.upsertCachedTracks(entitiesToUpsert)
+                }
+                if (positionBackfills.isNotEmpty()) {
+                    persistenceRepository.backfillCachedTrackPositions(positionBackfills)
                 }
                 if (plan.toPruneUris.isNotEmpty()) {
                     persistenceRepository.deleteCachedTracksByUris(plan.toPruneUris)
@@ -332,6 +381,9 @@ class LocalLibraryRepository(
         val rawTitle: String?,
         val rawArtist: String?,
         val rawAlbum: String?,
+        val packedTrack: Int,
+        val cdTrackNumber: String?,
+        val discNumber: String?,
         val folderName: String,
         val relativePath: String?,
     )
@@ -368,6 +420,7 @@ class LocalLibraryRepository(
             add(MediaStore.Audio.Media.TITLE)
             add(MediaStore.Audio.Media.ARTIST)
             add(MediaStore.Audio.Media.ALBUM)
+            add(MediaStore.Audio.Media.TRACK)
             add(MediaStore.Audio.Media.DURATION)
             add(MediaStore.Audio.Media.SIZE)
             add(MediaStore.Audio.Media.DATE_MODIFIED)
@@ -376,6 +429,10 @@ class LocalLibraryRepository(
             add(MediaStore.Audio.Media.IS_RINGTONE)
             add(MediaStore.Audio.Media.IS_ALARM)
             add(MediaStore.Audio.Media.IS_NOTIFICATION)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                add(MediaStore.Audio.Media.CD_TRACK_NUMBER)
+                add(MediaStore.Audio.Media.DISC_NUMBER)
+            }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 add(MediaStore.Audio.Media.IS_RECORDING)
             }
@@ -411,6 +468,17 @@ class LocalLibraryRepository(
                 val titleCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)
                 val artistCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST)
                 val albumCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM)
+                val trackCol = cursor.getColumnIndex(MediaStore.Audio.Media.TRACK)
+                val cdTrackCol = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    cursor.getColumnIndex(MediaStore.Audio.Media.CD_TRACK_NUMBER)
+                } else {
+                    -1
+                }
+                val discCol = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    cursor.getColumnIndex(MediaStore.Audio.Media.DISC_NUMBER)
+                } else {
+                    -1
+                }
                 val durationCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
                 val sizeCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.SIZE)
                 val dateModCol = cursor.getColumnIndex(MediaStore.Audio.Media.DATE_MODIFIED)
@@ -482,6 +550,22 @@ class LocalLibraryRepository(
                         ?: legacyFolder?.takeIf { it.isNotEmpty() }
                         ?: "Internal Storage"
 
+                    val packedTrack = if (trackCol >= 0 && !cursor.isNull(trackCol)) {
+                        cursor.getInt(trackCol)
+                    } else {
+                        0
+                    }
+                    val cdTrackNumber = if (cdTrackCol >= 0 && !cursor.isNull(cdTrackCol)) {
+                        cursor.getString(cdTrackCol)?.trim()
+                    } else {
+                        null
+                    }
+                    val discNumber = if (discCol >= 0 && !cursor.isNull(discCol)) {
+                        cursor.getString(discCol)?.trim()
+                    } else {
+                        null
+                    }
+
                     results.add(
                         RawMediaStoreCandidate(
                             uri = contentUri,
@@ -495,6 +579,9 @@ class LocalLibraryRepository(
                             rawTitle = cursor.getString(titleCol)?.trim(),
                             rawArtist = cursor.getString(artistCol)?.trim(),
                             rawAlbum = cursor.getString(albumCol)?.trim(),
+                            packedTrack = packedTrack,
+                            cdTrackNumber = cdTrackNumber,
+                            discNumber = discNumber,
                             folderName = folderName,
                             relativePath = relativePath,
                         ),
@@ -521,6 +608,9 @@ class LocalLibraryRepository(
             cursorTitle = candidate.rawTitle,
             cursorArtist = candidate.rawArtist,
             cursorAlbum = candidate.rawAlbum,
+            cursorPackedTrack = candidate.packedTrack,
+            cursorCdTrackNumber = candidate.cdTrackNumber,
+            cursorDiscNumber = candidate.discNumber,
         )
 
         return PlaybackTrack(
@@ -540,6 +630,8 @@ class LocalLibraryRepository(
             codec = meta.codec,
             contentFingerprint = existingFingerprint,
             relativePath = candidate.relativePath,
+            discNumber = meta.discNumber,
+            trackNumber = meta.trackNumber,
         )
     }
 
@@ -636,6 +728,8 @@ class LocalLibraryRepository(
             codec = meta.codec,
             contentFingerprint = existingFingerprint,
             parentTreeUriString = entry.parentTreeUriString,
+            discNumber = meta.discNumber,
+            trackNumber = meta.trackNumber,
         )
     }
 

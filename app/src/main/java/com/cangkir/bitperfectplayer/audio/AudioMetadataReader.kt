@@ -22,6 +22,8 @@ data class AudioTrackMetadata(
     val bitDepth: Int?,
     val channelCount: Int,
     val sourceHeaderVerified: Boolean,
+    val discNumber: Int = 0,
+    val trackNumber: Int = 0,
 )
 
 /**
@@ -36,8 +38,8 @@ class AudioMetadataReader(
     private val context: Context,
 ) {
     /**
-     * Fast-path metadata reader for MediaStore tracks where `TITLE`, `ARTIST`, `ALBUM`, and
-     * `DURATION` were already indexed by Android's MediaStore cursor. Skips `MediaMetadataRetriever`
+     * Fast-path metadata reader for MediaStore tracks where `TITLE`, `ARTIST`, `ALBUM`, `TRACK`,
+     * and `DURATION` were already indexed by Android's MediaStore cursor. Skips `MediaMetadataRetriever`
      * completely for FLAC/WAV tracks once direct header parsing resolves `sampleRateHz` and
      * `durationMs`.
      */
@@ -49,6 +51,9 @@ class AudioMetadataReader(
         cursorTitle: String? = null,
         cursorArtist: String? = null,
         cursorAlbum: String? = null,
+        cursorPackedTrack: Int = 0,
+        cursorCdTrackNumber: String? = null,
+        cursorDiscNumber: String? = null,
     ): AudioTrackMetadata = readMetadataInternal(
         uri = uri,
         fileName = fileName,
@@ -57,6 +62,9 @@ class AudioMetadataReader(
         cursorTitle = cursorTitle,
         cursorArtist = cursorArtist,
         cursorAlbum = cursorAlbum,
+        cursorPackedTrack = cursorPackedTrack,
+        cursorCdTrackNumber = cursorCdTrackNumber,
+        cursorDiscNumber = cursorDiscNumber,
         allowSkipRetriever = true,
     )
 
@@ -76,6 +84,9 @@ class AudioMetadataReader(
         cursorTitle = null,
         cursorArtist = null,
         cursorAlbum = null,
+        cursorPackedTrack = 0,
+        cursorCdTrackNumber = null,
+        cursorDiscNumber = null,
         allowSkipRetriever = false,
     )
 
@@ -87,6 +98,9 @@ class AudioMetadataReader(
         cursorTitle: String?,
         cursorArtist: String?,
         cursorAlbum: String?,
+        cursorPackedTrack: Int,
+        cursorCdTrackNumber: String?,
+        cursorDiscNumber: String?,
         allowSkipRetriever: Boolean,
     ): AudioTrackMetadata {
         val fallbackTitle = AudioFormatClassifier.baseNameWithoutExtension(fileName)
@@ -103,6 +117,10 @@ class AudioMetadataReader(
         var codec = classified?.defaultCodecLabel ?: "Unknown"
         val container = classified?.containerLabel ?: "AUDIO"
         var headerVerified = false
+        var headerDiscNumber = 0
+        var headerTrackNumber = 0
+        var trackNumberTag = cursorCdTrackNumber
+        var discNumberTag = cursorDiscNumber
 
         // 1. Fast direct lossless FileChannel header verification for WAV and FLAC (< 1 ms, zero Binder IPC)
         if (classified == SupportedAudioFormat.WAV) {
@@ -122,6 +140,8 @@ class AudioMetadataReader(
                 if (flac.durationMs > 0L) durationMs = flac.durationMs
                 codec = "FLAC"
                 headerVerified = true
+                headerDiscNumber = flac.discNumber
+                headerTrackNumber = flac.trackNumber
             }
         }
 
@@ -152,6 +172,12 @@ class AudioMetadataReader(
                         retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM),
                     )
                 }
+                if (trackNumberTag.isNullOrBlank()) {
+                    trackNumberTag = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_CD_TRACK_NUMBER)
+                }
+                if (discNumberTag.isNullOrBlank()) {
+                    discNumberTag = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DISC_NUMBER)
+                }
 
                 if (durationMs <= 0L) {
                     durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
@@ -173,6 +199,15 @@ class AudioMetadataReader(
             }
         }
 
+        val resolvedPosition = TrackNumberParser.resolve(
+            mediaStorePackedTrack = cursorPackedTrack,
+            trackNumberTag = trackNumberTag,
+            discNumberTag = discNumberTag,
+            headerDiscNumber = headerDiscNumber,
+            headerTrackNumber = headerTrackNumber,
+            fileName = fileName,
+        )
+
         return AudioTrackMetadata(
             title = title ?: fallbackTitle,
             artist = artist ?: "Unknown Artist",
@@ -184,6 +219,8 @@ class AudioMetadataReader(
             bitDepth = bitDepth,
             channelCount = channelCount,
             sourceHeaderVerified = headerVerified,
+            discNumber = resolvedPosition.discNumber,
+            trackNumber = resolvedPosition.trackNumber,
         )
     }
 

@@ -17,7 +17,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         PlaylistTrackEntity::class,
         TrackStatsEntity::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = false,
 )
 abstract class BitPerfectDatabase : RoomDatabase() {
@@ -128,6 +128,22 @@ abstract class BitPerfectDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Non-destructive migration from v3 to v4 adding `disc_number` and `track_number` columns
+         * to `cached_tracks` while preserving ALL existing user tables (`cached_tracks`, `lyrics`,
+         * `track_history`, `favorite_tracks`, `playlists`, `playlist_tracks`, `track_stats`).
+         */
+        val MIGRATION_3_4: Migration = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE `cached_tracks` ADD COLUMN `disc_number` INTEGER NOT NULL DEFAULT 0",
+                )
+                db.execSQL(
+                    "ALTER TABLE `cached_tracks` ADD COLUMN `track_number` INTEGER NOT NULL DEFAULT 0",
+                )
+            }
+        }
+
         @Volatile
         private var instance: BitPerfectDatabase? = null
 
@@ -138,7 +154,7 @@ abstract class BitPerfectDatabase : RoomDatabase() {
                     BitPerfectDatabase::class.java,
                     DATABASE_NAME,
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                     .build()
                     .also { instance = it }
             }

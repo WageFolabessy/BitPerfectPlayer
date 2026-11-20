@@ -25,6 +25,8 @@ data class PlaybackTrack(
     val contentFingerprint: String? = null,
     val parentTreeUriString: String? = null,
     val relativePath: String? = null,
+    val discNumber: Int = 0,
+    val trackNumber: Int = 0,
 ) {
     /**
      * Precomputed subtle non-redundant metadata line using exact Hz units (e.g., `FLAC · 24-bit · 96,000 Hz`).
@@ -50,4 +52,14 @@ data class PlaybackTrack(
      * Precomputed secondary artist/album line for smooth list scrolling.
      */
     val artistAlbumLine: String = "$artist · $album"
+
+    /**
+     * Precomputed concise track-position badge for Album detail rows (e.g., `"3"`, `"2·04"`),
+     * or empty when track number is absent.
+     */
+    val trackNumberLabel: String = when {
+        trackNumber <= 0 -> ""
+        discNumber > 1 -> "$discNumber·$trackNumber"
+        else -> "$trackNumber"
+    }
 }

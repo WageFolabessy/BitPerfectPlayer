@@ -63,6 +63,10 @@ data class CachedTrackEntity(
     val sourceKind: String,
     @ColumnInfo(name = "last_synced_epoch_ms")
     val lastSyncedEpochMs: Long,
+    @ColumnInfo(name = "disc_number", defaultValue = "0")
+    val discNumber: Int = 0,
+    @ColumnInfo(name = "track_number", defaultValue = "0")
+    val trackNumber: Int = 0,
 )
 
 @Entity(tableName = "lyrics")
@@ -152,6 +156,8 @@ fun CachedTrackEntity.toPlaybackTrack(): PlaybackTrack = PlaybackTrack(
     contentFingerprint = contentFingerprint?.let { PersistenceSanitizer.normalizeFingerprint(it) }?.takeIf { it.isNotEmpty() },
     parentTreeUriString = parentTreeUriString,
     relativePath = relativePath,
+    discNumber = discNumber.coerceAtLeast(0),
+    trackNumber = trackNumber.coerceAtLeast(0),
 )
 
 fun PlaybackTrack.toCachedEntity(
@@ -177,6 +183,8 @@ fun PlaybackTrack.toCachedEntity(
     relativePath = relativePath,
     sourceKind = sourceKind.name,
     lastSyncedEpochMs = PersistenceSanitizer.sanitizeNonNegative(syncedEpochMs),
+    discNumber = discNumber.coerceAtLeast(0),
+    trackNumber = trackNumber.coerceAtLeast(0),
 )
 
 fun LyricsEntity.toDomain(): LyricsRecord = LyricsRecord(

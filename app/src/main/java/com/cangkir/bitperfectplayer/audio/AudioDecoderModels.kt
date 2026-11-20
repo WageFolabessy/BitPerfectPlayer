@@ -149,8 +149,9 @@ object AudioFormatClassifier {
 }
 
 /**
- * Pure-Kotlin FLAC `STREAMINFO` metadata block parser so true FLAC sample rate, channel count,
- * and bit depth (16-bit vs 24-bit) are verified directly from the file header.
+ * Pure-Kotlin FLAC `STREAMINFO` + optional `VORBIS_COMMENT` (`TRACKNUMBER`/`DISCNUMBER`) metadata
+ * block parser so true FLAC sample rate, channel count, bit depth (16-bit vs 24-bit), and disc/track
+ * position are verified directly from the file header in a single fast pass.
  */
 data class FlacStreamInfo(
     val sampleRateHz: Int,
@@ -158,10 +159,14 @@ data class FlacStreamInfo(
     val bitsPerSample: Int,
     val totalSamples: Long,
     val durationMs: Long,
+    val discNumber: Int = 0,
+    val trackNumber: Int = 0,
 )
 
 object FlacStreamInfoParser {
     private const val MIN_FLAC_HEADER_BYTES = 42 // 4 ("fLaC") + 4 (block header) + 34 (STREAMINFO)
+    private const val MAX_VORBIS_COMMENT_BYTES = 256 * 1024 // 256 KB OOM safety cap
+    private const val MAX_METADATA_BLOCKS_TO_SCAN = 32
 
     fun parse(source: SeekableByteSource): FlacStreamInfo? {
         if (source.size < MIN_FLAC_HEADER_BYTES) return null
@@ -192,6 +197,7 @@ object FlacStreamInfoParser {
         }
 
         // Metadata block 0 must be STREAMINFO (type == 0) with length >= 34 bytes
+        val streamInfoIsLast = (header[4].toInt() and 0x80) != 0
         val blockType = header[4].toInt() and 0x7F
         val blockLength = ((header[5].toInt() and 0xFF) shl 16) or
             ((header[6].toInt() and 0xFF) shl 8) or
@@ -220,14 +226,115 @@ object FlacStreamInfoParser {
         if (sampleRate <= 0 || channels <= 0 || bitsPerSample <= 0) return null
         val durationMs = if (totalSamples > 0L) (totalSamples * 1000L) / sampleRate.toLong() else 0L
 
+        var discNumber = 0
+        var trackNumber = 0
+        if (!streamInfoIsLast) {
+            val nextBlockOffset = offset + 8L + blockLength.toLong()
+            val parsedPos = readVorbisTrackPositionSafely(source, nextBlockOffset)
+            discNumber = parsedPos.discNumber
+            trackNumber = parsedPos.trackNumber
+        }
+
         return FlacStreamInfo(
             sampleRateHz = sampleRate,
             channelCount = channels,
             bitsPerSample = bitsPerSample,
             totalSamples = totalSamples,
             durationMs = durationMs,
+            discNumber = discNumber,
+            trackNumber = trackNumber,
         )
     }
+
+    private fun readVorbisTrackPositionSafely(
+        source: SeekableByteSource,
+        startOffset: Long,
+    ): ParsedTrackPosition {
+        var cursor = startOffset
+        val blockHeader = ByteArray(4)
+        var blocksVisited = 0
+        while (cursor + 4L <= source.size && blocksVisited < MAX_METADATA_BLOCKS_TO_SCAN) {
+            blocksVisited++
+            if (readFully(source, cursor, blockHeader, 4) < 4) break
+            val isLast = (blockHeader[0].toInt() and 0x80) != 0
+            val blockType = blockHeader[0].toInt() and 0x7F
+            val length = ((blockHeader[1].toInt() and 0xFF) shl 16) or
+                ((blockHeader[2].toInt() and 0xFF) shl 8) or
+                (blockHeader[3].toInt() and 0xFF)
+            cursor += 4L
+            if (length < 0 || cursor + length.toLong() > source.size) break
+
+            if (blockType == 4 && length in 8..MAX_VORBIS_COMMENT_BYTES) {
+                val payload = ByteArray(length)
+                if (readFully(source, cursor, payload, length) == length) {
+                    return parseVorbisCommentTrackPosition(payload)
+                }
+                break
+            }
+
+            cursor += length.toLong()
+            if (isLast) break
+        }
+        return ParsedTrackPosition()
+    }
+
+    private fun parseVorbisCommentTrackPosition(data: ByteArray): ParsedTrackPosition {
+        var pos = 0
+        if (pos + 4 > data.size) return ParsedTrackPosition()
+        val vendorLen = readInt32Le(data, pos)
+        pos += 4
+        if (vendorLen < 0 || pos + vendorLen > data.size) return ParsedTrackPosition()
+        pos += vendorLen
+
+        if (pos + 4 > data.size) return ParsedTrackPosition()
+        val count = readInt32Le(data, pos)
+        pos += 4
+        if (count <= 0 || count > 4096) return ParsedTrackPosition()
+
+        var disc = 0
+        var track = 0
+        for (i in 0 until count) {
+            if (pos + 4 > data.size) break
+            val entryLen = readInt32Le(data, pos)
+            pos += 4
+            if (entryLen <= 0 || pos + entryLen > data.size) break
+            val eqIdx = findAsciiEquals(data, pos, pos + entryLen)
+            if (eqIdx > pos) {
+                val keyLen = eqIdx - pos
+                if (keyLen in 4..11) {
+                    val key = String(data, pos, keyLen, Charsets.UTF_8).trim().uppercase()
+                    when (key) {
+                        "TRACKNUMBER", "TRACK" -> {
+                            val value = String(data, eqIdx + 1, pos + entryLen - (eqIdx + 1), Charsets.UTF_8)
+                            val parsed = TrackNumberParser.parseTagNumber(value)
+                            if (parsed > 0 && track == 0) track = parsed
+                        }
+                        "DISCNUMBER", "DISC" -> {
+                            val value = String(data, eqIdx + 1, pos + entryLen - (eqIdx + 1), Charsets.UTF_8)
+                            val parsed = TrackNumberParser.parseTagNumber(value)
+                            if (parsed > 0 && disc == 0) disc = parsed
+                        }
+                    }
+                }
+            }
+            pos += entryLen
+            if (disc > 0 && track > 0) break
+        }
+        return ParsedTrackPosition(discNumber = disc, trackNumber = track)
+    }
+
+    private fun findAsciiEquals(data: ByteArray, start: Int, end: Int): Int {
+        for (idx in start until end) {
+            if (data[idx] == '='.code.toByte()) return idx
+        }
+        return -1
+    }
+
+    private fun readInt32Le(data: ByteArray, offset: Int): Int =
+        (data[offset].toInt() and 0xFF) or
+            ((data[offset + 1].toInt() and 0xFF) shl 8) or
+            ((data[offset + 2].toInt() and 0xFF) shl 16) or
+            ((data[offset + 3].toInt() and 0xFF) shl 24)
 
     private fun readFully(source: SeekableByteSource, startOffset: Long, buf: ByteArray, len: Int): Int {
         var total = 0

@@ -45,6 +45,11 @@ class LocalPersistenceRepository(
         }
     }
 
+    suspend fun backfillCachedTrackPositions(updates: List<TrackPositionBackfill>) {
+        if (updates.isEmpty()) return
+        cachedTrackDao.backfillTrackPositions(updates)
+    }
+
     suspend fun deleteCachedTracksByUris(uris: List<String>) {
         if (uris.isEmpty()) return
         // Stay safely below SQLite's 999 bind parameter limit.
@@ -118,6 +123,9 @@ class LocalPersistenceRepository(
             playedAtEpochMs = PersistenceSanitizer.sanitizeNonNegative(playedAtEpochMs),
         )
     }
+
+    fun observeAllTrackStats(): Flow<List<TrackStatsRecord>> =
+        trackStatsDao.observeAllStats().map { list -> list.map { it.toDomain() } }
 
     fun observeMostPlayedStats(limit: Int = 50): Flow<List<TrackStatsRecord>> =
         trackStatsDao.observeMostPlayed(limit).map { list -> list.map { it.toDomain() } }
