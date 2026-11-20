@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Transaction
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -85,4 +86,136 @@ interface FavoriteTrackDao {
 
     @Query("SELECT * FROM favorite_tracks ORDER BY added_at_epoch_ms DESC")
     suspend fun getAllFavorites(): List<FavoriteTrackEntity>
+}
+
+@Dao
+interface PlaylistDao {
+    @Query("SELECT * FROM playlists ORDER BY updated_at_epoch_ms DESC, id DESC")
+    fun observeAllPlaylists(): Flow<List<PlaylistEntity>>
+
+    @Query("SELECT * FROM playlists ORDER BY updated_at_epoch_ms DESC, id DESC")
+    suspend fun getAllPlaylists(): List<PlaylistEntity>
+
+    @Query("SELECT * FROM playlists WHERE id = :playlistId LIMIT 1")
+    suspend fun getPlaylistById(playlistId: Long): PlaylistEntity?
+
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    suspend fun insertPlaylist(entity: PlaylistEntity): Long
+
+    @Query("UPDATE playlists SET name = :name, updated_at_epoch_ms = :updatedAtEpochMs WHERE id = :playlistId")
+    suspend fun renamePlaylist(playlistId: Long, name: String, updatedAtEpochMs: Long): Int
+
+    @Query("UPDATE playlists SET updated_at_epoch_ms = :updatedAtEpochMs WHERE id = :playlistId")
+    suspend fun touchPlaylist(playlistId: Long, updatedAtEpochMs: Long)
+
+    @Query("DELETE FROM playlists WHERE id = :playlistId")
+    suspend fun deletePlaylistById(playlistId: Long): Int
+
+    @Query("SELECT * FROM playlist_tracks ORDER BY playlist_id ASC, position_index ASC, id ASC")
+    fun observeAllPlaylistTracks(): Flow<List<PlaylistTrackEntity>>
+
+    @Query("SELECT * FROM playlist_tracks WHERE playlist_id = :playlistId ORDER BY position_index ASC, id ASC")
+    fun observeTracksForPlaylist(playlistId: Long): Flow<List<PlaylistTrackEntity>>
+
+    @Query("SELECT * FROM playlist_tracks WHERE playlist_id = :playlistId ORDER BY position_index ASC, id ASC")
+    suspend fun getTracksForPlaylist(playlistId: Long): List<PlaylistTrackEntity>
+
+    @Query("SELECT MAX(position_index) FROM playlist_tracks WHERE playlist_id = :playlistId")
+    suspend fun getMaxPositionIndex(playlistId: Long): Int?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertPlaylistTrack(entity: PlaylistTrackEntity): Long
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertPlaylistTracks(entities: List<PlaylistTrackEntity>)
+
+    @Query("UPDATE playlist_tracks SET position_index = :positionIndex WHERE id = :entryId")
+    suspend fun updatePlaylistTrackPosition(entryId: Long, positionIndex: Int)
+
+    @Query("UPDATE playlist_tracks SET content_fingerprint = :fingerprint WHERE track_uri = :trackUri AND (content_fingerprint IS NULL OR content_fingerprint = '')")
+    suspend fun backfillFingerprintByUri(trackUri: String, fingerprint: String)
+
+    @Query("DELETE FROM playlist_tracks WHERE id = :entryId")
+    suspend fun deletePlaylistTrackById(entryId: Long): Int
+
+    @Transaction
+    suspend fun replacePlaylistTrackOrder(
+        playlistId: Long,
+        orderedEntryIds: List<Long>,
+        updatedAtEpochMs: Long,
+    ) {
+        orderedEntryIds.forEachIndexed { index, entryId ->
+            updatePlaylistTrackPosition(entryId = entryId, positionIndex = index)
+        }
+        touchPlaylist(playlistId = playlistId, updatedAtEpochMs = updatedAtEpochMs)
+    }
+
+    @Transaction
+    suspend fun removeEntryAndCompact(
+        playlistId: Long,
+        entryId: Long,
+        updatedAtEpochMs: Long,
+    ) {
+        deletePlaylistTrackById(entryId)
+        val remaining = getTracksForPlaylist(playlistId)
+        remaining.forEachIndexed { index, entity ->
+            if (entity.positionIndex != index) {
+                updatePlaylistTrackPosition(entryId = entity.id, positionIndex = index)
+            }
+        }
+        touchPlaylist(playlistId = playlistId, updatedAtEpochMs = updatedAtEpochMs)
+    }
+}
+
+@Dao
+interface TrackStatsDao {
+    @Query("SELECT * FROM track_stats ORDER BY play_count DESC, last_played_at_epoch_ms DESC")
+    fun observeAllStats(): Flow<List<TrackStatsEntity>>
+
+    @Query("SELECT * FROM track_stats WHERE play_count > 0 ORDER BY play_count DESC, last_played_at_epoch_ms DESC LIMIT :limit")
+    fun observeMostPlayed(limit: Int = 50): Flow<List<TrackStatsEntity>>
+
+    @Query("SELECT COALESCE(SUM(play_count), 0) FROM track_stats")
+    fun observeTotalPlayCount(): Flow<Int>
+
+    @Query("SELECT * FROM track_stats WHERE content_fingerprint = :fingerprint LIMIT 1")
+    suspend fun getByFingerprint(fingerprint: String): TrackStatsEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(entity: TrackStatsEntity)
+
+    @Transaction
+    suspend fun recordListeningDelta(
+        contentFingerprint: String,
+        trackUri: String,
+        title: String,
+        artist: String,
+        album: String,
+        fileName: String,
+        playCountDelta: Int,
+        playTimeDeltaMs: Long,
+        playedAtEpochMs: Long,
+    ) {
+        val existing = getByFingerprint(contentFingerprint)
+        val nextCount = ((existing?.playCount ?: 0) + playCountDelta).coerceAtLeast(0)
+        val nextTime = ((existing?.totalPlayTimeMs ?: 0L) + playTimeDeltaMs).coerceAtLeast(0L)
+        val nextLastPlayed = if (playCountDelta > 0) {
+            maxOf(existing?.lastPlayedAtEpochMs ?: 0L, playedAtEpochMs)
+        } else {
+            existing?.lastPlayedAtEpochMs ?: playedAtEpochMs
+        }
+        upsert(
+            TrackStatsEntity(
+                contentFingerprint = contentFingerprint,
+                trackUri = trackUri,
+                title = title,
+                artist = artist,
+                album = album,
+                fileName = fileName,
+                playCount = nextCount,
+                totalPlayTimeMs = nextTime,
+                lastPlayedAtEpochMs = nextLastPlayed,
+            ),
+        )
+    }
 }

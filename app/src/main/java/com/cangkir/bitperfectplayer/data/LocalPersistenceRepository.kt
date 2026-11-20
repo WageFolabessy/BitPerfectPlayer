@@ -13,12 +13,16 @@ class LocalPersistenceRepository(
     private val lyricsDao: LyricsDao,
     private val trackHistoryDao: TrackHistoryDao,
     private val favoriteTrackDao: FavoriteTrackDao,
+    private val playlistDao: PlaylistDao,
+    private val trackStatsDao: TrackStatsDao,
 ) {
     constructor(database: BitPerfectDatabase) : this(
         cachedTrackDao = database.cachedTrackDao(),
         lyricsDao = database.lyricsDao(),
         trackHistoryDao = database.trackHistoryDao(),
         favoriteTrackDao = database.favoriteTrackDao(),
+        playlistDao = database.playlistDao(),
+        trackStatsDao = database.trackStatsDao(),
     )
 
     fun observeCachedTracks(): Flow<List<CachedTrackEntity>> = cachedTrackDao.observeAll()
@@ -34,8 +38,10 @@ class LocalPersistenceRepository(
 
     suspend fun updateCachedTrackFingerprint(uriString: String, fingerprint: String) {
         val normalized = PersistenceSanitizer.normalizeFingerprint(fingerprint)
-        if (uriString.isNotBlank() && normalized.isNotEmpty()) {
-            cachedTrackDao.updateFingerprint(uriString.trim(), normalized)
+        val trimmedUri = uriString.trim()
+        if (trimmedUri.isNotEmpty() && normalized.isNotEmpty()) {
+            cachedTrackDao.updateFingerprint(trimmedUri, normalized)
+            playlistDao.backfillFingerprintByUri(trimmedUri, normalized)
         }
     }
 
@@ -85,6 +91,38 @@ class LocalPersistenceRepository(
             trackHistoryDao.deleteByFingerprint(normalized)
         }
     }
+
+    /**
+     * Atomically records anti-skip play count delta and accumulated active listening time into
+     * `track_stats` bound to the track's SHA-256 content fingerprint.
+     */
+    suspend fun recordTrackListeningDelta(
+        contentFingerprint: String,
+        track: PlaybackTrack,
+        playCountDelta: Int,
+        playTimeDeltaMs: Long,
+        playedAtEpochMs: Long = System.currentTimeMillis(),
+    ) {
+        val normalized = PersistenceSanitizer.normalizeFingerprint(contentFingerprint)
+        if (normalized.isEmpty()) return
+        if (playCountDelta <= 0 && playTimeDeltaMs <= 0L) return
+        trackStatsDao.recordListeningDelta(
+            contentFingerprint = normalized,
+            trackUri = track.uriString.trim(),
+            title = PersistenceSanitizer.sanitizeDisplayText(track.title, track.fileName.ifBlank { "Unknown Track" }),
+            artist = PersistenceSanitizer.sanitizeDisplayText(track.artist, "Unknown Artist"),
+            album = PersistenceSanitizer.sanitizeDisplayText(track.album, "Unknown Album"),
+            fileName = PersistenceSanitizer.sanitizeDisplayText(track.fileName, "Unknown"),
+            playCountDelta = playCountDelta.coerceAtLeast(0),
+            playTimeDeltaMs = playTimeDeltaMs.coerceAtLeast(0L),
+            playedAtEpochMs = PersistenceSanitizer.sanitizeNonNegative(playedAtEpochMs),
+        )
+    }
+
+    fun observeMostPlayedStats(limit: Int = 50): Flow<List<TrackStatsRecord>> =
+        trackStatsDao.observeMostPlayed(limit).map { list -> list.map { it.toDomain() } }
+
+    fun observeTotalPlayCount(): Flow<Int> = trackStatsDao.observeTotalPlayCount()
 
     /**
      * Idempotently persists the desired favorite state [targetFavorite] for [record].

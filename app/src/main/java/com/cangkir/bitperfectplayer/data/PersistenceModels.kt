@@ -58,6 +58,45 @@ data class FavoriteTrackRecord(
 )
 
 /**
+ * Pure-Kotlin domain record representing a local user-created playlist.
+ */
+data class PlaylistRecord(
+    val id: Long = 0L,
+    val name: String,
+    val createdAtEpochMs: Long,
+    val updatedAtEpochMs: Long,
+)
+
+/**
+ * Pure-Kotlin domain record representing an ordered track entry inside a user playlist.
+ */
+data class PlaylistTrackRecord(
+    val id: Long = 0L,
+    val playlistId: Long,
+    val contentFingerprint: String?,
+    val trackUri: String,
+    val fileName: String,
+    val positionIndex: Int,
+    val addedAtEpochMs: Long,
+)
+
+/**
+ * Pure-Kotlin domain record representing persistent anti-skip listening statistics bound to a
+ * track's deterministic SHA-256 content fingerprint.
+ */
+data class TrackStatsRecord(
+    val contentFingerprint: String,
+    val trackUri: String,
+    val title: String,
+    val artist: String,
+    val album: String,
+    val fileName: String,
+    val playCount: Int,
+    val totalPlayTimeMs: Long,
+    val lastPlayedAtEpochMs: Long,
+)
+
+/**
  * Persisted audio safety mode preference.
  * Hearing safety invariant: defaults to [SAFE_VOLUME_MODE] on fresh install.
  */

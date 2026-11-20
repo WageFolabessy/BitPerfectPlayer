@@ -13,8 +13,11 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         LyricsEntity::class,
         TrackHistoryEntity::class,
         FavoriteTrackEntity::class,
+        PlaylistEntity::class,
+        PlaylistTrackEntity::class,
+        TrackStatsEntity::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = false,
 )
 abstract class BitPerfectDatabase : RoomDatabase() {
@@ -22,6 +25,8 @@ abstract class BitPerfectDatabase : RoomDatabase() {
     abstract fun lyricsDao(): LyricsDao
     abstract fun trackHistoryDao(): TrackHistoryDao
     abstract fun favoriteTrackDao(): FavoriteTrackDao
+    abstract fun playlistDao(): PlaylistDao
+    abstract fun trackStatsDao(): TrackStatsDao
 
     companion object {
         private const val DATABASE_NAME = "bitperfect_player.db"
@@ -64,6 +69,65 @@ abstract class BitPerfectDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Non-destructive migration from v2 to v3 adding `playlists`, `playlist_tracks`, and
+         * `track_stats` while preserving `cached_tracks`, `lyrics`, `track_history`, and
+         * `favorite_tracks` completely untouched.
+         */
+        val MIGRATION_2_3: Migration = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `playlists` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `name` TEXT NOT NULL,
+                        `created_at_epoch_ms` INTEGER NOT NULL,
+                        `updated_at_epoch_ms` INTEGER NOT NULL
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `playlist_tracks` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `playlist_id` INTEGER NOT NULL,
+                        `content_fingerprint` TEXT,
+                        `track_uri` TEXT NOT NULL,
+                        `file_name` TEXT NOT NULL,
+                        `position_index` INTEGER NOT NULL,
+                        `added_at_epoch_ms` INTEGER NOT NULL,
+                        FOREIGN KEY(`playlist_id`) REFERENCES `playlists`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_playlist_tracks_playlist_id_position_index` ON `playlist_tracks` (`playlist_id`, `position_index`)",
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `track_stats` (
+                        `content_fingerprint` TEXT NOT NULL,
+                        `track_uri` TEXT NOT NULL,
+                        `title` TEXT NOT NULL,
+                        `artist` TEXT NOT NULL,
+                        `album` TEXT NOT NULL,
+                        `file_name` TEXT NOT NULL,
+                        `play_count` INTEGER NOT NULL,
+                        `total_play_time_ms` INTEGER NOT NULL,
+                        `last_played_at_epoch_ms` INTEGER NOT NULL,
+                        PRIMARY KEY(`content_fingerprint`)
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_track_stats_play_count` ON `track_stats` (`play_count`)",
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_track_stats_last_played_at_epoch_ms` ON `track_stats` (`last_played_at_epoch_ms`)",
+                )
+            }
+        }
+
         @Volatile
         private var instance: BitPerfectDatabase? = null
 
@@ -74,7 +138,7 @@ abstract class BitPerfectDatabase : RoomDatabase() {
                     BitPerfectDatabase::class.java,
                     DATABASE_NAME,
                 )
-                    .addMigrations(MIGRATION_1_2)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                     .build()
                     .also { instance = it }
             }

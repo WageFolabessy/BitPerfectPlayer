@@ -149,3 +149,26 @@ Never bind lyrics solely to song title or `MediaStore._ID`. Use a lowercase 64-c
 - **STRICTLY PROHIBITED:** Do not add `android.permission.INTERNET` to `AndroidManifest.xml`, and verify that no third-party library injects it into the merged manifest.
 - No automatic downloading of metadata, album art, or lyrics.
 - Persist all user data locally using Room (or standard Android `SQLiteOpenHelper` only if Room/KSP has an irreconcilable toolchain conflict with the project's AGP/SDK 37 version, documented in `DECISIONS.md`) and DataStore Preferences.
+
+---
+
+## 6. Full APK Phase Extensions
+
+Having graduated from the verified MVP baseline, the Full APK roadmap authorizes the following strictly local, audiophile-grade extensions while keeping **all core invariants locked** (100% offline with zero `INTERNET` or `MANAGE_EXTERNAL_STORAGE` permissions, Safe Mode default, mandatory Hearing Safety Warning Dialog, exact `Hz` diagnostics honesty, and smooth 120 Hz UI scrolling):
+
+1. **User Playlists & Offline `.m3u8` Import/Export:**
+   - Persistent local playlists stored in Room (`playlists` and `playlist_tracks`) with create, rename, delete, add/remove track, reorder, and Play All workflows.
+   - Standard `.m3u8` export via SAF `CreateDocument` and import via SAF `OpenDocument`, resolving entries back to local library tracks by SHA-256 fingerprint, URI, relative path, or filename.
+2. **Accurate Anti-Skip Play Count & Listening Statistics (`track_stats`):**
+   - Fingerprint-bound play count and real accumulated listening time (`total_play_time_ms`) tracked strictly from active PCM playback elapsed time (ignoring paused time and seek jumps; never counting `< 5s` skips; counting at most once per track session once the 30s / 50% threshold is met).
+   - Smart **Most Played** auto-list sorted by `play_count DESC`.
+3. **Gapless Playback:**
+   - Seamless consecutive track transitions when adjacent PCM streams match format/sample rate/channel layout without injecting artificial crossfades or DSP.
+4. **Safe-Mode-Only ReplayGain:**
+   - Optional local ReplayGain metadata attenuation permitted strictly in Safe Mode (`SAFE_VOLUME_MODE`), automatically and unconditionally bypassed in Bit-Perfect Opt-In mode so PCM bits remain untouched.
+5. **Sleep Timer:**
+   - Local countdown or end-of-track auto-pause timer with clean fade-free or Safe-Mode stop.
+6. **Track Technical Info Sheet:**
+   - On-demand detailed inspection of local container, codec, exact sample rate (`Hz`), bit depth, channels, file size, path/URI, and SHA-256 content fingerprint.
+7. **Local Backup & Restore (SAF):**
+   - 100% offline export/import of playlists, favorites, lyrics, and listening statistics to a user-selected local file via SAF.

@@ -67,3 +67,15 @@ This file records autonomous architectural, dependency, and environment decision
 - **Rationale:** Implementing local artwork loading directly with platform APIs guarantees zero external networking dependencies and zero risk of transitive `INTERNET` permissions while remaining fast, smooth, and memory-bounded. Flattening card-in-card borders and replacing loud row badges with clean typographic hierarchy eliminates visual clutter and duration wrapping. Removing unused template color resources drops actionable Android Lint warnings to `0`.
 - **Rejected Alternatives:** Adding Coil/Glide/Picasso (risks pulling HTTP/OkHttp transitively and bloats APK for strictly local artwork); leaving duplicate `.png` alongside `.webp` mipmaps (causes Android resource merge conflicts).
 
+---
+
+## D7.1 — Full APK Phase 1: Room `MIGRATION_2_3`, Anti-Skip Play Count Engine, `.m3u8` Codec, & 3-Tab Top-Level Navigation
+- **Decision:**
+  1. Upgraded `BitPerfectDatabase` from `version = 2` to `version = 3` via explicit non-destructive `MIGRATION_2_3`, adding `playlists`, `playlist_tracks` (with `ON DELETE CASCADE` foreign key to `playlists.id` and composite `(playlist_id, position_index)` index), and `track_stats` (keyed by SHA-256 `content_fingerprint` with `play_count` and `last_played_at_epoch_ms` indices) while preserving `cached_tracks`, `lyrics`, `track_history`, and `favorite_tracks` untouched.
+  2. Implemented pure-Kotlin `PlayCountTracker` fed strictly by real active `AudioTrack` hardware-head playback time deltas (ignoring paused time and seek jumps) with anti-skip thresholds (`>= 5s` floor; `(durationMs / 2).coerceIn(10s, 30s)` for `>= 10s` tracks; `max(5s, 80%)` or natural EOS `>= 5s` for `< 10s` tracks; `30s` when duration unknown; at most once per session; reset on track switch, replay after completion, or `RepeatMode.ONE` loop).
+  3. Implemented pure-Kotlin `M3u8PlaylistCodec` supporting standard `#EXTM3U` / `#EXTINF` / `#PLAYLIST` plus optional `#EXT-X-BITPERFECT-URI` and `#EXT-X-BITPERFECT-SHA256` hints so re-imported playlists match cleanly even across moved/renamed files while staying portable for external players.
+  4. Added a clean 3-tab flat bottom `NavigationBar` (`Library`, `Playlists`, `Settings`) docked directly beneath `MiniPlayerBar` on top-level destinations only (hidden on `NowPlaying`, `Queue`, `Lyrics`, `Diagnostics`), preserving decoupled `playbackPositionMs: StateFlow<Long>` so 20 Hz ticks cause zero top-level recompositions, and keeping `All Songs` clean without extra sort/filter chrome.
+- **Rationale:** Explicit SQLite `MIGRATION_2_3` guarantees zero loss of existing cached libraries, favorites, history, or lyrics when upgrading from MVP v2 APKs. Measuring active hardware playback head frames prevents seeking to the end or 2-second skips from polluting `Most Played` statistics.
+- **Rejected Alternatives:** Incrementing play count on `loadTrack()` (pollutes stats with accidental taps and rapid skips); using `fallbackToDestructiveMigration()` (would wipe persisted user data on update).
+
+
