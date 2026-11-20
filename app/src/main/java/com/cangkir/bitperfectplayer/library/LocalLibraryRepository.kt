@@ -12,24 +12,35 @@ import com.cangkir.bitperfectplayer.audio.AudioFormatClassifier
 import com.cangkir.bitperfectplayer.audio.AudioMetadataReader
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
 import com.cangkir.bitperfectplayer.audio.SupportedAudioFormat
+import com.cangkir.bitperfectplayer.data.CachedTrackEntity
+import com.cangkir.bitperfectplayer.data.CachedTrackSourceKind
 import com.cangkir.bitperfectplayer.data.FavoriteTrackRecord
 import com.cangkir.bitperfectplayer.data.LocalPersistenceRepository
 import com.cangkir.bitperfectplayer.data.UserPreferencesRepository
+import com.cangkir.bitperfectplayer.data.toCachedEntity
+import com.cangkir.bitperfectplayer.data.toPlaybackTrack
 import com.cangkir.bitperfectplayer.lyrics.AndroidContentFingerprintProvider
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
- * Local-first music library repository scanning the 5 MVP audio formats (FLAC, WAV, MP3, M4A/AAC,
- * OGG/Opus) via `MediaStore.Audio.Media` and Storage Access Framework (SAF) folders/files with
- * defensive persistable URI permission handling.
+ * Local-first music library repository backed by Room (`cached_tracks`) so cached songs render
+ * immediately on app launch with zero empty-screen flash, followed by incremental background diffing
+ * (`uri` + `size` + `dateModified`) across `MediaStore.Audio.Media` and persisted SAF folders/files.
+ *
+ * Also coordinates instant optimistic heart-icon favorite toggling backed by Room.
  */
 class LocalLibraryRepository(
     context: Context,
@@ -40,22 +51,42 @@ class LocalLibraryRepository(
 ) {
     private val appContext = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val syncMutex = Mutex()
 
-    private val scannedTracks = MutableStateFlow<List<PlaybackTrack>>(emptyList())
     private val isScanning = MutableStateFlow(false)
     private val scanWarning = MutableStateFlow<String?>(null)
+    private val optimisticFavorites = MutableStateFlow<Map<String, Boolean>>(emptyMap())
+
+    private val combinedTracksFlow: Flow<List<PlaybackTrack>> =
+        persistenceRepository.observeCachedTracks().map { entities ->
+            val mediaTracks = mutableListOf<PlaybackTrack>()
+            val safTracks = mutableListOf<PlaybackTrack>()
+            for (entity in entities) {
+                val track = entity.toPlaybackTrack()
+                if (CachedTrackSourceKind.fromStoredName(entity.sourceKind) == CachedTrackSourceKind.MEDIA_STORE) {
+                    mediaTracks.add(track)
+                } else {
+                    safTracks.add(track)
+                }
+            }
+            LibraryProjector.mergeAndDeduplicate(
+                mediaStoreTracks = mediaTracks,
+                safTracks = safTracks,
+            )
+        }
 
     val librarySnapshot: StateFlow<LibrarySnapshot> = combine(
-        scannedTracks,
+        combinedTracksFlow,
         persistenceRepository.observeRecentlyPlayed(limit = 50),
         persistenceRepository.observeAllFavorites(),
         preferencesRepository.preferencesFlow,
-        isScanning,
-    ) { tracks, history, favorites, prefs, scanning ->
+        combine(isScanning, optimisticFavorites) { scanning, optimistic -> scanning to optimistic },
+    ) { tracks, history, favorites, prefs, (scanning, optimistic) ->
         LibraryProjector.buildSnapshot(
             allTracks = tracks,
             historyRecords = history,
             favoriteRecords = favorites,
+            optimisticFavorites = optimistic,
             persistedSafTreeUris = prefs.persistedSafTreeUris,
             isScanning = scanning,
             scanWarning = scanWarning.value,
@@ -66,43 +97,147 @@ class LocalLibraryRepository(
         initialValue = LibrarySnapshot(),
     )
 
+    /**
+     * Runs an incremental background library synchronization without ever clearing the displayed
+     * track list. Only newly added or modified (`size` / `dateModified`) files incur metadata parsing.
+     */
     suspend fun refreshLibrary() = withContext(Dispatchers.IO) {
-        isScanning.value = true
-        scanWarning.value = null
-        try {
-            val prefs = runCatching { preferencesRepository.getSnapshot() }.getOrNull()
-            val mediaStoreList = scanMediaStore()
-            val safTreeList = prefs?.persistedSafTreeUris
-                ?.flatMap { uriStr -> scanSafTree(uriStr.toUri()) }
-                .orEmpty()
-            val safFileList = prefs?.persistedSafFileUris
-                ?.mapNotNull { uriStr -> scanSingleSafFile(uriStr.toUri()) }
-                .orEmpty()
+        syncMutex.withLock {
+            isScanning.value = true
+            scanWarning.value = null
+            try {
+                val cachedEntities = persistenceRepository.getAllCachedTracks()
+                val cachedByUri = cachedEntities.associateBy { it.uriString }
+                val cachedSignatures = cachedEntities.map { entity ->
+                    CachedTrackSignature(
+                        track = entity.toPlaybackTrack(),
+                        sourceKind = CachedTrackSourceKind.fromStoredName(entity.sourceKind),
+                    )
+                }
 
-            scannedTracks.value = LibraryProjector.mergeAndDeduplicate(
-                mediaStoreTracks = mediaStoreList,
-                safTracks = safTreeList + safFileList,
-            )
-        } catch (e: Exception) {
-            scanWarning.value = "Library scan issue: ${e.message}"
-        } finally {
-            isScanning.value = false
+                val prefs = runCatching { preferencesRepository.getSnapshot() }.getOrNull()
+                val discoveredSignatures = mutableListOf<DiscoveredAudioSignature>()
+                val scannedSources = linkedSetOf<CachedTrackSourceKind>()
+
+                // 1. Fast MediaStore scan pass (does not run per-file header parsing yet).
+                val mediaStorePass = discoverMediaStoreCandidates()
+                if (mediaStorePass.permissionGranted) {
+                    scannedSources.add(CachedTrackSourceKind.MEDIA_STORE)
+                    mediaStorePass.candidates.forEach { item ->
+                        discoveredSignatures.add(
+                            DiscoveredAudioSignature(
+                                uriString = item.uriString,
+                                fileSizeBytes = item.sizeBytes,
+                                dateModifiedSeconds = item.dateModifiedSeconds,
+                                sourceKind = CachedTrackSourceKind.MEDIA_STORE,
+                            ),
+                        )
+                    }
+                }
+
+                // 2. Fast SAF tree & single-file discovery pass.
+                val safTreeDiscovered = mutableListOf<DiscoveredSafEntry>()
+                prefs?.persistedSafTreeUris?.forEach { uriStr ->
+                    safTreeDiscovered.addAll(discoverSafTreeCandidates(uriStr.toUri()))
+                }
+                scannedSources.add(CachedTrackSourceKind.SAF_TREE)
+                safTreeDiscovered.forEach { entry ->
+                    discoveredSignatures.add(
+                        DiscoveredAudioSignature(
+                            uriString = entry.uriString,
+                            fileSizeBytes = entry.sizeBytes,
+                            dateModifiedSeconds = entry.dateModifiedSeconds,
+                            sourceKind = CachedTrackSourceKind.SAF_TREE,
+                        ),
+                    )
+                }
+
+                val safFileDiscovered = mutableListOf<DiscoveredSafEntry>()
+                prefs?.persistedSafFileUris?.forEach { uriStr ->
+                    discoverSingleSafFileCandidate(uriStr.toUri())?.let { safFileDiscovered.add(it) }
+                }
+                scannedSources.add(CachedTrackSourceKind.SAF_FILE)
+                safFileDiscovered.forEach { entry ->
+                    discoveredSignatures.add(
+                        DiscoveredAudioSignature(
+                            uriString = entry.uriString,
+                            fileSizeBytes = entry.sizeBytes,
+                            dateModifiedSeconds = entry.dateModifiedSeconds,
+                            sourceKind = CachedTrackSourceKind.SAF_FILE,
+                        ),
+                    )
+                }
+
+                // 3. Diff against Room cache: parse ONLY added/modified entries, prune ONLY deleted ones.
+                val plan = LibrarySyncDiffer.computePlan(
+                    cached = cachedSignatures,
+                    discovered = discoveredSignatures,
+                    scannedSourceKinds = scannedSources,
+                )
+
+                val nowEpoch = System.currentTimeMillis()
+                val entitiesToUpsert = mutableListOf<CachedTrackEntity>()
+
+                // Parse only new/changed MediaStore files
+                for (candidate in mediaStorePass.candidates) {
+                    if (candidate.uriString !in plan.toParseUris) continue
+                    val prevFp = cachedByUri[candidate.uriString]?.contentFingerprint
+                    entitiesToUpsert.add(
+                        parseMediaStoreCandidate(candidate, existingFingerprint = prevFp)
+                            .toCachedEntity(CachedTrackSourceKind.MEDIA_STORE, nowEpoch),
+                    )
+                }
+
+                // Parse only new/changed SAF tree files
+                for (entry in safTreeDiscovered) {
+                    if (entry.uriString !in plan.toParseUris) continue
+                    val prevFp = cachedByUri[entry.uriString]?.contentFingerprint
+                    entitiesToUpsert.add(
+                        parseSafEntry(entry, existingFingerprint = prevFp)
+                            .toCachedEntity(CachedTrackSourceKind.SAF_TREE, nowEpoch),
+                    )
+                }
+
+                // Parse only new/changed single SAF files
+                for (entry in safFileDiscovered) {
+                    if (entry.uriString !in plan.toParseUris) continue
+                    val prevFp = cachedByUri[entry.uriString]?.contentFingerprint
+                    entitiesToUpsert.add(
+                        parseSafEntry(entry, existingFingerprint = prevFp)
+                            .toCachedEntity(CachedTrackSourceKind.SAF_FILE, nowEpoch),
+                    )
+                }
+
+                if (entitiesToUpsert.isNotEmpty()) {
+                    persistenceRepository.upsertCachedTracks(entitiesToUpsert)
+                }
+                if (plan.toPruneUris.isNotEmpty()) {
+                    persistenceRepository.deleteCachedTracksByUris(plan.toPruneUris)
+                }
+            } catch (e: Exception) {
+                scanWarning.value = "Library sync issue: ${e.message}"
+            } finally {
+                isScanning.value = false
+            }
         }
     }
 
     suspend fun importSafFolder(treeUri: Uri): Int = withContext(Dispatchers.IO) {
         takePersistableReadPermissionDefensively(treeUri)
         preferencesRepository.addPersistedSafTreeUri(treeUri.toString())
-        val added = scanSafTree(treeUri)
+        val discovered = discoverSafTreeCandidates(treeUri)
         refreshLibrary()
-        added.size
+        discovered.size
     }
 
     suspend fun importSafAudioFile(fileUri: Uri): PlaybackTrack? = withContext(Dispatchers.IO) {
         takePersistableReadPermissionDefensively(fileUri)
-        val parsed = scanSingleSafFile(fileUri) ?: return@withContext null
+        val candidate = discoverSingleSafFileCandidate(fileUri) ?: return@withContext null
+        val parsed = parseSafEntry(candidate, existingFingerprint = null)
         preferencesRepository.addPersistedSafFileUri(fileUri.toString())
-        refreshLibrary()
+        persistenceRepository.upsertCachedTracks(
+            listOf(parsed.toCachedEntity(CachedTrackSourceKind.SAF_FILE, System.currentTimeMillis())),
+        )
         parsed
     }
 
@@ -111,30 +246,61 @@ class LocalLibraryRepository(
         refreshLibrary()
     }
 
-    suspend fun toggleFavorite(track: PlaybackTrack): Boolean = withContext(Dispatchers.IO) {
-        val fp = track.contentFingerprint?.takeIf { it.isNotBlank() }
-            ?: fingerprintProvider.computeFingerprint(track.uriString.toUri()).getOrNull()
-            ?: return@withContext false
+    /**
+     * Immediately toggles the heart icon via optimistic state (next-frame UI update across Library,
+     * Now Playing, and Favorites tab) and persists to Room asynchronously on `Dispatchers.IO`,
+     * rolling back only if fingerprint/DB persistence fails.
+     */
+    suspend fun toggleFavorite(track: PlaybackTrack): Result<Boolean> {
+        val currentSnapshot = librarySnapshot.value
+        val currentlyFavorite = FavoriteStateReducer.isFavorited(
+            track = track,
+            favoriteUris = currentSnapshot.favoriteUris,
+            favoriteFingerprints = currentSnapshot.favoriteFingerprints,
+        )
+        val targetFavorite = !currentlyFavorite
 
-        // Cache resolved fingerprint into in-memory library list for instant UI updates.
-        if (track.contentFingerprint == null) {
-            scannedTracks.value = scannedTracks.value.map { item ->
-                if (item.uriString == track.uriString) item.copy(contentFingerprint = fp) else item
+        // 1. Immediate optimistic UI update (zero wait for SHA-256 or disk I/O).
+        optimisticFavorites.update { it + (track.uriString to targetFavorite) }
+
+        return withContext(Dispatchers.IO) {
+            try {
+                val fp = track.contentFingerprint?.takeIf { it.isNotBlank() }
+                    ?: fingerprintProvider.computeFingerprint(track.uriString.toUri()).getOrNull()
+                    ?: throw IllegalStateException("Unable to read audio file for fingerprint")
+
+                // Persist resolved fingerprint into cached_tracks so future operations are instant.
+                if (track.contentFingerprint == null) {
+                    persistenceRepository.updateCachedTrackFingerprint(track.uriString, fp)
+                }
+
+                persistenceRepository.setFavorite(
+                    record = FavoriteTrackRecord(
+                        contentFingerprint = fp,
+                        trackUri = track.uriString,
+                        title = track.title,
+                        artist = track.artist,
+                        album = track.album,
+                        fileName = track.fileName,
+                        durationMs = track.durationMs,
+                        addedAtEpochMs = System.currentTimeMillis(),
+                    ),
+                    targetFavorite = targetFavorite,
+                )
+
+                // Clear override only if it still reflects our target state (respect newer taps).
+                optimisticFavorites.update { current ->
+                    if (current[track.uriString] == targetFavorite) current - track.uriString else current
+                }
+                Result.success(targetFavorite)
+            } catch (e: Exception) {
+                // Roll back optimistic toggle on persistence failure.
+                optimisticFavorites.update { current ->
+                    if (current[track.uriString] == targetFavorite) current - track.uriString else current
+                }
+                Result.failure(e)
             }
         }
-
-        persistenceRepository.toggleFavorite(
-            FavoriteTrackRecord(
-                contentFingerprint = fp,
-                trackUri = track.uriString,
-                title = track.title,
-                artist = track.artist,
-                album = track.album,
-                fileName = track.fileName,
-                durationMs = track.durationMs,
-                addedAtEpochMs = System.currentTimeMillis(),
-            ),
-        )
     }
 
     private fun takePersistableReadPermissionDefensively(uri: Uri) {
@@ -146,8 +312,41 @@ class LocalLibraryRepository(
         }
     }
 
-    private fun scanMediaStore(): List<PlaybackTrack> {
-        val results = mutableListOf<PlaybackTrack>()
+    private data class MediaStoreDiscoveryResult(
+        val permissionGranted: Boolean,
+        val candidates: List<RawMediaStoreCandidate>,
+    )
+
+    private data class RawMediaStoreCandidate(
+        val uri: Uri,
+        val uriString: String,
+        val displayName: String,
+        val mimeType: String?,
+        val format: SupportedAudioFormat,
+        val sizeBytes: Long,
+        val dateModifiedSeconds: Long,
+        val durationMs: Long,
+        val rawTitle: String?,
+        val rawArtist: String?,
+        val rawAlbum: String?,
+        val folderName: String,
+        val relativePath: String?,
+    )
+
+    private data class DiscoveredSafEntry(
+        val uri: Uri,
+        val uriString: String,
+        val fileName: String,
+        val mimeType: String?,
+        val format: SupportedAudioFormat,
+        val sizeBytes: Long,
+        val dateModifiedSeconds: Long,
+        val folderLabel: String,
+        val parentTreeUriString: String?,
+    )
+
+    private fun discoverMediaStoreCandidates(): MediaStoreDiscoveryResult {
+        val results = mutableListOf<RawMediaStoreCandidate>()
         val projection = buildList {
             add(MediaStore.Audio.Media._ID)
             add(MediaStore.Audio.Media.DISPLAY_NAME)
@@ -156,6 +355,7 @@ class LocalLibraryRepository(
             add(MediaStore.Audio.Media.ALBUM)
             add(MediaStore.Audio.Media.DURATION)
             add(MediaStore.Audio.Media.SIZE)
+            add(MediaStore.Audio.Media.DATE_MODIFIED)
             add(MediaStore.Audio.Media.MIME_TYPE)
             add(MediaStore.Audio.Media.IS_MUSIC)
             add(MediaStore.Audio.Media.IS_RINGTONE)
@@ -183,7 +383,7 @@ class LocalLibraryRepository(
         }
         val sortOrder = "${MediaStore.Audio.Media.TITLE} ASC"
 
-        try {
+        return try {
             appContext.contentResolver.query(
                 MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
                 projection,
@@ -198,6 +398,7 @@ class LocalLibraryRepository(
                 val albumCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM)
                 val durationCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
                 val sizeCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.SIZE)
+                val dateModCol = cursor.getColumnIndex(MediaStore.Audio.Media.DATE_MODIFIED)
                 val mimeCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.MIME_TYPE)
                 val isMusicCol = cursor.getColumnIndex(MediaStore.Audio.Media.IS_MUSIC)
                 val isRingtoneCol = cursor.getColumnIndex(MediaStore.Audio.Media.IS_RINGTONE)
@@ -208,7 +409,6 @@ class LocalLibraryRepository(
                 } else {
                     -1
                 }
-
                 val relPathCol = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     cursor.getColumnIndex(MediaStore.Audio.Media.RELATIVE_PATH)
                 } else {
@@ -233,6 +433,7 @@ class LocalLibraryRepository(
                     val format = AudioFormatClassifier.classify(displayName, mimeType) ?: continue
 
                     val sizeBytes = cursor.getLong(sizeCol).coerceAtLeast(0L)
+                    val dateModifiedSeconds = if (dateModCol >= 0) cursor.getLong(dateModCol).coerceAtLeast(0L) else 0L
                     val durationMs = cursor.getLong(durationCol).coerceAtLeast(0L)
                     val relativePath = if (relPathCol >= 0) cursor.getString(relPathCol)?.trim() else null
                     val bucketName = if (bucketCol >= 0) cursor.getString(bucketCol)?.trim() else null
@@ -258,11 +459,6 @@ class LocalLibraryRepository(
                         MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
                         id,
                     )
-
-                    val rawTitle = cursor.getString(titleCol)?.trim()
-                    val rawArtist = cursor.getString(artistCol)?.trim()
-                    val rawAlbum = cursor.getString(albumCol)?.trim()
-
                     val legacyFolder = legacyDataPath
                         ?.substringBeforeLast('/', "")
                         ?.substringAfterLast('/', "")
@@ -271,65 +467,87 @@ class LocalLibraryRepository(
                         ?: legacyFolder?.takeIf { it.isNotEmpty() }
                         ?: "Internal Storage"
 
-                    val fallbackTitle = AudioFormatClassifier.baseNameWithoutExtension(displayName)
-                        .ifBlank { "Unknown Track" }
-                    val cleanTitle = rawTitle?.takeIf { it.isNotEmpty() && !it.equals("<unknown>", true) }
-                        ?: fallbackTitle
-                    val cleanArtist = rawArtist?.takeIf { it.isNotEmpty() && !it.equals("<unknown>", true) }
-                        ?: "Unknown Artist"
-                    val cleanAlbum = rawAlbum?.takeIf { it.isNotEmpty() && !it.equals("<unknown>", true) }
-                        ?: "Unknown Album"
-
-                    // For lossless WAV/FLAC, read exact header bit depth & sample rate.
-                    var sampleRate = 0
-                    var bitDepth: Int? = null
-                    var resolvedDuration = durationMs
-                    var codec = format.defaultCodecLabel
-                    if (format == SupportedAudioFormat.WAV || format == SupportedAudioFormat.FLAC) {
-                        val meta = metadataReader.readMetadata(
-                            uri = contentUri,
-                            fileName = displayName,
-                            mimeType = mimeType,
-                            fallbackDurationMs = durationMs,
-                        )
-                        sampleRate = meta.sampleRateHz
-                        bitDepth = meta.bitDepth
-                        if (resolvedDuration <= 0L) resolvedDuration = meta.durationMs
-                        codec = meta.codec
-                    }
-
                     results.add(
-                        PlaybackTrack(
+                        RawMediaStoreCandidate(
+                            uri = contentUri,
                             uriString = contentUri.toString(),
-                            title = cleanTitle,
-                            artist = cleanArtist,
-                            album = cleanAlbum,
-                            folderName = folderName,
-                            fileName = displayName.ifBlank { "$cleanTitle.${format.containerLabel.lowercase()}" },
+                            displayName = displayName,
                             mimeType = mimeType,
-                            fileSizeBytes = sizeBytes,
-                            durationMs = resolvedDuration,
-                            sampleRateHz = sampleRate,
-                            bitDepth = bitDepth,
-                            container = format.containerLabel,
-                            codec = codec,
+                            format = format,
+                            sizeBytes = sizeBytes,
+                            dateModifiedSeconds = dateModifiedSeconds,
+                            durationMs = durationMs,
+                            rawTitle = cursor.getString(titleCol)?.trim(),
+                            rawArtist = cursor.getString(artistCol)?.trim(),
+                            rawAlbum = cursor.getString(albumCol)?.trim(),
+                            folderName = folderName,
                             relativePath = relativePath,
                         ),
                     )
                 }
             }
+            MediaStoreDiscoveryResult(permissionGranted = true, candidates = results)
         } catch (_: SecurityException) {
-            // Permission not granted yet; SAF folders/files remain accessible.
+            MediaStoreDiscoveryResult(permissionGranted = false, candidates = emptyList())
         }
-        return results
     }
 
-    private fun scanSafTree(treeUri: Uri): List<PlaybackTrack> {
+    private fun parseMediaStoreCandidate(
+        candidate: RawMediaStoreCandidate,
+        existingFingerprint: String?,
+    ): PlaybackTrack {
+        val fallbackTitle = AudioFormatClassifier.baseNameWithoutExtension(candidate.displayName)
+            .ifBlank { "Unknown Track" }
+        val cleanTitle = candidate.rawTitle?.takeIf { it.isNotEmpty() && !it.equals("<unknown>", true) }
+            ?: fallbackTitle
+        val cleanArtist = candidate.rawArtist?.takeIf { it.isNotEmpty() && !it.equals("<unknown>", true) }
+            ?: "Unknown Artist"
+        val cleanAlbum = candidate.rawAlbum?.takeIf { it.isNotEmpty() && !it.equals("<unknown>", true) }
+            ?: "Unknown Album"
+
+        var sampleRate = 0
+        var bitDepth: Int? = null
+        var resolvedDuration = candidate.durationMs
+        var codec = candidate.format.defaultCodecLabel
+
+        // Parse full headers for newly added/changed lossless files (and sample rate for lossy files).
+        val meta = metadataReader.readMetadata(
+            uri = candidate.uri,
+            fileName = candidate.displayName,
+            mimeType = candidate.mimeType,
+            fallbackDurationMs = candidate.durationMs,
+        )
+        sampleRate = meta.sampleRateHz
+        bitDepth = meta.bitDepth
+        if (resolvedDuration <= 0L) resolvedDuration = meta.durationMs
+        codec = meta.codec
+
+        return PlaybackTrack(
+            uriString = candidate.uriString,
+            title = cleanTitle,
+            artist = cleanArtist,
+            album = cleanAlbum,
+            folderName = candidate.folderName,
+            fileName = candidate.displayName.ifBlank { "$cleanTitle.${candidate.format.containerLabel.lowercase()}" },
+            mimeType = candidate.mimeType,
+            fileSizeBytes = candidate.sizeBytes,
+            dateModifiedSeconds = candidate.dateModifiedSeconds,
+            durationMs = resolvedDuration,
+            sampleRateHz = sampleRate,
+            bitDepth = bitDepth,
+            container = candidate.format.containerLabel,
+            codec = codec,
+            contentFingerprint = existingFingerprint,
+            relativePath = candidate.relativePath,
+        )
+    }
+
+    private fun discoverSafTreeCandidates(treeUri: Uri): List<DiscoveredSafEntry> {
         val rootDoc = runCatching { DocumentFile.fromTreeUri(appContext, treeUri) }.getOrNull()
             ?: return emptyList()
         if (!rootDoc.exists() || !rootDoc.canRead()) return emptyList()
 
-        val found = mutableListOf<PlaybackTrack>()
+        val found = mutableListOf<DiscoveredSafEntry>()
         val rootFolderName = rootDoc.name?.takeIf { it.isNotBlank() } ?: "SAF Folder"
         traverseDocumentTree(
             dir = rootDoc,
@@ -346,7 +564,7 @@ class LocalLibraryRepository(
         folderLabel: String,
         treeUriString: String,
         depth: Int,
-        out: MutableList<PlaybackTrack>,
+        out: MutableList<DiscoveredSafEntry>,
     ) {
         if (depth > MAX_SAF_TRAVERSAL_DEPTH) return
         val children = runCatching { dir.listFiles() }.getOrDefault(emptyArray())
@@ -358,22 +576,16 @@ class LocalLibraryRepository(
                 val fileName = child.name ?: continue
                 val mime = child.type
                 val format = AudioFormatClassifier.classify(fileName, mime) ?: continue
-                val meta = metadataReader.readMetadata(child.uri, fileName, mime)
                 out.add(
-                    PlaybackTrack(
+                    DiscoveredSafEntry(
+                        uri = child.uri,
                         uriString = child.uri.toString(),
-                        title = meta.title,
-                        artist = meta.artist,
-                        album = meta.album,
-                        folderName = folderLabel,
                         fileName = fileName,
                         mimeType = mime,
-                        fileSizeBytes = child.length().coerceAtLeast(0L),
-                        durationMs = meta.durationMs,
-                        sampleRateHz = meta.sampleRateHz,
-                        bitDepth = meta.bitDepth,
-                        container = format.containerLabel,
-                        codec = meta.codec,
+                        format = format,
+                        sizeBytes = child.length().coerceAtLeast(0L),
+                        dateModifiedSeconds = (child.lastModified() / 1000L).coerceAtLeast(0L),
+                        folderLabel = folderLabel,
                         parentTreeUriString = treeUriString,
                     ),
                 )
@@ -381,28 +593,48 @@ class LocalLibraryRepository(
         }
     }
 
-    private fun scanSingleSafFile(fileUri: Uri): PlaybackTrack? {
+    private fun discoverSingleSafFileCandidate(fileUri: Uri): DiscoveredSafEntry? {
         val doc = runCatching { DocumentFile.fromSingleUri(appContext, fileUri) }.getOrNull()
             ?: return null
         if (!doc.exists() || !doc.canRead()) return null
         val fileName = doc.name ?: fileUri.lastPathSegment?.substringAfterLast('/') ?: return null
         val mime = doc.type ?: appContext.contentResolver.getType(fileUri)
         val format = AudioFormatClassifier.classify(fileName, mime) ?: return null
-        val meta = metadataReader.readMetadata(fileUri, fileName, mime)
-        return PlaybackTrack(
+        return DiscoveredSafEntry(
+            uri = fileUri,
             uriString = fileUri.toString(),
+            fileName = fileName,
+            mimeType = mime,
+            format = format,
+            sizeBytes = doc.length().coerceAtLeast(0L),
+            dateModifiedSeconds = (doc.lastModified() / 1000L).coerceAtLeast(0L),
+            folderLabel = "Imported Files",
+            parentTreeUriString = null,
+        )
+    }
+
+    private fun parseSafEntry(
+        entry: DiscoveredSafEntry,
+        existingFingerprint: String?,
+    ): PlaybackTrack {
+        val meta = metadataReader.readMetadata(entry.uri, entry.fileName, entry.mimeType)
+        return PlaybackTrack(
+            uriString = entry.uriString,
             title = meta.title,
             artist = meta.artist,
             album = meta.album,
-            folderName = "Imported Files",
-            fileName = fileName,
-            mimeType = mime,
-            fileSizeBytes = doc.length().coerceAtLeast(0L),
+            folderName = entry.folderLabel,
+            fileName = entry.fileName,
+            mimeType = entry.mimeType,
+            fileSizeBytes = entry.sizeBytes,
+            dateModifiedSeconds = entry.dateModifiedSeconds,
             durationMs = meta.durationMs,
             sampleRateHz = meta.sampleRateHz,
             bitDepth = meta.bitDepth,
-            container = format.containerLabel,
+            container = entry.format.containerLabel,
             codec = meta.codec,
+            contentFingerprint = existingFingerprint,
+            parentTreeUriString = entry.parentTreeUriString,
         )
     }
 

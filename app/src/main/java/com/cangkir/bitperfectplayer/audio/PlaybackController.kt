@@ -338,6 +338,15 @@ class PlaybackController(
             val resolvedFp = track.contentFingerprint?.takeIf { it.isNotBlank() }
                 ?: fingerprintProvider.computeFingerprint(track.uriString.toUri()).getOrNull()
 
+            if (resolvedFp != null && track.contentFingerprint != resolvedFp) {
+                runCatching {
+                    persistenceRepository.updateCachedTrackFingerprint(
+                        uriString = track.uriString,
+                        fingerprint = resolvedFp,
+                    )
+                }
+            }
+
             if (_state.value.activeTrack?.uriString == track.uriString) {
                 val updatedTrack = if (resolvedFp != null) {
                     track.copy(contentFingerprint = resolvedFp)

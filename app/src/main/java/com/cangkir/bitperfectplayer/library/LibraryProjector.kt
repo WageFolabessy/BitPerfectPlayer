@@ -86,6 +86,7 @@ object LibraryProjector {
         allTracks: List<PlaybackTrack>,
         historyRecords: List<TrackHistoryRecord>,
         favoriteRecords: List<FavoriteTrackRecord>,
+        optimisticFavorites: Map<String, Boolean> = emptyMap(),
         persistedSafTreeUris: Set<String> = emptySet(),
         isScanning: Boolean = false,
         scanWarning: String? = null,
@@ -114,7 +115,7 @@ object LibraryProjector {
                 val albumCount = items.map { it.album }.distinct().size
                 LibraryGroup(
                     name = name,
-                    subtitle = "${items.size} ${if (items.size == 1) "song" else "songs"} • $albumCount ${if (albumCount == 1) "album" else "albums"}",
+                    subtitle = "${items.size} ${if (items.size == 1) "song" else "songs"} · $albumCount ${if (albumCount == 1) "album" else "albums"}",
                     tracks = items,
                 )
             }
@@ -127,7 +128,7 @@ object LibraryProjector {
                 val primaryArtist = items.firstOrNull()?.artist ?: "Unknown Artist"
                 LibraryGroup(
                     name = name,
-                    subtitle = "$primaryArtist • ${items.size} ${if (items.size == 1) "track" else "tracks"}",
+                    subtitle = "$primaryArtist · ${items.size} ${if (items.size == 1) "track" else "tracks"}",
                     tracks = items,
                 )
             }
@@ -138,7 +139,7 @@ object LibraryProjector {
             .associateBy { it.contentFingerprint!!.lowercase() }
         val trackByFileName = sortedSongs.associateBy { it.fileName.lowercase() }
 
-        // Resolve Recently Played entries against currently accessible library tracks (skips moved/deleted missing files gracefully).
+        // Resolve Recently Played entries against currently accessible library tracks.
         val recentlyPlayed = historyRecords
             .sortedByDescending { it.playedAtEpochMs }
             .mapNotNull { rec ->
@@ -150,19 +151,11 @@ object LibraryProjector {
             }
             .distinctBy { it.uriString }
 
-        // Resolve Favorites strictly preferring contentFingerprint match (survives file rename/move!).
-        val favoriteFpSet = favoriteRecords.map { it.contentFingerprint.lowercase() }.toSet()
-        val favoriteUriSet = favoriteRecords.map { it.trackUri }.toSet()
-        val favorites = favoriteRecords
-            .sortedByDescending { it.addedAtEpochMs }
-            .mapNotNull { fav ->
-                val fp = fav.contentFingerprint.lowercase()
-                val match = trackByFp[fp]
-                    ?: trackByUri[fav.trackUri]
-                    ?: trackByFileName[fav.fileName.lowercase()]
-                match?.copy(contentFingerprint = match.contentFingerprint ?: fp)
-            }
-            .distinctBy { it.uriString }
+        val resolvedFavs = FavoriteStateReducer.resolve(
+            allTracks = sortedSongs,
+            persistedFavorites = favoriteRecords,
+            optimisticOverrides = optimisticFavorites,
+        )
 
         return LibrarySnapshot(
             allSongs = sortedSongs,
@@ -170,9 +163,9 @@ object LibraryProjector {
             artists = artists,
             albums = albums,
             recentlyPlayed = recentlyPlayed,
-            favorites = favorites,
-            favoriteFingerprints = favoriteFpSet,
-            favoriteUris = favoriteUriSet + favorites.map { it.uriString },
+            favorites = resolvedFavs.favoriteTracks,
+            favoriteFingerprints = resolvedFavs.favoriteFingerprints,
+            favoriteUris = resolvedFavs.favoriteUris,
             persistedSafTreeUris = persistedSafTreeUris,
             isScanning = isScanning,
             scanWarning = scanWarning,
@@ -185,6 +178,7 @@ object LibraryProjector {
             sampleRateHz = incoming.sampleRateHz.takeIf { it > 0 } ?: base.sampleRateHz,
             bitDepth = incoming.bitDepth ?: base.bitDepth,
             durationMs = incoming.durationMs.takeIf { it > 0L } ?: base.durationMs,
+            dateModifiedSeconds = maxOf(base.dateModifiedSeconds, incoming.dateModifiedSeconds),
             contentFingerprint = incoming.contentFingerprint ?: base.contentFingerprint,
         )
 }

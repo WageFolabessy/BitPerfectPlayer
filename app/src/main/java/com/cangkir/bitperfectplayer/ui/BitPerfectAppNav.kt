@@ -32,6 +32,7 @@ fun BitPerfectAppRoot(
 ) {
     val navController = rememberNavController()
     val libraryState by viewModel.libraryState.collectAsStateWithLifecycle()
+    val favoriteTrackUris by viewModel.favoriteTrackUris.collectAsStateWithLifecycle()
     val playbackState by viewModel.playbackState.collectAsStateWithLifecycle()
     val lyricsUiState by viewModel.lyricsUiState.collectAsStateWithLifecycle()
     val uiMessage by viewModel.uiMessage.collectAsStateWithLifecycle()
@@ -51,6 +52,7 @@ fun BitPerfectAppRoot(
             composable(Routes.LIBRARY) {
                 LibraryScreen(
                     libraryState = libraryState,
+                    favoriteTrackUris = favoriteTrackUris,
                     playbackState = playbackState,
                     onRefreshLibrary = viewModel::refreshLibrary,
                     onImportFolder = viewModel::importSafFolder,
@@ -61,7 +63,6 @@ fun BitPerfectAppRoot(
                     onEnqueueTrack = viewModel::enqueueTrack,
                     onEnqueueNext = viewModel::enqueueTrackNext,
                     onToggleFavorite = viewModel::toggleFavorite,
-                    isTrackFavorite = viewModel::isTrackFavorite,
                     onOpenNowPlaying = {
                         navController.navigate(Routes.NOW_PLAYING) { launchSingleTop = true }
                     },
@@ -78,7 +79,10 @@ fun BitPerfectAppRoot(
 
             composable(Routes.NOW_PLAYING) {
                 val activeTrack = playbackState.activeTrack
-                val isFav = activeTrack != null && viewModel.isTrackFavorite(activeTrack)
+                val isFav = activeTrack != null && (
+                    activeTrack.uriString in favoriteTrackUris ||
+                        activeTrack.contentFingerprint?.lowercase()?.let { it in libraryState.favoriteFingerprints } == true
+                    )
                 NowPlayingScreen(
                     playbackState = playbackState,
                     isFavorite = isFav,

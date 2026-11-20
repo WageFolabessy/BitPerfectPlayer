@@ -103,6 +103,7 @@ enum class LibraryTab(val label: String) {
 @Composable
 fun LibraryScreen(
     libraryState: LibrarySnapshot,
+    favoriteTrackUris: Set<String>,
     playbackState: PlaybackControllerState,
     onRefreshLibrary: () -> Unit,
     onImportFolder: (android.net.Uri) -> Unit,
@@ -111,13 +112,16 @@ fun LibraryScreen(
     onEnqueueTrack: (PlaybackTrack) -> Unit,
     onEnqueueNext: (PlaybackTrack) -> Unit,
     onToggleFavorite: (PlaybackTrack) -> Unit,
-    isTrackFavorite: (PlaybackTrack) -> Boolean,
     onOpenNowPlaying: () -> Unit,
     onOpenQueue: () -> Unit,
     onOpenDiagnostics: () -> Unit,
     onTogglePlayPause: () -> Unit,
     onNext: () -> Unit,
 ) {
+    val isTrackFavorite: (PlaybackTrack) -> Boolean = { track ->
+        track.uriString in favoriteTrackUris ||
+            track.contentFingerprint?.lowercase()?.let { it in libraryState.favoriteFingerprints } == true
+    }
     val context = LocalContext.current
     var selectedTab by rememberSaveable { mutableStateOf(LibraryTab.ALL_SONGS) }
     var searchQuery by rememberSaveable { mutableStateOf("") }

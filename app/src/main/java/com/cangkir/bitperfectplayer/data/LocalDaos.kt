@@ -7,6 +7,24 @@ import androidx.room.Query
 import kotlinx.coroutines.flow.Flow
 
 @Dao
+interface CachedTrackDao {
+    @Query("SELECT * FROM cached_tracks ORDER BY title COLLATE NOCASE ASC")
+    fun observeAll(): Flow<List<CachedTrackEntity>>
+
+    @Query("SELECT * FROM cached_tracks")
+    suspend fun getAll(): List<CachedTrackEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertAll(entities: List<CachedTrackEntity>)
+
+    @Query("UPDATE cached_tracks SET content_fingerprint = :fingerprint WHERE uri_string = :uriString")
+    suspend fun updateFingerprint(uriString: String, fingerprint: String)
+
+    @Query("DELETE FROM cached_tracks WHERE uri_string IN (:uris)")
+    suspend fun deleteByUris(uris: List<String>): Int
+}
+
+@Dao
 interface LyricsDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(entity: LyricsEntity)
@@ -49,6 +67,9 @@ interface FavoriteTrackDao {
 
     @Query("DELETE FROM favorite_tracks WHERE content_fingerprint = :fingerprint")
     suspend fun deleteByFingerprint(fingerprint: String): Int
+
+    @Query("DELETE FROM favorite_tracks WHERE track_uri = :trackUri")
+    suspend fun deleteByTrackUri(trackUri: String): Int
 
     @Query("SELECT EXISTS(SELECT 1 FROM favorite_tracks WHERE content_fingerprint = :fingerprint)")
     suspend fun isFavorite(fingerprint: String): Boolean

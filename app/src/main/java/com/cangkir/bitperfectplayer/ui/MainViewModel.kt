@@ -10,9 +10,12 @@ import com.cangkir.bitperfectplayer.audio.PlaybackTrack
 import com.cangkir.bitperfectplayer.library.LibrarySnapshot
 import com.cangkir.bitperfectplayer.lyrics.TrackLyricsState
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChangedBy
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -34,6 +37,18 @@ class MainViewModel(
     val libraryState: StateFlow<LibrarySnapshot> = container.libraryRepository.librarySnapshot
     val playbackState: StateFlow<PlaybackControllerState> = container.playbackController.state
 
+    /**
+     * Single reactive source of truth for favorited track URIs (Room Flow + instant optimistic
+     * toggle overrides), observed directly by LibraryScreen, NowPlayingScreen, and Favorites tab.
+     */
+    val favoriteTrackUris: StateFlow<Set<String>> = libraryState
+        .map { it.favoriteUris }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.Eagerly,
+            initialValue = libraryState.value.favoriteUris,
+        )
+
     private val _lyricsUiState = MutableStateFlow(LyricsUiState())
     val lyricsUiState: StateFlow<LyricsUiState> = _lyricsUiState.asStateFlow()
 
@@ -41,12 +56,13 @@ class MainViewModel(
     val uiMessage: StateFlow<String?> = _uiMessage.asStateFlow()
 
     init {
+        // Trigger incremental background sync while cached tracks from Room render immediately.
         refreshLibrary()
 
-        // Restore last playback session once library loads.
+        // Restore last playback session as soon as cached or synced tracks are available.
         viewModelScope.launch {
             libraryState.collect { snapshot ->
-                if (!snapshot.isScanning && snapshot.allSongs.isNotEmpty()) {
+                if (snapshot.allSongs.isNotEmpty()) {
                     container.playbackController.restoreLastSessionIfNeeded(snapshot.allSongs)
                 }
             }
@@ -159,15 +175,11 @@ class MainViewModel(
 
     fun toggleFavorite(track: PlaybackTrack) {
         viewModelScope.launch {
-            val nowFav = container.libraryRepository.toggleFavorite(track)
-            _uiMessage.value = if (nowFav) "Added to Favorites" else "Removed from Favorites"
+            val result = container.libraryRepository.toggleFavorite(track)
+            result.onFailure {
+                _uiMessage.value = "Unable to update favorite status"
+            }
         }
-    }
-
-    fun isTrackFavorite(track: PlaybackTrack): Boolean {
-        val snap = libraryState.value
-        val fp = track.contentFingerprint?.lowercase()
-        return (fp != null && fp in snap.favoriteFingerprints) || track.uriString in snap.favoriteUris
     }
 
     fun importLrcForActiveTrack(lrcUri: Uri) {
