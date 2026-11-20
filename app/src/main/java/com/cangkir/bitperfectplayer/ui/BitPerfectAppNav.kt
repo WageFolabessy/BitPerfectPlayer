@@ -35,7 +35,9 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.cangkir.bitperfectplayer.audio.BrowsingQueueContext
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
+import com.cangkir.bitperfectplayer.audio.QueueSourceType
 import com.cangkir.bitperfectplayer.ui.theme.IcePrimaryContainer
 import com.cangkir.bitperfectplayer.ui.theme.TextMuted
 
@@ -84,6 +86,7 @@ fun BitPerfectAppRoot(
     val playlistsState by viewModel.playlistsState.collectAsStateWithLifecycle()
     val favoriteTrackUris by viewModel.favoriteTrackUris.collectAsStateWithLifecycle()
     val playbackState by viewModel.playbackState.collectAsStateWithLifecycle()
+    val browsingQueueContext by viewModel.browsingQueueContext.collectAsStateWithLifecycle()
     val lyricsUiState by viewModel.lyricsUiState.collectAsStateWithLifecycle()
     val trackInfoState by viewModel.trackInfoState.collectAsStateWithLifecycle()
     val uiMessage by viewModel.uiMessage.collectAsStateWithLifecycle()
@@ -105,8 +108,14 @@ fun BitPerfectAppRoot(
     val openNowPlaying = remember(navController) {
         { navController.navigate(Routes.NOW_PLAYING) { launchSingleTop = true } }
     }
-    val openQueue = remember(navController) {
-        { navController.navigate(Routes.QUEUE) { launchSingleTop = true } }
+    val openQueueWithContext = remember(navController, viewModel) {
+        { browsingContext: BrowsingQueueContext? ->
+            viewModel.prepareQueueScreenContext(browsingContext)
+            navController.navigate(Routes.QUEUE) { launchSingleTop = true }
+        }
+    }
+    val openQueueDefault = remember(openQueueWithContext) {
+        { openQueueWithContext(null) }
     }
     val openDiagnostics = remember(navController) {
         { navController.navigate(Routes.DIAGNOSTICS) { launchSingleTop = true } }
@@ -198,15 +207,19 @@ fun BitPerfectAppRoot(
                     albumArtworkLoader = viewModel.albumArtworkLoader,
                     onRefreshLibrary = viewModel::refreshLibrary,
                     onImportFolder = viewModel::importSafFolder,
-                    onPlayTracks = { tracks, index ->
-                        viewModel.playTracks(tracks, index)
+                    onPlayTracks = { tracks, index, context ->
+                        viewModel.playTracks(tracks, index, context)
                     },
                     onEnqueueTrack = viewModel::enqueueTrack,
                     onEnqueueNext = viewModel::enqueueTrackNext,
+                    onEnqueueTracks = viewModel::enqueueTracks,
+                    onEnqueueTracksNext = viewModel::enqueueTracksNext,
+                    onSetTrackSort = viewModel::setTrackSort,
+                    onSetGroupSort = viewModel::setGroupSort,
                     onAddToPlaylist = openAddToPlaylist,
                     onShowTrackInfo = viewModel::openTrackInfo,
                     onToggleFavorite = viewModel::toggleFavorite,
-                    onOpenQueue = openQueue,
+                    onOpenQueue = openQueueWithContext,
                     onOpenDiagnostics = openDiagnostics,
                 )
             }
@@ -216,9 +229,13 @@ fun BitPerfectAppRoot(
                     playlistsState = playlistsState,
                     activeTrackUri = playbackState.activeTrack?.uriString,
                     albumArtworkLoader = viewModel.albumArtworkLoader,
-                    onPlayTracks = { tracks, index ->
-                        viewModel.playTracks(tracks, index)
+                    onPlayTracks = { tracks, index, context ->
+                        viewModel.playTracks(tracks, index, context)
                     },
+                    onEnqueueTracks = viewModel::enqueueTracks,
+                    onEnqueueTracksNext = viewModel::enqueueTracksNext,
+                    onSetPlaylistSort = viewModel::setTrackSort,
+                    onOpenQueue = openQueueWithContext,
                     onCreatePlaylist = viewModel::createPlaylist,
                     onRenamePlaylist = viewModel::renamePlaylist,
                     onDeletePlaylist = viewModel::deletePlaylist,
@@ -277,7 +294,7 @@ fun BitPerfectAppRoot(
                     onDismissSafetyWarning = viewModel::dismissSafetyWarning,
                     onSwitchToSafeMode = viewModel::switchToSafeMode,
                     onClearAutoPauseNotice = viewModel::clearAutoPauseNotice,
-                    onOpenQueue = openQueue,
+                    onOpenQueue = openQueueDefault,
                     onOpenLyrics = {
                         navController.navigate(Routes.LYRICS) { launchSingleTop = true }
                     },
@@ -286,12 +303,33 @@ fun BitPerfectAppRoot(
             }
 
             composable(Routes.QUEUE) {
+                val activeContextTracks = remember(playbackState.queueContext, libraryState, playlistsState) {
+                    val ctx = playbackState.queueContext
+                    val key = ctx.sourceKey ?: ctx.sourceLabel
+                    when (ctx.sourceType) {
+                        QueueSourceType.ALBUM -> libraryState.albums.firstOrNull { it.name == key }?.tracks.orEmpty()
+                        QueueSourceType.ARTIST -> libraryState.artists.firstOrNull { it.name == key }?.tracks.orEmpty()
+                        QueueSourceType.FOLDER -> libraryState.folders.firstOrNull { it.name == key }?.tracks.orEmpty()
+                        QueueSourceType.PLAYLIST -> playlistsState.playlists.firstOrNull { it.id.toString() == key }?.tracks.orEmpty()
+                        QueueSourceType.RECENT -> libraryState.recentlyPlayed
+                        QueueSourceType.FAVORITES -> libraryState.favorites
+                        QueueSourceType.CUSTOM -> if (ctx.sourceKey == com.cangkir.bitperfectplayer.audio.QueueContext.MOST_PLAYED_KEY) {
+                            playlistsState.mostPlayed.map { it.track }
+                        } else {
+                            emptyList()
+                        }
+                        QueueSourceType.ALL_SONGS -> emptyList()
+                    }
+                }
                 QueueScreen(
                     playbackState = playbackState,
                     libraryTracks = libraryState.allSongs,
+                    browsingContext = browsingQueueContext,
+                    activeContextTracks = activeContextTracks,
                     albumArtworkLoader = viewModel.albumArtworkLoader,
                     onBack = { navController.popBackStack() },
                     onSelectQueueIndex = viewModel::playTrackAtQueueIndex,
+                    onLoadBrowsingContext = viewModel::loadBrowsingContextQueue,
                     onAddTrackToQueue = viewModel::enqueueTrack,
                     onRemoveQueueItem = viewModel::removeQueueItem,
                     onMoveQueueItem = viewModel::moveQueueItem,

@@ -5,15 +5,21 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.cangkir.bitperfectplayer.AppContainer
+import com.cangkir.bitperfectplayer.audio.BrowsingQueueContext
 import com.cangkir.bitperfectplayer.audio.PlaybackControllerState
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
+import com.cangkir.bitperfectplayer.audio.QueueContext
 import com.cangkir.bitperfectplayer.audio.ReplayGainMode
 import com.cangkir.bitperfectplayer.audio.SleepTimerPreset
 import com.cangkir.bitperfectplayer.audio.SleepTimerState
 import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
+import com.cangkir.bitperfectplayer.library.GroupSortScope
+import com.cangkir.bitperfectplayer.library.GroupSortSpec
 import com.cangkir.bitperfectplayer.library.LibrarySnapshot
 import com.cangkir.bitperfectplayer.library.PlaylistsUiSnapshot
 import com.cangkir.bitperfectplayer.library.ResolvedPlaylist
+import com.cangkir.bitperfectplayer.library.TrackSortScope
+import com.cangkir.bitperfectplayer.library.TrackSortSpec
 import com.cangkir.bitperfectplayer.library.TrackTechnicalInfo
 import com.cangkir.bitperfectplayer.lyrics.TrackLyricsState
 import kotlinx.coroutines.Job
@@ -21,6 +27,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -68,6 +75,9 @@ class MainViewModel(
     val trackInfoState: StateFlow<TrackTechnicalInfo?> = _trackInfoState.asStateFlow()
     private var trackInfoJob: Job? = null
 
+    private val _browsingQueueContext = MutableStateFlow<BrowsingQueueContext?>(null)
+    val browsingQueueContext: StateFlow<BrowsingQueueContext?> = _browsingQueueContext.asStateFlow()
+
     private val _uiMessage = MutableStateFlow<String?>(null)
     val uiMessage: StateFlow<String?> = _uiMessage.asStateFlow()
 
@@ -75,13 +85,18 @@ class MainViewModel(
         // Trigger incremental background sync while cached tracks from Room render immediately.
         refreshLibrary()
 
-        // Restore last playback session as soon as cached or synced tracks are available.
+        // Restore last playback session with its exact saved QueueContext (Album/Artist/Folder/Playlist/etc.)
+        // as soon as cached or synced tracks + playlists are available.
         viewModelScope.launch {
-            libraryState.collect { snapshot ->
-                if (snapshot.allSongs.isNotEmpty()) {
-                    container.playbackController.restoreLastSessionIfNeeded(snapshot.allSongs)
+            combine(libraryState, playlistsState) { lib, pl -> lib to pl }
+                .collect { (library, playlists) ->
+                    if (library.allSongs.isNotEmpty()) {
+                        container.playbackController.restoreLastSessionIfNeeded(
+                            library = library,
+                            playlists = playlists,
+                        )
+                    }
                 }
-            }
         }
 
         // Automatically resolve fingerprint-bound lyrics whenever the active track changes.
@@ -135,8 +150,41 @@ class MainViewModel(
         }
     }
 
-    fun playTracks(tracks: List<PlaybackTrack>, startIndex: Int = 0) {
-        container.playbackController.playQueue(tracks, startIndex = startIndex, autoPlay = true)
+    fun playTracks(
+        tracks: List<PlaybackTrack>,
+        startIndex: Int = 0,
+        context: QueueContext = QueueContext.allSongs(),
+    ) {
+        container.playbackController.playQueue(
+            tracks = tracks,
+            startIndex = startIndex,
+            autoPlay = true,
+            context = context,
+        )
+    }
+
+    /**
+     * Records the viewed Album/Artist/Folder/Playlist context when opening `QueueScreen` and, if
+     * playback is currently `IDLE` with an empty queue, prepares that context paused automatically.
+     */
+    fun prepareQueueScreenContext(browsingContext: BrowsingQueueContext?) {
+        _browsingQueueContext.value = browsingContext
+        if (browsingContext != null && browsingContext.tracks.isNotEmpty()) {
+            container.playbackController.prepareContextQueueIfIdle(
+                tracks = browsingContext.tracks,
+                context = browsingContext.context,
+            )
+        }
+    }
+
+    fun loadBrowsingContextQueue(browsingContext: BrowsingQueueContext) {
+        if (browsingContext.tracks.isEmpty()) return
+        container.playbackController.loadContextQueue(
+            tracks = browsingContext.tracks,
+            context = browsingContext.context,
+            autoPlay = false,
+        )
+        _uiMessage.value = "Loaded ${browsingContext.context.formatCompactLabel()} (${browsingContext.tracks.size} ${if (browsingContext.tracks.size == 1) "track" else "tracks"})"
     }
 
     fun playTrackAtQueueIndex(index: Int) {
@@ -151,6 +199,30 @@ class MainViewModel(
     fun enqueueTrackNext(track: PlaybackTrack) {
         container.playbackController.enqueueNext(track)
         _uiMessage.value = "Queued \"${track.title}\" to play next"
+    }
+
+    fun enqueueTracks(tracks: List<PlaybackTrack>, context: QueueContext) {
+        if (tracks.isEmpty()) return
+        container.playbackController.enqueueAll(tracks, fallbackContext = context)
+        _uiMessage.value = "Added ${tracks.size} ${if (tracks.size == 1) "track" else "tracks"} from \"${context.sourceLabel}\" to queue"
+    }
+
+    fun enqueueTracksNext(tracks: List<PlaybackTrack>, context: QueueContext) {
+        if (tracks.isEmpty()) return
+        container.playbackController.enqueueAllNext(tracks, fallbackContext = context)
+        _uiMessage.value = "Queued ${tracks.size} ${if (tracks.size == 1) "track" else "tracks"} from \"${context.sourceLabel}\" to play next"
+    }
+
+    fun setTrackSort(scope: TrackSortScope, spec: TrackSortSpec) {
+        viewModelScope.launch {
+            container.preferencesRepository.setTrackSort(scope, spec)
+        }
+    }
+
+    fun setGroupSort(scope: GroupSortScope, spec: GroupSortSpec) {
+        viewModelScope.launch {
+            container.preferencesRepository.setGroupSort(scope, spec)
+        }
     }
 
     fun removeQueueItem(index: Int) {

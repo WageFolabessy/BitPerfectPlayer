@@ -31,6 +31,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
+import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.FileOpen
@@ -72,13 +73,19 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.cangkir.bitperfectplayer.audio.BrowsingQueueContext
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
+import com.cangkir.bitperfectplayer.audio.QueueContext
 import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
 import com.cangkir.bitperfectplayer.library.M3u8PlaylistCodec
 import com.cangkir.bitperfectplayer.library.MostPlayedTrackItem
 import com.cangkir.bitperfectplayer.library.PlaylistsUiSnapshot
 import com.cangkir.bitperfectplayer.library.ResolvedPlaylist
 import com.cangkir.bitperfectplayer.library.ResolvedPlaylistEntry
+import com.cangkir.bitperfectplayer.library.SortDirection
+import com.cangkir.bitperfectplayer.library.TrackSortOption
+import com.cangkir.bitperfectplayer.library.TrackSortScope
+import com.cangkir.bitperfectplayer.library.TrackSortSpec
 import com.cangkir.bitperfectplayer.ui.theme.CoralWarning
 import com.cangkir.bitperfectplayer.ui.theme.TextMuted
 
@@ -90,7 +97,11 @@ fun PlaylistsScreen(
     playlistsState: PlaylistsUiSnapshot,
     activeTrackUri: String?,
     albumArtworkLoader: AlbumArtworkLoader,
-    onPlayTracks: (List<PlaybackTrack>, Int) -> Unit,
+    onPlayTracks: (List<PlaybackTrack>, Int, QueueContext) -> Unit,
+    onEnqueueTracks: (List<PlaybackTrack>, QueueContext) -> Unit,
+    onEnqueueTracksNext: (List<PlaybackTrack>, QueueContext) -> Unit,
+    onSetPlaylistSort: (TrackSortScope, TrackSortSpec) -> Unit,
+    onOpenQueue: (BrowsingQueueContext?) -> Unit,
     onCreatePlaylist: (String) -> Unit,
     onRenamePlaylist: (Long, String) -> Unit,
     onDeletePlaylist: (Long, String) -> Unit,
@@ -103,6 +114,7 @@ fun PlaylistsScreen(
     var showMostPlayedDetail by rememberSaveable { mutableStateOf(false) }
 
     var showCreateDialog by remember { mutableStateOf(false) }
+    var showPlaylistSortSheet by remember { mutableStateOf(false) }
     var playlistPendingRename by remember { mutableStateOf<ResolvedPlaylist?>(null) }
     var playlistPendingDelete by remember { mutableStateOf<ResolvedPlaylist?>(null) }
     var playlistPendingExport by remember { mutableStateOf<ResolvedPlaylist?>(null) }
@@ -147,6 +159,15 @@ fun PlaylistsScreen(
         } else {
             showMostPlayedDetail = false
         }
+    }
+
+    if (showPlaylistSortSheet) {
+        TrackSortBottomSheet(
+            scope = TrackSortScope.PLAYLIST_DETAIL,
+            currentSpec = playlistsState.playlistDetailSort,
+            onSelectSpec = { spec -> onSetPlaylistSort(TrackSortScope.PLAYLIST_DETAIL, spec) },
+            onDismiss = { showPlaylistSortSheet = false },
+        )
     }
 
     if (showCreateDialog) {
@@ -274,6 +295,26 @@ fun PlaylistsScreen(
                 actions = {
                     if (openedPlaylist != null) {
                         IconButton(
+                            onClick = {
+                                val ctx = if (openedPlaylist.tracks.isNotEmpty()) {
+                                    BrowsingQueueContext(
+                                        context = QueueContext.playlist(openedPlaylist.id, openedPlaylist.name),
+                                        tracks = openedPlaylist.tracks,
+                                    )
+                                } else {
+                                    null
+                                }
+                                onOpenQueue(ctx)
+                            },
+                            modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.QueueMusic,
+                                contentDescription = "Open playback queue",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        IconButton(
                             onClick = { launchExport(openedPlaylist) },
                             modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
                         ) {
@@ -283,7 +324,29 @@ fun PlaylistsScreen(
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
-                    } else if (!showMostPlayedDetail) {
+                    } else if (showMostPlayedDetail) {
+                        IconButton(
+                            onClick = {
+                                val tracks = playlistsState.mostPlayed.map { it.track }
+                                val ctx = if (tracks.isNotEmpty()) {
+                                    BrowsingQueueContext(
+                                        context = QueueContext.mostPlayed(),
+                                        tracks = tracks,
+                                    )
+                                } else {
+                                    null
+                                }
+                                onOpenQueue(ctx)
+                            },
+                            modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.QueueMusic,
+                                contentDescription = "Open playback queue",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    } else {
                         IconButton(
                             onClick = launchImport,
                             modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
@@ -320,11 +383,21 @@ fun PlaylistsScreen(
         ) {
             when {
                 openedPlaylist != null -> {
+                    val playlistContext = QueueContext.playlist(openedPlaylist.id, openedPlaylist.name)
+                    val canReorderManually = playlistsState.playlistDetailSort.option == TrackSortOption.CUSTOM_ORDER &&
+                        playlistsState.playlistDetailSort.direction == SortDirection.ASC
                     PlaylistDetailView(
                         playlist = openedPlaylist,
+                        sortLabel = playlistsState.playlistDetailSort.compactLabel,
+                        canReorderManually = canReorderManually,
                         activeTrackUri = activeTrackUri,
                         albumArtworkLoader = albumArtworkLoader,
-                        onPlayTracks = onPlayTracks,
+                        onOpenSort = { showPlaylistSortSheet = true },
+                        onPlayTracks = { tracks, index ->
+                            onPlayTracks(tracks, index, playlistContext)
+                        },
+                        onEnqueueAllNext = { onEnqueueTracksNext(openedPlaylist.tracks, playlistContext) },
+                        onEnqueueAll = { onEnqueueTracks(openedPlaylist.tracks, playlistContext) },
                         onMoveEntry = { from, to -> onMovePlaylistEntry(openedPlaylist.id, from, to) },
                         onRemoveEntry = { entryId -> onRemovePlaylistEntry(openedPlaylist.id, entryId) },
                         onExport = { launchExport(openedPlaylist) },
@@ -332,11 +405,16 @@ fun PlaylistsScreen(
                 }
 
                 showMostPlayedDetail -> {
+                    val mpContext = QueueContext.mostPlayed()
                     MostPlayedDetailView(
                         items = playlistsState.mostPlayed,
                         activeTrackUri = activeTrackUri,
                         albumArtworkLoader = albumArtworkLoader,
-                        onPlayTracks = onPlayTracks,
+                        onPlayTracks = { tracks, index ->
+                            onPlayTracks(tracks, index, mpContext)
+                        },
+                        onEnqueueAllNext = { tracks -> onEnqueueTracksNext(tracks, mpContext) },
+                        onEnqueueAll = { tracks -> onEnqueueTracks(tracks, mpContext) },
                     )
                 }
 
@@ -366,7 +444,7 @@ private fun PlaylistsOverviewList(
     activeTrackUri: String?,
     albumArtworkLoader: AlbumArtworkLoader,
     onOpenMostPlayedAll: () -> Unit,
-    onPlayTracks: (List<PlaybackTrack>, Int) -> Unit,
+    onPlayTracks: (List<PlaybackTrack>, Int, QueueContext) -> Unit,
     onOpenPlaylist: (ResolvedPlaylist) -> Unit,
     onCreatePlaylistClick: () -> Unit,
     onImportM3u8Click: () -> Unit,
@@ -402,7 +480,7 @@ private fun PlaylistsOverviewList(
                 )
                 if (mostPlayedTracks.isNotEmpty()) {
                     TextButton(
-                        onClick = { onPlayTracks(mostPlayedTracks, 0) },
+                        onClick = { onPlayTracks(mostPlayedTracks, 0, QueueContext.mostPlayed()) },
                         modifier = Modifier.sizeIn(minHeight = 48.dp),
                     ) {
                         Icon(
@@ -455,7 +533,7 @@ private fun PlaylistsOverviewList(
                     item = item,
                     isActive = item.track.uriString == activeTrackUri,
                     albumArtworkLoader = albumArtworkLoader,
-                    onClick = { onPlayTracks(mostPlayedTracks, index) },
+                    onClick = { onPlayTracks(mostPlayedTracks, index, QueueContext.mostPlayed()) },
                 )
                 HorizontalDivider(
                     thickness = 0.5.dp,
@@ -576,7 +654,11 @@ private fun PlaylistsOverviewList(
                     onOpen = { onOpenPlaylist(playlist) },
                     onPlayAll = {
                         if (playlist.tracks.isNotEmpty()) {
-                            onPlayTracks(playlist.tracks, 0)
+                            onPlayTracks(
+                                playlist.tracks,
+                                0,
+                                QueueContext.playlist(playlist.id, playlist.name),
+                            )
                         }
                     },
                     onRename = { onRenamePlaylistClick(playlist) },
@@ -661,13 +743,17 @@ private fun MostPlayedDetailView(
     activeTrackUri: String?,
     albumArtworkLoader: AlbumArtworkLoader,
     onPlayTracks: (List<PlaybackTrack>, Int) -> Unit,
+    onEnqueueAllNext: (List<PlaybackTrack>) -> Unit,
+    onEnqueueAll: (List<PlaybackTrack>) -> Unit,
 ) {
     val tracks = remember(items) { items.map { it.track } }
+    var menuExpanded by remember { mutableStateOf(false) }
+
     Column(modifier = Modifier.fillMaxSize()) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 10.dp),
+                .padding(start = 16.dp, end = 6.dp, top = 8.dp, bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
@@ -675,6 +761,7 @@ private fun MostPlayedDetailView(
                 text = "${items.size} ranked ${if (items.size == 1) "track" else "tracks"}",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
             )
             if (tracks.isNotEmpty()) {
                 FilledTonalButton(
@@ -684,6 +771,39 @@ private fun MostPlayedDetailView(
                     Icon(Icons.Filled.PlayArrow, contentDescription = null)
                     Spacer(modifier = Modifier.width(6.dp))
                     Text("Play All", maxLines = 1, softWrap = false)
+                }
+                Box {
+                    IconButton(
+                        onClick = { menuExpanded = true },
+                        modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.MoreVert,
+                            contentDescription = "Most Played queue actions",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (menuExpanded) {
+                        DropdownMenu(
+                            expanded = true,
+                            onDismissRequest = { menuExpanded = false },
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Play Next") },
+                                onClick = {
+                                    menuExpanded = false
+                                    onEnqueueAllNext(tracks)
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Add All to Queue") },
+                                onClick = {
+                                    menuExpanded = false
+                                    onEnqueueAll(tracks)
+                                },
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -824,20 +944,47 @@ private fun PlaylistSummaryRow(
 @Composable
 private fun PlaylistDetailView(
     playlist: ResolvedPlaylist,
+    sortLabel: String,
+    canReorderManually: Boolean,
     activeTrackUri: String?,
     albumArtworkLoader: AlbumArtworkLoader,
+    onOpenSort: () -> Unit,
     onPlayTracks: (List<PlaybackTrack>, Int) -> Unit,
+    onEnqueueAllNext: () -> Unit,
+    onEnqueueAll: () -> Unit,
     onMoveEntry: (Int, Int) -> Unit,
     onRemoveEntry: (Long) -> Unit,
     onExport: () -> Unit,
 ) {
+    var queueMenuExpanded by remember { mutableStateOf(false) }
+
     Column(modifier = Modifier.fillMaxSize()) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 10.dp),
+                .padding(start = 16.dp, end = 6.dp, top = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(
+                text = "${playlist.trackCount} ${if (playlist.trackCount == 1) "track" else "tracks"}",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            InlineSortTriggerButton(
+                label = sortLabel,
+                onClick = onOpenSort,
+            )
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 16.dp, end = 6.dp, bottom = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             FilledTonalButton(
                 onClick = {
@@ -863,6 +1010,40 @@ private fun PlaylistDetailView(
                 Icon(Icons.Filled.SaveAlt, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(6.dp))
                 Text("Export .m3u8", maxLines = 1, softWrap = false)
+            }
+            Box {
+                IconButton(
+                    onClick = { queueMenuExpanded = true },
+                    enabled = playlist.tracks.isNotEmpty(),
+                    modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.MoreVert,
+                        contentDescription = "Queue options for ${playlist.name}",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (queueMenuExpanded) {
+                    DropdownMenu(
+                        expanded = true,
+                        onDismissRequest = { queueMenuExpanded = false },
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Play Next") },
+                            onClick = {
+                                queueMenuExpanded = false
+                                onEnqueueAllNext()
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Add All to Queue") },
+                            onClick = {
+                                queueMenuExpanded = false
+                                onEnqueueAll()
+                            },
+                        )
+                    }
+                }
             }
         }
 
@@ -915,6 +1096,7 @@ private fun PlaylistDetailView(
                     entry = entry,
                     index = index,
                     totalCount = playlist.entries.size,
+                    canReorderManually = canReorderManually,
                     isActive = entry.track.uriString == activeTrackUri,
                     albumArtworkLoader = albumArtworkLoader,
                     onPlay = { onPlayTracks(playlist.tracks, index) },
@@ -937,6 +1119,7 @@ private fun PlaylistEntryRow(
     entry: ResolvedPlaylistEntry,
     index: Int,
     totalCount: Int,
+    canReorderManually: Boolean,
     isActive: Boolean,
     albumArtworkLoader: AlbumArtworkLoader,
     onPlay: () -> Unit,
@@ -979,27 +1162,29 @@ private fun PlaylistEntryRow(
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        IconButton(
-            onClick = onMoveUp,
-            enabled = index > 0,
-            modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
-        ) {
-            Icon(
-                imageVector = Icons.Filled.KeyboardArrowUp,
-                contentDescription = "Move ${track.title} up",
-                tint = if (index > 0) MaterialTheme.colorScheme.onSurfaceVariant else TextMuted.copy(alpha = 0.3f),
-            )
-        }
-        IconButton(
-            onClick = onMoveDown,
-            enabled = index < totalCount - 1,
-            modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
-        ) {
-            Icon(
-                imageVector = Icons.Filled.KeyboardArrowDown,
-                contentDescription = "Move ${track.title} down",
-                tint = if (index < totalCount - 1) MaterialTheme.colorScheme.onSurfaceVariant else TextMuted.copy(alpha = 0.3f),
-            )
+        if (canReorderManually) {
+            IconButton(
+                onClick = onMoveUp,
+                enabled = index > 0,
+                modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.KeyboardArrowUp,
+                    contentDescription = "Move ${track.title} up",
+                    tint = if (index > 0) MaterialTheme.colorScheme.onSurfaceVariant else TextMuted.copy(alpha = 0.3f),
+                )
+            }
+            IconButton(
+                onClick = onMoveDown,
+                enabled = index < totalCount - 1,
+                modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.KeyboardArrowDown,
+                    contentDescription = "Move ${track.title} down",
+                    tint = if (index < totalCount - 1) MaterialTheme.colorScheme.onSurfaceVariant else TextMuted.copy(alpha = 0.3f),
+                )
+            }
         }
         IconButton(
             onClick = onRemove,

@@ -347,6 +347,44 @@ Completed the Full-APK daily user experience on `feat/mvp-overnight` while keepi
   3. Lazy Track Info sheet opening smoothly from both `LibraryScreen` and `NowPlayingScreen`, copying the SHA-256 fingerprint, and rendering real ReplayGain tags and play stats.
   4. Artwork horizontal swipe-to-skip feel on `NowPlayingScreen` and 120 Hz scroll smoothness on `LibraryScreen` while Sleep Timer and playback are active simultaneously.
 
+---
+
+## 11. Metadata Track/Disc Ordering, Context-Aware Playback Queue, & Lightweight Context-Aware Sorting
+
+Implemented metadata disc/track extraction (zero scan regression), scoped context-aware playback queues & session restoration, and minimalist background-computed context-aware sorting on `feat/mvp-overnight`:
+
+1. **Metadata Track & Disc Number Extraction + Room v3 -> v4 Migration (`TrackNumberParser.kt`, `BitPerfectDatabase.kt`, `LocalEntities.kt`, `LocalDaos.kt`, `AudioDecoderModels.kt`, `AudioMetadataReader.kt`, `LocalLibraryRepository.kt`):**
+   - Added `discNumber: Int = 0`, `trackNumber: Int = 0`, and precomputed `trackNumberLabel` to `PlaybackTrack`, and `disc_number` / `track_number` (`INTEGER NOT NULL DEFAULT 0`) to `CachedTrackEntity`.
+   - Upgraded `BitPerfectDatabase` to `version = 4` with non-destructive `MIGRATION_3_4` (`ALTER TABLE cached_tracks ADD COLUMN ...`) preserving all 7 existing tables (`cached_tracks`, `lyrics`, `track_history`, `favorite_tracks`, `playlists`, `playlist_tracks`, `track_stats`) intact (documented in `DECISIONS.md` `D8.1`).
+   - Built pure-Kotlin `TrackNumberParser` unpacking Android MediaStore `TRACK` integers (`1003` -> disc `1`, track `3`; `2004` -> disc `2`, track `4`; `7` -> disc `0`, track `7`), parsing fraction/leading-zero tags (`"3/12"`, `"03"`, `"1/2"`), and safely falling back to leading filename numbers (`"04 - Acid Rain.flac"` -> `4`, rejecting 4-digit years like `"2024 - Live.flac"` and ordinals like `"21st Century Breakdown.flac"`) ONLY when both MediaStore and tag track numbers are absent.
+   - Queried `MediaStore.Audio.Media.TRACK` (+ API 30+ `CD_TRACK_NUMBER`/`DISC_NUMBER`) directly inside `LocalLibraryRepository.discoverMediaStoreCandidates()` with zero extra `MediaMetadataRetriever` Binder IPC, and added a fast one-time transactional cursor-only backfill (`CachedTrackDao.backfillTrackPositions`) for unchanged cached rows with `disc == 0 && track == 0`.
+   - Extended `FlacStreamInfoParser` to walk past `STREAMINFO` (seeking past `PICTURE` blocks) to parse `VORBIS_COMMENT` `TRACKNUMBER`/`DISCNUMBER` on the same open `FileChannel`, and extracted `METADATA_KEY_CD_TRACK_NUMBER` / `METADATA_KEY_DISC_NUMBER` in `AudioMetadataReader` for SAF files.
+2. **Context-Aware Playback Queue (`QueueContext.kt`, `PlaybackQueueManager.kt`, `PlaybackController.kt`, `UserPreferencesRepository.kt`, `QueueScreen.kt`, `NowPlayingScreen.kt`):**
+   - Created pure-Kotlin `QueueContext` (`ALL_SONGS`, `ALBUM`, `ARTIST`, `FOLDER`, `PLAYLIST`, `RECENT`, `FAVORITES`, `CUSTOM`), `BrowsingQueueContext`, and `QueueContextResolver`.
+   - Stored `queueContext` in `PlaybackControllerState` and persisted `last_queue_source_type`, `last_queue_source_key`, and `last_queue_source_label` in `UserPreferencesRepository`.
+   - Fixed `PlaybackController.restoreLastSessionIfNeeded(...)` using `QueueContextResolver` so app relaunch restores ONLY the exact saved Album, Artist, Folder, Playlist, Recent, Favorites, or Most Played track list in its sorted order (waiting for Room playlists readiness when restoring a Playlist) rather than all library songs.
+   - Updated every playback trigger across `LibraryScreen`, `GroupDetailTrackList`, and `PlaylistsScreen` to pass the exact `QueueContext`, added batch `Play Next` (`enqueueAllNext`) and `Add All to Queue` (`enqueueAll`) actions to every Album/Folder/Artist/Playlist detail header, and surfaced active queue context in `QueueScreen`'s TopAppBar subtitle and subtly in `NowPlayingScreen`.
+   - Opening `QueueScreen` from inside a viewed Album/Folder/Artist/Playlist prepares that context paused when `IDLE`, or displays a flat one-tap `"Viewing <Type>: <Name> (<N> tracks)"` + `"Load Queue"` banner without interrupting active playback; added search + `Current Context` / `All Songs` scope toggle inside `AddTrackToQueueDialog`.
+3. **Lightweight Context-Aware Sorting (`LibrarySortPolicy.kt`, `LibraryProjector.kt`, `PlaylistRepository.kt`, `SortSheet.kt`, `LibraryScreen.kt`, `PlaylistsScreen.kt`):**
+   - Created pure-Kotlin `LibrarySortPolicy` with natural filename comparison (`"2 - Song"` < `"10 - Song"`) and independent persisted per-scope sort preferences: Album Detail defaults to `TRACK_NUMBER ASC` (Disc -> Track -> Natural Filename -> Title), Artist Detail to `ALBUM ASC` (Album -> Disc -> Track), Folder Detail to `TRACK_NUMBER ASC`, All Songs to `TITLE ASC`, Group tabs to `NAME ASC`, Playlists Detail to `CUSTOM_ORDER ASC`, and Recent/Favorites to chronological defaults.
+   - Executed ALL sorting strictly on `Dispatchers.Default` via reactive Flows inside `LocalLibraryRepository` and `PlaylistRepository` (zero list sorting inside Compose `ui/`).
+   - Added a single subtle right-aligned inline sort trigger (`Icons.AutoMirrored.Filled.Sort` + concise active label, `>= 48.dp` touch target) on existing subtitle/count header rows opening a flat matte-obsidian `ModalBottomSheet` (`TrackSortBottomSheet` / `GroupSortBottomSheet`) with only scope-relevant options and an `Ascending / Descending` toggle.
+
+### Software Verification (`./gradlew testDebugUnitTest lintDebug assembleDebug`)
+- **JVM Unit Tests:** **128 / 128 passed** across **26 suites** (`0` failed, `0` errors, `0` skipped, `0` `@Ignore`), adding `TrackNumberParserTest` (5/5), `LibrarySortPolicyTest` (5/5), `QueueContextTest` (3/3), and expanding `PersistenceAndPreferencesTest` (4/4).
+- **Kotlin & KSP Compiler Warnings:** `0` Kotlin warnings, `0` KSP warnings.
+- **Android Lint (`lintDebug`):** **0 errors**, **0 warnings across all `/app/src/` Kotlin, manifest, and resource files**.
+- **Debug APK:** `app/build/outputs/apk/debug/app-debug.apk` (`20.08 MB` / `21,059,968 bytes`).
+- **Strict Offline Privacy Audit (Source + All Merged Debug Manifests):** **PASS** — **0 `android.permission.INTERNET`**, **0 `android.permission.MANAGE_EXTERNAL_STORAGE`**.
+- **Pure-Kotlin Domain Boundary:** **PASS** — **0 `android.*`, `androidx.*`, or `org.json.*` imports** across all **28** pure-Kotlin domain modules (adding `TrackNumberParser`, `QueueContext`, and `LibrarySortPolicy`).
+- **120 Hz UI Hygiene Audit:** **PASS** — `0` sort calls in `ui/*.kt`, `0` high-frequency `playbackPositionMs`/`sleepTimerState` collections in `LibraryScreen`/`PlaylistsScreen`/`QueueScreen`/`DiagnosticsScreen`/`BitPerfectAppNav`, and all 6 `DropdownMenu` instances strictly gated by `if (expanded)`.
+- **Physical Hardware Verification Pending (Not Executed in Cloud):** On POCO F4 (Android 14 / HyperOS) + KZ EDX Pro 2 USB-C, verify:
+  1. In-place Room v3 -> v4 upgrade preserving all existing playlists, lyrics, favorites, and play counts, followed by instant cursor-only backfill ordering existing albums (e.g., *21st Century Breakdown*) by Disc -> Track #.
+  2. Cold-start relaunch restoring ONLY the last played Album / Folder / Playlist queue (paused, never auto-blasting audio) instead of All Songs.
+  3. Opening `QueueScreen` from inside an Album/Folder/Playlist while idle (auto-prepared paused) vs. while another context plays (non-intrusive one-tap `"Load Queue"` banner) and `Add Track to Queue` search + scope toggle.
+  4. Independent sorting across tabs/details (e.g., sorting All Songs by Hi-Res while Album Detail stays `Track # ↑`) with smooth 120 Hz scrolling.
+
+
 
 
 
