@@ -39,6 +39,9 @@ interface LyricsDao {
     @Query("DELETE FROM lyrics WHERE content_fingerprint = :fingerprint")
     suspend fun deleteByFingerprint(fingerprint: String): Int
 
+    @Query("SELECT * FROM lyrics ORDER BY updated_at_epoch_ms DESC")
+    suspend fun getAll(): List<LyricsEntity>
+
     @Query("SELECT COUNT(*) FROM lyrics")
     suspend fun countAll(): Int
 }
@@ -114,6 +117,9 @@ interface PlaylistDao {
     @Query("SELECT * FROM playlist_tracks ORDER BY playlist_id ASC, position_index ASC, id ASC")
     fun observeAllPlaylistTracks(): Flow<List<PlaylistTrackEntity>>
 
+    @Query("SELECT * FROM playlist_tracks ORDER BY playlist_id ASC, position_index ASC, id ASC")
+    suspend fun getAllPlaylistTracks(): List<PlaylistTrackEntity>
+
     @Query("SELECT * FROM playlist_tracks WHERE playlist_id = :playlistId ORDER BY position_index ASC, id ASC")
     fun observeTracksForPlaylist(playlistId: Long): Flow<List<PlaylistTrackEntity>>
 
@@ -171,6 +177,9 @@ interface PlaylistDao {
 interface TrackStatsDao {
     @Query("SELECT * FROM track_stats ORDER BY play_count DESC, last_played_at_epoch_ms DESC")
     fun observeAllStats(): Flow<List<TrackStatsEntity>>
+
+    @Query("SELECT * FROM track_stats ORDER BY play_count DESC, last_played_at_epoch_ms DESC")
+    suspend fun getAllStats(): List<TrackStatsEntity>
 
     @Query("SELECT * FROM track_stats WHERE play_count > 0 ORDER BY play_count DESC, last_played_at_epoch_ms DESC LIMIT :limit")
     fun observeMostPlayed(limit: Int = 50): Flow<List<TrackStatsEntity>>

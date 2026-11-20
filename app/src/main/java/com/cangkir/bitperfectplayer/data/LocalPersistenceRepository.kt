@@ -124,6 +124,172 @@ class LocalPersistenceRepository(
 
     fun observeTotalPlayCount(): Flow<Int> = trackStatsDao.observeTotalPlayCount()
 
+    suspend fun getTrackStatsByFingerprint(fingerprint: String): TrackStatsRecord? {
+        val normalized = PersistenceSanitizer.normalizeFingerprint(fingerprint)
+        if (normalized.isEmpty()) return null
+        return trackStatsDao.getByFingerprint(normalized)?.toDomain()
+    }
+
+    suspend fun exportLocalBackupPayload(
+        nowEpochMs: Long = System.currentTimeMillis(),
+    ): LocalBackupPayload {
+        val playlists = playlistDao.getAllPlaylists()
+        val tracksByPlaylist = playlistDao.getAllPlaylistTracks().groupBy { it.playlistId }
+        val backupPlaylists = playlists.map { pl ->
+            BackupPlaylist(
+                name = pl.name,
+                createdAtEpochMs = pl.createdAtEpochMs,
+                updatedAtEpochMs = pl.updatedAtEpochMs,
+                tracks = tracksByPlaylist[pl.id].orEmpty().map { tr ->
+                    BackupPlaylistEntry(
+                        contentFingerprint = tr.contentFingerprint,
+                        trackUri = tr.trackUri,
+                        fileName = tr.fileName,
+                        positionIndex = tr.positionIndex,
+                        addedAtEpochMs = tr.addedAtEpochMs,
+                    )
+                },
+            )
+        }
+        return LocalBackupPayload(
+            schemaVersion = LocalBackupCodec.CURRENT_SCHEMA_VERSION,
+            appId = LocalBackupCodec.APP_ID,
+            exportedAtEpochMs = nowEpochMs,
+            playlists = backupPlaylists,
+            lyrics = lyricsDao.getAll().map { it.toDomain() },
+            favorites = favoriteTrackDao.getAllFavorites().map { it.toDomain() },
+            trackStats = trackStatsDao.getAllStats().map { it.toDomain() },
+        )
+    }
+
+    /**
+     * Non-destructive merge/upsert restore of a validated [LocalBackupPayload].
+     * Never deletes existing local playlists, lyrics, favorites, or stats, and stays idempotent
+     * if the exact same backup is restored more than once.
+     */
+    suspend fun importLocalBackupPayload(
+        payload: LocalBackupPayload,
+        nowEpochMs: Long = System.currentTimeMillis(),
+    ): LocalBackupRestoreSummary {
+        // 1. Merge Lyrics (upsert if absent locally or backup is at least as recent)
+        var lyricsCount = 0
+        for (lyric in payload.lyrics) {
+            val normalizedFp = PersistenceSanitizer.normalizeFingerprint(lyric.contentFingerprint)
+            if (!PersistenceSanitizer.isValidSha256Fingerprint(normalizedFp)) continue
+            val existing = lyricsDao.getByFingerprint(normalizedFp)
+            if (existing == null || lyric.updatedAtEpochMs >= existing.updatedAtEpochMs) {
+                lyricsDao.upsert(lyric.copy(contentFingerprint = normalizedFp).toEntity())
+                lyricsCount++
+            }
+        }
+
+        // 2. Merge Favorites (union upsert by SHA-256 fingerprint)
+        var favoritesCount = 0
+        for (fav in payload.favorites) {
+            val normalizedFp = PersistenceSanitizer.normalizeFingerprint(fav.contentFingerprint)
+            if (!PersistenceSanitizer.isValidSha256Fingerprint(normalizedFp)) continue
+            if (!favoriteTrackDao.isFavorite(normalizedFp)) {
+                favoriteTrackDao.upsert(fav.copy(contentFingerprint = normalizedFp).toEntity())
+                favoritesCount++
+            }
+        }
+
+        // 3. Merge Track Stats (idempotent max merge so re-importing never doubles play counts)
+        var statsCount = 0
+        for (stat in payload.trackStats) {
+            val normalizedFp = PersistenceSanitizer.normalizeFingerprint(stat.contentFingerprint)
+            if (!PersistenceSanitizer.isValidSha256Fingerprint(normalizedFp)) continue
+            val existing = trackStatsDao.getByFingerprint(normalizedFp)
+            val merged = if (existing == null) {
+                stat.copy(contentFingerprint = normalizedFp).toEntity()
+            } else {
+                TrackStatsEntity(
+                    contentFingerprint = normalizedFp,
+                    trackUri = existing.trackUri.ifBlank { stat.trackUri.trim() },
+                    title = existing.title.ifBlank { stat.title },
+                    artist = existing.artist.ifBlank { stat.artist },
+                    album = existing.album.ifBlank { stat.album },
+                    fileName = existing.fileName.ifBlank { stat.fileName },
+                    playCount = maxOf(existing.playCount, stat.playCount.coerceAtLeast(0)),
+                    totalPlayTimeMs = maxOf(existing.totalPlayTimeMs, stat.totalPlayTimeMs.coerceAtLeast(0L)),
+                    lastPlayedAtEpochMs = maxOf(existing.lastPlayedAtEpochMs, stat.lastPlayedAtEpochMs.coerceAtLeast(0L)),
+                )
+            }
+            trackStatsDao.upsert(merged)
+            statsCount++
+        }
+
+        // 4. Merge Playlists (match by trimmed case-insensitive name; append only non-duplicate entries)
+        val existingPlaylistsByName = playlistDao.getAllPlaylists()
+            .associateBy { it.name.trim().lowercase() }
+            .toMutableMap()
+        var playlistsMerged = 0
+        var playlistTracksAdded = 0
+
+        for (backupPl in payload.playlists) {
+            val cleanName = backupPl.name.trim()
+            if (cleanName.isEmpty()) continue
+            val key = cleanName.lowercase()
+            val existing = existingPlaylistsByName[key]
+            val targetPlaylistId = if (existing != null) {
+                existing.id
+            } else {
+                val createdId = playlistDao.insertPlaylist(
+                    PlaylistEntity(
+                        name = cleanName,
+                        createdAtEpochMs = backupPl.createdAtEpochMs.takeIf { it > 0L } ?: nowEpochMs,
+                        updatedAtEpochMs = backupPl.updatedAtEpochMs.takeIf { it > 0L } ?: nowEpochMs,
+                    ),
+                )
+                existingPlaylistsByName[key] = PlaylistEntity(
+                    id = createdId,
+                    name = cleanName,
+                    createdAtEpochMs = backupPl.createdAtEpochMs.takeIf { it > 0L } ?: nowEpochMs,
+                    updatedAtEpochMs = backupPl.updatedAtEpochMs.takeIf { it > 0L } ?: nowEpochMs,
+                )
+                createdId
+            }
+            playlistsMerged++
+
+            val existingEntries = playlistDao.getTracksForPlaylist(targetPlaylistId)
+            val existingKeys = existingEntries.map { entry ->
+                entry.contentFingerprint?.lowercase()?.takeIf { it.isNotEmpty() } ?: entry.trackUri
+            }.toMutableSet()
+            var nextPos = (existingEntries.maxOfOrNull { it.positionIndex } ?: -1) + 1
+
+            val toInsert = mutableListOf<PlaylistTrackEntity>()
+            for (tr in backupPl.tracks.sortedBy { it.positionIndex }) {
+                val fp = tr.contentFingerprint?.let { PersistenceSanitizer.normalizeFingerprint(it) }
+                    ?.takeIf { PersistenceSanitizer.isValidSha256Fingerprint(it) }
+                val dedupKey = fp ?: tr.trackUri.trim()
+                if (dedupKey.isEmpty() || !existingKeys.add(dedupKey)) continue
+                toInsert.add(
+                    PlaylistTrackEntity(
+                        playlistId = targetPlaylistId,
+                        contentFingerprint = fp,
+                        trackUri = tr.trackUri.trim(),
+                        fileName = PersistenceSanitizer.sanitizeDisplayText(tr.fileName, "Unknown"),
+                        positionIndex = nextPos++,
+                        addedAtEpochMs = tr.addedAtEpochMs.takeIf { it > 0L } ?: nowEpochMs,
+                    ),
+                )
+            }
+            if (toInsert.isNotEmpty()) {
+                playlistDao.insertPlaylistTracks(toInsert)
+                playlistDao.touchPlaylist(targetPlaylistId, nowEpochMs)
+                playlistTracksAdded += toInsert.size
+            }
+        }
+
+        return LocalBackupRestoreSummary(
+            playlistsMerged = playlistsMerged,
+            playlistTracksAdded = playlistTracksAdded,
+            lyricsUpserted = lyricsCount,
+            favoritesMerged = favoritesCount,
+            statsMerged = statsCount,
+        )
+    }
+
     /**
      * Idempotently persists the desired favorite state [targetFavorite] for [record].
      * Preferred over blind toggle so rapid optimistic UI taps always converge accurately.

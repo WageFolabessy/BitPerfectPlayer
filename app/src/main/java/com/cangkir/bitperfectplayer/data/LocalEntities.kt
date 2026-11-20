@@ -348,3 +348,15 @@ fun TrackStatsEntity.toDomain(): TrackStatsRecord = TrackStatsRecord(
     lastPlayedAtEpochMs = PersistenceSanitizer.sanitizeNonNegative(lastPlayedAtEpochMs),
 )
 
+fun TrackStatsRecord.toEntity(): TrackStatsEntity = TrackStatsEntity(
+    contentFingerprint = PersistenceSanitizer.normalizeFingerprint(contentFingerprint),
+    trackUri = trackUri.trim(),
+    title = PersistenceSanitizer.sanitizeDisplayText(title, fileName.ifBlank { "Unknown Track" }),
+    artist = PersistenceSanitizer.sanitizeDisplayText(artist, "Unknown Artist"),
+    album = PersistenceSanitizer.sanitizeDisplayText(album, "Unknown Album"),
+    fileName = PersistenceSanitizer.sanitizeDisplayText(fileName, "Unknown"),
+    playCount = playCount.coerceAtLeast(0),
+    totalPlayTimeMs = PersistenceSanitizer.sanitizeNonNegative(totalPlayTimeMs),
+    lastPlayedAtEpochMs = PersistenceSanitizer.sanitizeNonNegative(lastPlayedAtEpochMs),
+)
+
