@@ -210,17 +210,35 @@ Following initial physical testing and logcat/screenshot analysis on POCO F4 (`H
 4. **Safer 16-bit `MediaFormat` configuration (`MediaCodecAudioDecoder`):**
    - Omitted `MediaFormat.KEY_PCM_ENCODING` for 16-bit sources (relying on Android's native 16-bit default) while still allowing retry without `KEY_PCM_ENCODING` if any vendor codec rejects a configured PCM encoding key.
 
-### Updated Software Verification Results (`./gradlew testDebugUnitTest lintDebug assembleDebug`)
-- **JVM Unit Tests:** **73 / 73 passed** (`0` failed, `0` errors, `0` skipped, `0` `@Ignore`) across 15 test classes (including newly added `MediaSessionUpdatePolicyTest` [4/4], plus updated `PcmStreamRulesTest` [7/7], `LibraryPersistenceAndFavoritesTest` [3/3], and `AlbumArtworkHelperTest` [4/4]).
-- **Android Lint:** `No issues found.` (`0` errors, `0` warnings in `app/build/reports/lint-results-debug.txt` & `.xml`).
+### Performance & Predictive-Back Optimizations (Post-Device Profiling on POCO F4)
+Following physical profiling on POCO F4 (Android 14 / HyperOS) — which confirmed clean 16-bit & 24-bit FLAC playback, instant cached launch, and real-time favorites, while identifying scroll jank (`Skipped 32–74 frames`, `Davey! 735 ms`, `105 ms` GC pauses), a ~38s initial scan, and `WindowOnBackDispatcher` warnings — 5 targeted optimizations were implemented:
+1. **Eliminated 20 Hz full-screen recompositions (`AudioOutputEngine` -> `PlaybackController` -> `MainViewModel` -> leaf composables):**
+   - Decoupled high-frequency playback position into a dedicated `playbackPositionMs: StateFlow<Long>` separate from low-frequency `EnginePlaybackState` / `PlaybackControllerState`.
+   - `BitPerfectAppRoot`, `LibraryScreen`, `TrackListView`, `QueueScreen`, `DiagnosticsScreen`, and static hero/controls of `NowPlayingScreen` no longer collect or recompose on 20 Hz ticks.
+   - `playbackPositionMs` is collected exclusively inside narrow leaf composables: `MiniPlayerProgressBar` (`UiComponents.kt`), `NowPlayingSeekSection` (`NowPlayingScreen.kt`), `SyncedLyricsList` (transformed via `.map { findActiveLineIndex(...) }.distinctUntilChanged()` so it recomposes only on active lyric line changes), and `LyricsCompactSeekBar` (`LyricsScreen.kt`).
+2. **Eliminated scroll jank in `AlbumArtworkLoader` & `TrackArtworkThumbnail`:**
+   - For `160px` thumbnails on MediaStore URIs (API 29+), prefers fast OS-indexed `ContentResolver.loadThumbnail(...)` BEFORE opening large FLACs with `MediaMetadataRetriever`; `600px` hero artwork continues to prefer full-res embedded tags first.
+   - Added album-level deduplication (`AlbumArtworkHelper.buildMemoryCacheKey`) so tracks sharing a valid album name decode and cache only ONE bitmap/JPEG (falling back to track identity when album is blank/`"Unknown Album"`).
+   - Eliminated Main-Thread SHA-256 hashing (`getCachedFromMemory` uses plain-string keys; SHA-256 disk filename hashing runs strictly on `Dispatchers.IO`).
+   - Made JPEG disk cache writes fire-and-forget async on `Dispatchers.IO.limitedParallelism(2)` and throttled `pruneDiskCacheIfOversized()` to once every 50 writes.
+   - Cached `bitmap.asImageBitmap()` via `remember(currentBitmap)` and added a `35 ms` fling debounce inside `TrackArtworkThumbnail`'s `LaunchedEffect`.
+3. **Optimized `LazyColumn` row rendering (`LibraryScreen`, `QueueScreen`, `PlaybackTrack`, `AudioFormatFormatter`):**
+   - Conditionally composes `DropdownMenu` only when `menuExpanded == true`.
+   - Added `contentType` across `TrackListView`, `GroupListView`, `QueueScreen`, and `SyncedLyricsList`.
+   - Precomputed `formatBadge`, `durationLabel`, and `artistAlbumLine` once on `PlaybackTrack` construction using fast zero-`String.format` integer formatting in `AudioFormatFormatter`, eliminating per-row allocations and redundant `.replace(" • ", " · ")` calls.
+4. **Eliminated redundant `MediaMetadataRetriever` Binder calls during initial MediaStore scan (`AudioMetadataReader` + `MetadataScanPolicy` + `LocalLibraryRepository`):**
+   - Added `readMetadataForMediaStore(...)`: reads direct `FileChannel` headers (`FlacStreamInfoParser` / `WavHeaderParser`, < 1 ms each) for FLAC/WAV and skips `MediaMetadataRetriever` completely whenever cursor metadata + direct header already supply `sampleRateHz > 0` and `durationMs > 0`. Full `readMetadata()` remains active for SAF files and missing-field fallbacks.
+5. **Enabled Android 13+/14+ predictive back (`AndroidManifest.xml`):**
+   - Added `android:enableOnBackInvokedCallback="true"` (`tools:targetApi="33"`) to `<application>` to eliminate repeated `WindowOnBackDispatcher` warnings.
+
+### Updated Software Verification Results (`./gradlew testDebugUnitTest lintDebug assembleDebug` on Gradle `9.9.1` / AGP `9.5.1`)
+- **JVM Unit Tests:** **79 / 79 passed** (`0` failed, `0` errors, `0` skipped, `0` `@Ignore`) across 16 test classes (including newly added `MetadataScanPolicyTest` [3/3], expanded `AlbumArtworkHelperTest` [7/7], `MediaSessionUpdatePolicyTest` [4/4], `PcmStreamRulesTest` [7/7], and `LibraryPersistenceAndFavoritesTest` [3/3]).
+- **Kotlin & KSP Compiler Warnings:** `0` Kotlin warnings, `0` KSP warnings.
+- **Android Lint (`lintDebug`):** **0 errors**, **0 warnings across all `/app/src/` Kotlin, manifest, and resource files** (15 remaining informational notices are strictly upstream dependency version suggestions in `gradle/libs.versions.toml` and `ObsoleteLintCustomCheck` inside AndroidX `lifecycle-runtime` AAR under AGP 9.5.1).
 - **Debug APK:** `app/build/outputs/apk/debug/app-debug.apk` (`20 MB`).
 - **Strict Offline Privacy Audit (Source + All Merged Debug Manifests):** **PASS** — **0 occurrences** of `android.permission.INTERNET` or `android.permission.MANAGE_EXTERNAL_STORAGE`.
-- **Pure-Kotlin Domain Boundary:** **PASS** — **0 `android.*` imports** across all 17 pure-Kotlin domain modules (`ContentFingerprintGenerator`, `LrcParser`, `PersistenceModels`, `PlaybackQueueManager`, `AudioSafetyController`, `AudioDiagnosticMapper`, `AudioDecoderModels`, `WavHeaderParser`, `PlaybackTrack`, `PcmStreamRules`, `AudioFormatFormatter`, `MediaSessionUpdatePolicy`, `LibraryProjector`, `LibrarySyncDiffer`, `FavoriteStateReducer`, `AlbumArtworkHelper`, `MediaScanFilter`).
-- **Physical Hardware Re-Test Still Required (Not Executed in Cloud):** Re-install the rebuilt debug APK on POCO F4 + KZ EDX Pro 2 USB-C (IEMs out of ears first!) to confirm:
-  1. Clean, distortion-free audio on 24-bit/96,000 Hz FLAC & WAV across both internal speaker and USB-C IEM (inspect `BitPerfectAudio` logcat tag for confirmed `MediaCodec` output encoding and `AudioTrack` encoding),
-  2. Instant cached library display on cold restart without blank flash,
-  3. Next-frame heart icon toggle reactivity & Favorites tab sync,
-  4. Local embedded/SAF cover art rendering in Library, MiniPlayer, Now Playing, and Lock Screen Notification,
-  5. Custom obsidian PCM icon on HyperOS launcher.
+- **Pure-Kotlin Domain Boundary:** **PASS** — **0 `android.*` imports** across all 18 pure-Kotlin domain modules (`ContentFingerprintGenerator`, `LrcParser`, `PersistenceModels`, `PlaybackQueueManager`, `AudioSafetyController`, `AudioDiagnosticMapper`, `AudioDecoderModels`, `WavHeaderParser`, `PlaybackTrack`, `PcmStreamRules`, `AudioFormatFormatter`, `MediaSessionUpdatePolicy`, `MetadataScanPolicy`, `LibraryProjector`, `LibrarySyncDiffer`, `FavoriteStateReducer`, `AlbumArtworkHelper`, `MediaScanFilter`).
+- **Physical Hardware Verification Pending (Not Executed in Cloud):** Re-install the rebuilt debug APK on POCO F4 (Android 14 / HyperOS) + KZ EDX Pro 2 USB-C to verify 60 fps scrolling during active playback, fast initial MediaStore scan duration, and zero `WindowOnBackDispatcher` logcat warnings.
+
 
 

@@ -511,47 +511,33 @@ class LocalLibraryRepository(
         candidate: RawMediaStoreCandidate,
         existingFingerprint: String?,
     ): PlaybackTrack {
-        val fallbackTitle = AudioFormatClassifier.baseNameWithoutExtension(candidate.displayName)
-            .ifBlank { "Unknown Track" }
-        val cleanTitle = candidate.rawTitle?.takeIf { it.isNotEmpty() && !it.equals("<unknown>", true) }
-            ?: fallbackTitle
-        val cleanArtist = candidate.rawArtist?.takeIf { it.isNotEmpty() && !it.equals("<unknown>", true) }
-            ?: "Unknown Artist"
-        val cleanAlbum = candidate.rawAlbum?.takeIf { it.isNotEmpty() && !it.equals("<unknown>", true) }
-            ?: "Unknown Album"
-
-        var sampleRate = 0
-        var bitDepth: Int? = null
-        var resolvedDuration = candidate.durationMs
-        var codec = candidate.format.defaultCodecLabel
-
-        // Parse full headers for newly added/changed lossless files (and sample rate for lossy files).
-        val meta = metadataReader.readMetadata(
+        // Fast path: reads direct FileChannel header for FLAC/WAV and skips MediaMetadataRetriever
+        // completely when cursor tags + direct header already supply sampleRateHz & durationMs.
+        val meta = metadataReader.readMetadataForMediaStore(
             uri = candidate.uri,
             fileName = candidate.displayName,
             mimeType = candidate.mimeType,
-            fallbackDurationMs = candidate.durationMs,
+            cursorDurationMs = candidate.durationMs,
+            cursorTitle = candidate.rawTitle,
+            cursorArtist = candidate.rawArtist,
+            cursorAlbum = candidate.rawAlbum,
         )
-        sampleRate = meta.sampleRateHz
-        bitDepth = meta.bitDepth
-        if (resolvedDuration <= 0L) resolvedDuration = meta.durationMs
-        codec = meta.codec
 
         return PlaybackTrack(
             uriString = candidate.uriString,
-            title = cleanTitle,
-            artist = cleanArtist,
-            album = cleanAlbum,
+            title = meta.title,
+            artist = meta.artist,
+            album = meta.album,
             folderName = candidate.folderName,
-            fileName = candidate.displayName.ifBlank { "$cleanTitle.${candidate.format.containerLabel.lowercase()}" },
+            fileName = candidate.displayName.ifBlank { "${meta.title}.${candidate.format.containerLabel.lowercase()}" },
             mimeType = candidate.mimeType,
             fileSizeBytes = candidate.sizeBytes,
             dateModifiedSeconds = candidate.dateModifiedSeconds,
-            durationMs = resolvedDuration,
-            sampleRateHz = sampleRate,
-            bitDepth = bitDepth,
+            durationMs = meta.durationMs,
+            sampleRateHz = meta.sampleRateHz,
+            bitDepth = meta.bitDepth,
             container = candidate.format.containerLabel,
-            codec = codec,
+            codec = meta.codec,
             contentFingerprint = existingFingerprint,
             relativePath = candidate.relativePath,
         )
