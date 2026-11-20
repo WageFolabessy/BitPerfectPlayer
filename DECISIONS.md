@@ -78,4 +78,17 @@ This file records autonomous architectural, dependency, and environment decision
 - **Rationale:** Explicit SQLite `MIGRATION_2_3` guarantees zero loss of existing cached libraries, favorites, history, or lyrics when upgrading from MVP v2 APKs. Measuring active hardware playback head frames prevents seeking to the end or 2-second skips from polluting `Most Played` statistics.
 - **Rejected Alternatives:** Incrementing play count on `loadTrack()` (pollutes stats with accidental taps and rapid skips); using `fallbackToDestructiveMigration()` (would wipe persisted user data on update).
 
+---
+
+## D7.2 — True Gapless Playback, Clean EOS Drain, & Safe-Mode-Only ReplayGain
+- **Decision:**
+  1. Implemented pure-Kotlin `GaplessTransitionPolicy` + background `preloadExecutor` decoder pre-opening (~8 s before EOS or immediately for short tracks) inside `AudioOutputEngine`, supplied via `PlaybackController.setNextTrack(...)` (`PlaybackQueueManager.peekNext()`).
+  2. When consecutive tracks share identical `(sampleRateHz, channelCount, encoding)` and `gaplessEnabled == true`, `AudioOutputEngine` keeps the exact same `AudioTrack` running continuously (`SEAMLESS_REUSE`), switches readers immediately after Track A's last PCM frame, shifts `headBaseFrames = totalFramesWrittenToTrack` so hardware-clocked elapsed time transitions smoothly at `0 ms` the instant Track B reaches the DAC, and posts `onGaplessTransition` to advance queue/metadata/play-count without rebuilding `AudioTrack`.
+  3. On format/sample-rate mismatch, `gaplessEnabled == false`, unavailable preload, or end-of-queue, `AudioOutputEngine` cleanly drains `AudioTrack` (`track.stop()` + bounded playback-head drain wait via `drainAudioTrackCleanly`) instead of calling `pause() + flush()`, eliminating the ~100–300 ms end-of-track truncation bug.
+  4. Added pure-Kotlin OOM-safe header-only `ReplayGainTagParser` (FLAC `VORBIS_COMMENT`, OGG Vorbis `\x03vorbis`, OGG Opus `OpusTags` + RFC 7845 `R128_*_GAIN` Q7.8 shifted `+5.0 dB` to ReplayGain `-18 LUFS` reference, MP3 ID3v2.3/v2.4 `TXXX`, M4A/MP4 `moov->udta->meta->ilst->----` + optional `iTunNORM` fallback) and zero-allocation in-place `ReplayGainProcessor` (`OFF` default, `TRACK`/`ALBUM`, `-6..+6 dB` preamp, peak-clipping clamp).
+  5. Enforced the **mandatory Bit-Perfect invariant**: whenever `safetyMode == AudioOutputMode.BIT_PERFECT_OPT_IN`, `ReplayGainProcessor` and `AudioOutputEngine` unconditionally bypass ReplayGain (`linearGain = 1.0f`, zero sample modification) and Stage 3 (`APP_TO_FRAMEWORK`) in `AudioDiagnosticMapper` explicitly reports `"ReplayGain: Bypassed (Bit-Perfect Active)"`.
+- **Rationale:** Reusing a single running `AudioTrack` for matching PCM streams guarantees genuine 0 ms silence gap without injecting crossfades or DSP, while `track.stop()` draining on EOS eliminates abrupt tail truncation. Keeping ReplayGain strictly opt-in (`OFF` by default) and strictly Safe-Mode-only preserves pristine unmodified PCM bits in Bit-Perfect Opt-In mode while solving loud-mastering jumps during casual Safe Mode IEM listening.
+- **Rejected Alternatives:** Artificial audio crossfading (modifies PCM samples and violates bit-perfect design); full-file memory reads for tag parsing (risks OOM on large 24-bit FLAC/WAV files); allowing ReplayGain attenuation inside `BIT_PERFECT_OPT_IN` mode (violates unmodified PCM bit-perfect invariant).
+
+
 

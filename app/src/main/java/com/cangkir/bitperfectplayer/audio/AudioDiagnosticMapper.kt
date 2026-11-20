@@ -74,6 +74,8 @@ data class AudioDiagnosticInput(
     val outputConnectionType: OutputConnectionType = OutputConnectionType.INTERNAL_SPEAKER,
     val negotiatedMixerBehavior: NegotiatedMixerBehavior = NegotiatedMixerBehavior.NOT_APPLICABLE_SAFE_MODE,
     val negotiatedMixerSummary: String = "Default System Mixer (Safe Mode)",
+    val replayGainSummary: String = "ReplayGain: OFF",
+    val isReplayGainModifyingSamples: Boolean = false,
 )
 
 /**
@@ -103,8 +105,9 @@ data class AudioDiagnosticSnapshot(
  * Pure-Kotlin mapper producing an honest, 6-stage [AudioDiagnosticSnapshot] (zero `android.*` imports).
  *
  * Uses exact `Hz` sample-rate units via [AudioFormatFormatter], avoids redundant `FLAC (FLAC)` labels,
- * never equates lossless playback with verified bit-perfect output, and always marks Stage 6
- * (internal USB-C DAC firmware & analog conversion) as [VerificationLevel.UNVERIFIABLE].
+ * never equates lossless playback with verified bit-perfect output, reports Safe-Mode-only ReplayGain
+ * honestly in Stage 3, and always marks Stage 6 (internal USB-C DAC firmware & analog conversion)
+ * as [VerificationLevel.UNVERIFIABLE].
  */
 object AudioDiagnosticMapper {
 
@@ -190,7 +193,19 @@ object AudioDiagnosticMapper {
             else ->
                 "Bit-Perfect Requested — Fallback Mixer Active (System Volume Active)"
         }
-        val dspEqVolumeSummary = "EQ: OFF · DSP: OFF · Normalization: OFF · Crossfade: OFF · $volumeModeLabel"
+        val effectiveReplayGainSummary = if (
+            input.safetyMode == AudioOutputMode.BIT_PERFECT_OPT_IN &&
+            input.replayGainSummary != "ReplayGain: OFF"
+        ) {
+            "ReplayGain: Bypassed (Bit-Perfect Active)"
+        } else {
+            input.replayGainSummary.ifBlank { "ReplayGain: OFF" }
+        }
+        val replayGainActiveInSafeMode =
+            input.safetyMode == AudioOutputMode.SAFE_VOLUME_MODE && input.isReplayGainModifyingSamples
+
+        val dspEqVolumeSummary =
+            "EQ: OFF · DSP: OFF · Crossfade: OFF · $effectiveReplayGainSummary · $volumeModeLabel"
 
         val stage1 = DiagnosticStageEntry(
             stage = AudioPathStage.SOURCE_FILE,
@@ -222,12 +237,17 @@ object AudioDiagnosticMapper {
             },
         )
 
+        val stage3ProcessingTag = if (replayGainActiveInSafeMode) {
+            effectiveReplayGainSummary
+        } else {
+            "Zero App DSP · $effectiveReplayGainSummary"
+        }
         val stage3 = DiagnosticStageEntry(
             stage = AudioPathStage.APP_TO_FRAMEWORK,
             summary = if (input.isTrackLoaded && input.audioTrackSampleRateHz > 0) {
-                "AudioTrack ${input.audioTrackEncodingLabel} @ ${AudioFormatFormatter.formatSampleRateHz(input.audioTrackSampleRateHz)} · Zero App DSP"
+                "AudioTrack ${input.audioTrackEncodingLabel} @ ${AudioFormatFormatter.formatSampleRateHz(input.audioTrackSampleRateHz)} · $stage3ProcessingTag"
             } else {
-                "Clean Native AudioTrack Engine · Zero App DSP"
+                "Clean Native AudioTrack Engine · $stage3ProcessingTag"
             },
             detail = if (input.isTrackLoaded && input.audioTrackSampleRateHz > 0) {
                 "AudioTrack Encoding=${input.audioTrackEncodingLabel}, Rate=${AudioFormatFormatter.formatSampleRateHz(input.audioTrackSampleRateHz)} · $dspEqVolumeSummary"

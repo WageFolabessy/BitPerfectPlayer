@@ -155,4 +155,54 @@ class AudioDiagnosticMapperTest {
         assertFalse(api30.isBitPerfectMixerActive)
         assertEquals(AudioDiagnosticMapper.API_BELOW_34_FALLBACK_LABEL, api30.pathStatusHeadline)
     }
+
+    @Test
+    fun stage3Diagnostics_reportsReplayGainOffSafeModeActiveAndBitPerfectBypassHonestly() {
+        // 1. ReplayGain OFF
+        val offSnapshot = AudioDiagnosticMapper.map(
+            AudioDiagnosticInput(
+                isTrackLoaded = true,
+                audioTrackSampleRateHz = 96_000,
+                audioTrackEncodingLabel = "PCM_FLOAT (32-bit IEEE)",
+                safetyMode = AudioOutputMode.SAFE_VOLUME_MODE,
+                replayGainSummary = "ReplayGain: OFF",
+                isReplayGainModifyingSamples = false,
+            ),
+        )
+        assertTrue(offSnapshot.stages[2].summary.contains("ReplayGain: OFF"))
+        assertTrue(offSnapshot.stages[2].summary.contains("Zero App DSP"))
+
+        // 2. ReplayGain Active in Safe Mode (does NOT falsely claim Zero App DSP)
+        val safeActive = AudioDiagnosticMapper.map(
+            AudioDiagnosticInput(
+                isTrackLoaded = true,
+                audioTrackSampleRateHz = 96_000,
+                audioTrackEncodingLabel = "PCM_FLOAT (32-bit IEEE)",
+                safetyMode = AudioOutputMode.SAFE_VOLUME_MODE,
+                replayGainSummary = "ReplayGain: Track (-4.2 dB, Safe Mode)",
+                isReplayGainModifyingSamples = true,
+            ),
+        )
+        assertTrue(safeActive.stages[2].summary.contains("ReplayGain: Track (-4.2 dB, Safe Mode)"))
+        assertFalse(safeActive.stages[2].summary.contains("Zero App DSP"))
+        assertTrue(safeActive.dspEqVolumeStatusSummary.contains("ReplayGain: Track (-4.2 dB, Safe Mode)"))
+
+        // 3. Bit-Perfect Opt-In strictly forces ReplayGain Bypassed label and Zero App DSP
+        val bitPerfectBypass = AudioDiagnosticMapper.map(
+            AudioDiagnosticInput(
+                isTrackLoaded = true,
+                audioTrackSampleRateHz = 96_000,
+                audioTrackEncodingLabel = "PCM_24BIT_PACKED",
+                safetyMode = AudioOutputMode.BIT_PERFECT_OPT_IN,
+                outputConnectionType = OutputConnectionType.USB_HEADSET,
+                apiLevel = 34,
+                negotiatedMixerBehavior = NegotiatedMixerBehavior.BIT_PERFECT,
+                replayGainSummary = "ReplayGain: Bypassed (Bit-Perfect Active)",
+                isReplayGainModifyingSamples = false,
+            ),
+        )
+        assertTrue(bitPerfectBypass.stages[2].summary.contains("Zero App DSP"))
+        assertTrue(bitPerfectBypass.stages[2].summary.contains("ReplayGain: Bypassed (Bit-Perfect Active)"))
+        assertTrue(bitPerfectBypass.dspEqVolumeStatusSummary.contains("ReplayGain: Bypassed (Bit-Perfect Active)"))
+    }
 }

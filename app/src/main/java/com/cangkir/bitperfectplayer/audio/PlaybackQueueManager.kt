@@ -246,6 +246,26 @@ class PlaybackQueueManager<T : Any>(
     }
 
     /**
+     * Non-mutating peek at the upcoming track respecting [repeatMode], used by gapless preloading.
+     */
+    fun peekNext(userInitiated: Boolean = false): T? {
+        if (activeOrder.isEmpty()) return null
+
+        if (repeatMode == RepeatMode.ONE && !userInitiated) {
+            return activeOrder.getOrNull(currentIndex)?.item
+        }
+
+        if (currentIndex + 1 < activeOrder.size) {
+            return activeOrder[currentIndex + 1].item
+        }
+
+        return when (repeatMode) {
+            RepeatMode.ALL -> activeOrder[0].item
+            RepeatMode.OFF, RepeatMode.ONE -> null
+        }
+    }
+
+    /**
      * Advances to the next track respecting [repeatMode].
      *
      * When [repeatMode] is [RepeatMode.ONE] and [userInitiated] is `false` (natural track end),

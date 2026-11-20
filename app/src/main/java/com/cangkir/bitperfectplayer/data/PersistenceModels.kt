@@ -128,6 +128,21 @@ enum class RepeatModePreference {
 }
 
 /**
+ * Persisted ReplayGain mode preference (defaults to [OFF]; strictly bypassed in Bit-Perfect Mode).
+ */
+enum class ReplayGainModePreference {
+    OFF,
+    TRACK,
+    ALBUM,
+    ;
+
+    companion object {
+        fun fromStoredName(raw: String?): ReplayGainModePreference =
+            entries.firstOrNull { it.name.equals(raw?.trim(), ignoreCase = true) } ?: OFF
+    }
+}
+
+/**
  * Snapshot of the last active track and playback position for restoration on app relaunch.
  */
 data class LastPlaybackState(
@@ -143,6 +158,10 @@ data class UserPreferences(
     val audioSafetyMode: AudioSafetyModePreference = AudioSafetyModePreference.SAFE_VOLUME_MODE,
     val shuffleEnabled: Boolean = false,
     val repeatMode: RepeatModePreference = RepeatModePreference.OFF,
+    val gaplessEnabled: Boolean = true,
+    val replayGainMode: ReplayGainModePreference = ReplayGainModePreference.OFF,
+    val replayGainPreampDb: Float = 0.0f,
+    val replayGainPreventClipping: Boolean = true,
     val persistedSafTreeUris: Set<String> = emptySet(),
     val persistedSafFileUris: Set<String> = emptySet(),
     val lastPlaybackState: LastPlaybackState = LastPlaybackState(),
@@ -160,6 +179,9 @@ object PersistenceSanitizer {
         HEX_64_REGEX.matches(normalizeFingerprint(raw))
 
     fun sanitizeNonNegative(value: Long): Long = value.coerceAtLeast(0L)
+
+    fun sanitizeReplayGainPreampDb(value: Float): Float =
+        if (value.isFinite()) value.coerceIn(-6.0f, 6.0f) else 0.0f
 
     fun sanitizeDisplayText(raw: String?, fallback: String): String =
         raw?.trim()?.takeIf { it.isNotEmpty() } ?: fallback

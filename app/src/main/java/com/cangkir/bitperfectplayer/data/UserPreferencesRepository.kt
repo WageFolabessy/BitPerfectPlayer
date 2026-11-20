@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
+import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
@@ -22,7 +23,8 @@ val Context.bitPerfectUserPreferencesDataStore: DataStore<Preferences> by prefer
 
 /**
  * Local-first Jetpack DataStore repository storing hearing safety mode (default Safe Mode),
- * playback controls (shuffle/repeat), persisted SAF URIs, and last playback restoration state.
+ * playback controls (shuffle/repeat/gapless), Safe-Mode-only ReplayGain settings, persisted SAF
+ * URIs, and last playback restoration state.
  */
 class UserPreferencesRepository(
     private val dataStore: DataStore<Preferences>,
@@ -31,6 +33,10 @@ class UserPreferencesRepository(
         val AUDIO_SAFETY_MODE = stringPreferencesKey("audio_safety_mode")
         val SHUFFLE_ENABLED = booleanPreferencesKey("shuffle_enabled")
         val REPEAT_MODE = stringPreferencesKey("repeat_mode")
+        val GAPLESS_ENABLED = booleanPreferencesKey("gapless_enabled")
+        val REPLAYGAIN_MODE = stringPreferencesKey("replaygain_mode")
+        val REPLAYGAIN_PREAMP_DB = floatPreferencesKey("replaygain_preamp_db")
+        val REPLAYGAIN_PREVENT_CLIPPING = booleanPreferencesKey("replaygain_prevent_clipping")
         val PERSISTED_SAF_TREE_URIS = stringSetPreferencesKey("persisted_saf_tree_uris")
         val PERSISTED_SAF_FILE_URIS = stringSetPreferencesKey("persisted_saf_file_uris")
         val LAST_TRACK_URI = stringPreferencesKey("last_track_uri")
@@ -65,6 +71,30 @@ class UserPreferencesRepository(
     suspend fun setRepeatMode(mode: RepeatModePreference) {
         dataStore.edit { prefs ->
             prefs[Keys.REPEAT_MODE] = mode.name
+        }
+    }
+
+    suspend fun setGaplessEnabled(enabled: Boolean) {
+        dataStore.edit { prefs ->
+            prefs[Keys.GAPLESS_ENABLED] = enabled
+        }
+    }
+
+    suspend fun setReplayGainMode(mode: ReplayGainModePreference) {
+        dataStore.edit { prefs ->
+            prefs[Keys.REPLAYGAIN_MODE] = mode.name
+        }
+    }
+
+    suspend fun setReplayGainPreampDb(preampDb: Float) {
+        dataStore.edit { prefs ->
+            prefs[Keys.REPLAYGAIN_PREAMP_DB] = PersistenceSanitizer.sanitizeReplayGainPreampDb(preampDb)
+        }
+    }
+
+    suspend fun setReplayGainPreventClipping(preventClipping: Boolean) {
+        dataStore.edit { prefs ->
+            prefs[Keys.REPLAYGAIN_PREVENT_CLIPPING] = preventClipping
         }
     }
 
@@ -140,6 +170,12 @@ class UserPreferencesRepository(
             audioSafetyMode = AudioSafetyModePreference.fromStoredName(prefs[Keys.AUDIO_SAFETY_MODE]),
             shuffleEnabled = prefs[Keys.SHUFFLE_ENABLED] ?: false,
             repeatMode = RepeatModePreference.fromStoredName(prefs[Keys.REPEAT_MODE]),
+            gaplessEnabled = prefs[Keys.GAPLESS_ENABLED] ?: true,
+            replayGainMode = ReplayGainModePreference.fromStoredName(prefs[Keys.REPLAYGAIN_MODE]),
+            replayGainPreampDb = PersistenceSanitizer.sanitizeReplayGainPreampDb(
+                prefs[Keys.REPLAYGAIN_PREAMP_DB] ?: 0.0f,
+            ),
+            replayGainPreventClipping = prefs[Keys.REPLAYGAIN_PREVENT_CLIPPING] ?: true,
             persistedSafTreeUris = PersistenceSanitizer.sanitizeUriSet(
                 prefs[Keys.PERSISTED_SAF_TREE_URIS].orEmpty(),
             ),

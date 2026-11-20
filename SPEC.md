@@ -60,7 +60,7 @@ Never equate FLAC/lossless file playback capability with verified bit-perfect ou
    - Use `AudioTrack` paired with `AudioManager.getSupportedMixerAttributes()` and `AudioManager.setPreferredMixerAttributes()` requesting `AudioMixerAttributes.MIXER_BEHAVIOR_BIT_PERFECT` when the active USB output device exposes support at runtime.
    - Always call `AudioManager.clearPreferredMixerAttributes(audioAttributes, device)` on API 34+ when switching back to Safe Mode, stopping/releasing playback, disconnecting USB, or changing track sample rates so bit-perfect mixer preferences never leak across sessions.
 2. **Transparent Fallback Path:**
-   - If the OS/HAL or USB-C DAC does not expose `MIXER_BEHAVIOR_BIT_PERFECT` (or when playing on non-USB outputs / API < 34), automatically fall back to the cleanest native `AudioTrack` path (zero EQ, DSP, normalization, or crossfade; matching native sample rate when supported).
+   - If the OS/HAL or USB-C DAC does not expose `MIXER_BEHAVIOR_BIT_PERFECT` (or when playing on non-USB outputs / API < 34), automatically fall back to the cleanest native `AudioTrack` path (zero EQ, DSP, or crossfade; matching native sample rate when supported; optional ReplayGain permitted strictly in `SAFE_VOLUME_MODE` and unconditionally bypassed in `BIT_PERFECT_OPT_IN` mode).
    - Display an honest UI status label (e.g., *"Clean Native Path — Bit-Perfect Not Supported by OS/Device"*), never a false bit-perfect claim.
 3. **Out of MVP Scope (Prohibited):**
    - Do **not** build a custom user-space USB Audio Class (UAC1/UAC2) isochronous driver from scratch using `UsbManager` + C/C++.
@@ -69,8 +69,8 @@ Never equate FLAC/lossless file playback capability with verified bit-perfect ou
 Because the target IEM has high sensitivity (107 dB/mW at 24 ohms), bypassing digital volume without verified hardware volume control can output full scale (0 dBFS / 100%) and risk hearing damage.
 
 Mandatory rules:
-1. **Default Mode = Safe Mode (Volume Active):** System volume control works normally on fresh install and whenever a new USB audio device is connected.
-2. **Bit-Perfect Mode = Explicit Opt-In:** Never enabled automatically on USB plug-in. Disables EQ, DSP, normalization, and crossfade.
+1. **Default Mode = Safe Mode (Volume Active):** System volume control works normally on fresh install and whenever a new USB audio device is connected. Optional local ReplayGain (`OFF` by default) is permitted exclusively in `SAFE_VOLUME_MODE`.
+2. **Bit-Perfect Mode = Explicit Opt-In:** Never enabled automatically on USB plug-in. Disables EQ, DSP, normalization, crossfade, and automatically bypasses ReplayGain (`OFF`, gain = `1.0f`) so PCM samples pass untouched.
 3. **Fixed-Volume Safeguards:** Treat Bit-Perfect Mode as potentially fixed-volume (100%) unless hardware volume support is explicitly verified at runtime:
    - Must display a **hearing safety warning dialog** requiring explicit user confirmation before activating Bit-Perfect Mode.
    - Must keep a **quick Pause control** immediately accessible.

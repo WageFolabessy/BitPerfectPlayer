@@ -37,6 +37,10 @@ class PersistenceAndPreferencesTest {
         assertEquals(AudioSafetyModePreference.SAFE_VOLUME_MODE, snapshot.audioSafetyMode)
         assertFalse(snapshot.shuffleEnabled)
         assertEquals(RepeatModePreference.OFF, snapshot.repeatMode)
+        assertTrue(snapshot.gaplessEnabled)
+        assertEquals(ReplayGainModePreference.OFF, snapshot.replayGainMode)
+        assertEquals(0.0f, snapshot.replayGainPreampDb, 1e-6f)
+        assertTrue(snapshot.replayGainPreventClipping)
         assertTrue(snapshot.persistedSafTreeUris.isEmpty())
         assertTrue(snapshot.persistedSafFileUris.isEmpty())
         assertNull(snapshot.lastPlaybackState.trackUri)
@@ -52,6 +56,10 @@ class PersistenceAndPreferencesTest {
         repo.setAudioSafetyMode(AudioSafetyModePreference.BIT_PERFECT_OPT_IN)
         repo.setShuffleEnabled(true)
         repo.setRepeatMode(RepeatModePreference.ONE)
+        repo.setGaplessEnabled(false)
+        repo.setReplayGainMode(ReplayGainModePreference.ALBUM)
+        repo.setReplayGainPreampDb(15.0f) // Out-of-bounds clamped to +6.0 dB
+        repo.setReplayGainPreventClipping(false)
         repo.addPersistedSafTreeUri("  content://com.android.externalstorage.documents/tree/primary%3AMusic  ")
         repo.addPersistedSafTreeUri("   ") // Blank URI ignored
         repo.addPersistedSafFileUri("content://com.android.externalstorage.documents/document/primary%3Asong.flac")
@@ -65,6 +73,10 @@ class PersistenceAndPreferencesTest {
         assertEquals(AudioSafetyModePreference.BIT_PERFECT_OPT_IN, snapshot.audioSafetyMode)
         assertTrue(snapshot.shuffleEnabled)
         assertEquals(RepeatModePreference.ONE, snapshot.repeatMode)
+        assertFalse(snapshot.gaplessEnabled)
+        assertEquals(ReplayGainModePreference.ALBUM, snapshot.replayGainMode)
+        assertEquals(6.0f, snapshot.replayGainPreampDb, 1e-6f)
+        assertFalse(snapshot.replayGainPreventClipping)
         assertEquals(
             setOf("content://com.android.externalstorage.documents/tree/primary%3AMusic"),
             snapshot.persistedSafTreeUris,
@@ -80,10 +92,12 @@ class PersistenceAndPreferencesTest {
         // Removal & reset to Safe Mode
         repo.removePersistedSafTreeUri("content://com.android.externalstorage.documents/tree/primary%3AMusic")
         repo.setAudioSafetyMode(AudioSafetyModePreference.SAFE_VOLUME_MODE)
+        repo.setReplayGainPreampDb(-99.0f) // Clamped to -6.0 dB
         repo.clearLastPlaybackState()
 
         val updated = repo.getSnapshot()
         assertEquals(AudioSafetyModePreference.SAFE_VOLUME_MODE, updated.audioSafetyMode)
+        assertEquals(-6.0f, updated.replayGainPreampDb, 1e-6f)
         assertTrue(updated.persistedSafTreeUris.isEmpty())
         assertNull(updated.lastPlaybackState.trackUri)
         assertNull(updated.lastPlaybackState.contentFingerprint)
