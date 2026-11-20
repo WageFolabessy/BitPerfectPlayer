@@ -25,7 +25,7 @@ Execute unchecked `[ ]` items sequentially from top to bottom following `AGENTS.
 
 ## Milestone 1: Pure Logic Modules — Fingerprinting, `.lrc` Parsing, & Local Persistence
 
-- [ ] **T1.1 — Deterministic Content Fingerprint Generator (SHA-256)**
+- [x] **T1.1 — Deterministic Content Fingerprint Generator (SHA-256)**
   - Implement pure-Kotlin `ContentFingerprintGenerator` (zero `android.*` imports) under `app/src/main/java/com/cangkir/bitperfectplayer/lyrics/`:
     - For `size <= 131072` (128 KB): lowercase 64-char hex `SHA-256(entire file bytes)`.
     - For `size > 128 KB`: lowercase 64-char hex `SHA-256(first 64 KB [65536 bytes] + last 64 KB [65536 bytes] + total file size in bytes as 8-byte big-endian unsigned integer)`.
