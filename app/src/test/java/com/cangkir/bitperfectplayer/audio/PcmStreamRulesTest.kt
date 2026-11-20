@@ -71,6 +71,10 @@ class PcmStreamRulesTest {
         assertEquals(PcmEncodingType.PCM_FLOAT, PcmStreamRules.selectMediaCodecRequestEncoding(32))
         assertEquals(PcmEncodingType.PCM_16BIT, PcmStreamRules.selectMediaCodecRequestEncoding(16))
         assertEquals(PcmEncodingType.PCM_16BIT, PcmStreamRules.selectMediaCodecRequestEncoding(null))
+
+        // Only non-16-bit requests should explicitly set KEY_PCM_ENCODING on MediaFormat
+        assertEquals(true, PcmStreamRules.shouldSetMediaCodecPcmEncodingKey(PcmEncodingType.PCM_FLOAT))
+        assertEquals(false, PcmStreamRules.shouldSetMediaCodecPcmEncodingKey(PcmEncodingType.PCM_16BIT))
     }
 
     @Test
@@ -88,6 +92,14 @@ class PcmStreamRulesTest {
         assertEquals(8192, PcmStreamRules.alignByteCountToFrame(8199, 8))
         assertEquals(16_384, PcmStreamRules.computeAlignedBufferSize(16_384, 8))
         assertEquals(0, PcmStreamRules.computeAlignedBufferSize(16_385, 8) % 8)
+
+        // FloatArray(bufferSize / 4) MUST always be an exact multiple of channelCount for PCM_FLOAT
+        for (channelCount in listOf(1, 2, 4, 6, 8)) {
+            val bytesPerFrame = channelCount * 4
+            val bufferSize = PcmStreamRules.computeAlignedBufferSize(16_384, bytesPerFrame)
+            assertEquals(0, bufferSize % 4)
+            assertEquals(0, (bufferSize / 4) % channelCount)
+        }
     }
 
     @Test

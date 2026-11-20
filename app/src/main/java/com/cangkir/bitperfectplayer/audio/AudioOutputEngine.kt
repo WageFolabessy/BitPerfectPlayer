@@ -857,7 +857,7 @@ class AudioOutputEngine(
         var bufferSize = PcmStreamRules.computeAlignedBufferSize(16_384, bytesPerFrame)
         var pcmBuffer = ByteArray(bufferSize)
         var directBuffer = ByteBuffer.allocateDirect(bufferSize).order(ByteOrder.LITTLE_ENDIAN)
-        var floatBuffer = FloatArray(bufferSize / 4 + 1)
+        var floatBuffer = FloatArray(bufferSize / 4)
         var remainder = ByteArray(bytesPerFrame)
         var remainderLen = 0
 
@@ -893,6 +893,17 @@ class AudioOutputEngine(
                 }
 
                 val bytesRead = decoder.readPcm(pcmBuffer)
+                if (bytesRead < 0) {
+                    val finalPos = durationMs.takeIf { it > 0L } ?: _state.value.currentPositionMs
+                    _state.update {
+                        it.copy(
+                            status = PlaybackStatus.COMPLETED,
+                            currentPositionMs = finalPos,
+                        )
+                    }
+                    mainHandler.post { onTrackCompleted?.invoke() }
+                    break
+                }
 
                 // Reconfigure AudioTrack dynamically if MediaCodec emitted INFO_OUTPUT_FORMAT_CHANGED mid-stream.
                 val latestVersion = decoder.formatVersion
@@ -924,24 +935,14 @@ class AudioOutputEngine(
                         bufferSize = PcmStreamRules.computeAlignedBufferSize(16_384, bytesPerFrame)
                         pcmBuffer = ByteArray(bufferSize)
                         directBuffer = ByteBuffer.allocateDirect(bufferSize).order(ByteOrder.LITTLE_ENDIAN)
-                        floatBuffer = FloatArray(bufferSize / 4 + 1)
+                        floatBuffer = FloatArray(bufferSize / 4)
                         remainder = ByteArray(bytesPerFrame)
                         remainderLen = 0
                         seekBaseMs = _state.value.currentPositionMs
                         headBaseFrames = readUnsignedPlaybackHeadFrames(currentTrack)
+                        // Skip writing bytes from the prior buffer/format into the newly allocated pcmBuffer.
+                        continue
                     }
-                }
-
-                if (bytesRead < 0) {
-                    val finalPos = durationMs.takeIf { it > 0L } ?: _state.value.currentPositionMs
-                    _state.update {
-                        it.copy(
-                            status = PlaybackStatus.COMPLETED,
-                            currentPositionMs = finalPos,
-                        )
-                    }
-                    mainHandler.post { onTrackCompleted?.invoke() }
-                    break
                 }
 
                 if (bytesRead == 0) {

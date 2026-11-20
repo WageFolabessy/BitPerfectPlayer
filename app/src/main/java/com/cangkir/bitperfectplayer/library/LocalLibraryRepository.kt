@@ -1,11 +1,14 @@
 package com.cangkir.bitperfectplayer.library
 
+import android.Manifest
 import android.content.ContentUris
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
+import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import androidx.documentfile.provider.DocumentFile
 import com.cangkir.bitperfectplayer.audio.AudioFormatClassifier
@@ -345,7 +348,19 @@ class LocalLibraryRepository(
         val parentTreeUriString: String?,
     )
 
+    private fun hasMediaStoreAudioPermission(): Boolean {
+        val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            Manifest.permission.READ_MEDIA_AUDIO
+        } else {
+            Manifest.permission.READ_EXTERNAL_STORAGE
+        }
+        return ContextCompat.checkSelfPermission(appContext, permission) == PackageManager.PERMISSION_GRANTED
+    }
+
     private fun discoverMediaStoreCandidates(): MediaStoreDiscoveryResult {
+        if (!hasMediaStoreAudioPermission()) {
+            return MediaStoreDiscoveryResult(permissionGranted = false, candidates = emptyList())
+        }
         val results = mutableListOf<RawMediaStoreCandidate>()
         val projection = buildList {
             add(MediaStore.Audio.Media._ID)

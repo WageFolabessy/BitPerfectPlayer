@@ -442,20 +442,23 @@ class MediaCodecAudioDecoder private constructor(
 
                 // Request ENCODING_PCM_FLOAT for >16-bit sources (preserves full 24-bit mantissa precision
                 // losslessly and is natively supported by c2.android.flac.decoder and AudioFlinger).
+                // For 16-bit sources (MP3, AAC, OGG, 16-bit FLAC), omit KEY_PCM_ENCODING so Android codecs
+                // use their native 16-bit PCM default without vendor configure() rejections.
                 val requestedPcm = PcmStreamRules.selectMediaCodecRequestEncoding(sourceBitDepth)
-                if (requestedPcm == PcmEncodingType.PCM_FLOAT) {
+                var pcmEncodingKeySetByUs = false
+                if (PcmStreamRules.shouldSetMediaCodecPcmEncodingKey(requestedPcm)) {
                     trackFormat.setInteger(
                         MediaFormat.KEY_PCM_ENCODING,
                         AudioFormat.ENCODING_PCM_FLOAT,
                     )
-                } else {
-                    trackFormat.setInteger(
-                        MediaFormat.KEY_PCM_ENCODING,
-                        AudioFormat.ENCODING_PCM_16BIT,
-                    )
+                    pcmEncodingKeySetByUs = true
                 }
 
-                codec = createAndConfigureCodec(mime, trackFormat, requestedPcm)
+                codec = createAndConfigureCodec(
+                    mime = mime,
+                    trackFormat = trackFormat,
+                    pcmEncodingKeySet = pcmEncodingKeySetByUs || trackFormat.containsKey(MediaFormat.KEY_PCM_ENCODING),
+                )
                 codec.start()
 
                 val codecLabel = runCatching { codec.name }.getOrDefault("Android MediaCodec")
@@ -505,14 +508,14 @@ class MediaCodecAudioDecoder private constructor(
         private fun createAndConfigureCodec(
             mime: String,
             trackFormat: MediaFormat,
-            requestedPcm: PcmEncodingType,
+            pcmEncodingKeySet: Boolean,
         ): MediaCodec {
             val codec = MediaCodec.createDecoderByType(mime)
             try {
                 codec.configure(trackFormat, null, null, 0)
                 return codec
             } catch (firstFailure: Exception) {
-                if (requestedPcm != PcmEncodingType.PCM_16BIT) {
+                if (pcmEncodingKeySet || trackFormat.containsKey(MediaFormat.KEY_PCM_ENCODING)) {
                     runCatching { codec.release() }
                     val fallbackCodec = MediaCodec.createDecoderByType(mime)
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -520,8 +523,13 @@ class MediaCodecAudioDecoder private constructor(
                     } else {
                         trackFormat.setInteger(MediaFormat.KEY_PCM_ENCODING, AudioFormat.ENCODING_PCM_16BIT)
                     }
-                    fallbackCodec.configure(trackFormat, null, null, 0)
-                    return fallbackCodec
+                    try {
+                        fallbackCodec.configure(trackFormat, null, null, 0)
+                        return fallbackCodec
+                    } catch (retryFailure: Exception) {
+                        runCatching { fallbackCodec.release() }
+                        throw retryFailure
+                    }
                 }
                 runCatching { codec.release() }
                 throw firstFailure

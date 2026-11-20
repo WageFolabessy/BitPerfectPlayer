@@ -36,6 +36,14 @@ object PcmStreamRules {
         }
 
     /**
+     * Returns `true` only when a non-default PCM encoding (e.g., [PcmEncodingType.PCM_FLOAT] for
+     * 24-bit sources) must be requested on the input `MediaFormat`. For 16-bit sources, Android
+     * `MediaCodec` natively defaults to 16-bit PCM without force-setting `KEY_PCM_ENCODING`.
+     */
+    fun shouldSetMediaCodecPcmEncodingKey(requested: PcmEncodingType): Boolean =
+        requested != PcmEncodingType.PCM_16BIT
+
+    /**
      * Resolves the ACTUAL PCM encoding emitted by `MediaCodec.getOutputFormat()`.
      *
      * CRITICAL: When [hasPcmEncodingKey] is `false` (i.e. `KEY_PCM_ENCODING` is absent from

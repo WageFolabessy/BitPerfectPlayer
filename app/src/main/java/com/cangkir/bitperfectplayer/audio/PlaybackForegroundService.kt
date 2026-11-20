@@ -17,6 +17,7 @@ import android.media.session.MediaSession
 import android.media.session.PlaybackState
 import android.os.Build
 import android.os.IBinder
+import android.os.SystemClock
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import com.cangkir.bitperfectplayer.BitPerfectApplication
@@ -49,6 +50,10 @@ class PlaybackForegroundService : Service() {
     private var artworkBitmap: Bitmap? = null
     private var artworkLoadJob: Job? = null
 
+    private var lastMetadataKey: MediaMetadataKey? = null
+    private var lastNotificationKey: NotificationContentKey? = null
+    private var lastPublishedPlaybackState: PublishedPlaybackState? = null
+
     override fun onCreate() {
         super.onCreate()
         val app = application as BitPerfectApplication
@@ -74,7 +79,13 @@ class PlaybackForegroundService : Service() {
                 return START_NOT_STICKY
             }
             ACTION_START, null -> {
-                promoteToForeground(playbackController.state.value)
+                val state = playbackController.state.value
+                syncArtworkForTrack(state.activeTrack)
+                val key = buildNotificationKey(state, resolveArtworkToken(state.activeTrack))
+                if (!isForegroundActive || lastNotificationKey != key) {
+                    promoteToForeground(state, key)
+                }
+                syncMediaSessionOnly(state)
             }
         }
         return START_STICKY
@@ -141,12 +152,7 @@ class PlaybackForegroundService : Service() {
         serviceScope.launch {
             playbackController.state.collect { state ->
                 syncArtworkForTrack(state.activeTrack)
-                updateMediaSession(state)
-                if (state.isPlaying) {
-                    promoteToForeground(state)
-                } else if (isForegroundActive) {
-                    updateNotification(state)
-                }
+                syncMediaSessionAndNotification(state)
             }
         }
     }
@@ -169,60 +175,136 @@ class PlaybackForegroundService : Service() {
 
         artworkLoadJob = serviceScope.launch {
             val loaded = albumArtworkLoader.loadArtwork(track, AlbumArtworkLoader.HERO_SIZE_PX)
-            if (artworkTrackUri == track.uriString) {
+            if (artworkTrackUri == track.uriString && loaded !== artworkBitmap) {
                 artworkBitmap = loaded
-                val latestState = playbackController.state.value
-                updateMediaSession(latestState)
-                if (isForegroundActive) {
-                    updateNotification(latestState)
-                }
+                syncMediaSessionAndNotification(playbackController.state.value)
             }
         }
     }
 
-    private fun updateMediaSession(state: PlaybackControllerState) {
-        val track = state.activeTrack
-        val metadataBuilder = MediaMetadata.Builder()
-            .putString(MediaMetadata.METADATA_KEY_TITLE, track?.title ?: getString(R.string.app_name))
-            .putString(MediaMetadata.METADATA_KEY_ARTIST, track?.artist ?: "Offline Bit-Perfect Audio")
-            .putString(MediaMetadata.METADATA_KEY_ALBUM, track?.album ?: "")
-            .putLong(MediaMetadata.METADATA_KEY_DURATION, state.durationMs)
-        val currentArtwork = if (track != null && track.uriString == artworkTrackUri) artworkBitmap else null
-        if (currentArtwork != null && !currentArtwork.isRecycled) {
-            metadataBuilder.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, currentArtwork)
-        }
-        mediaSession.setMetadata(metadataBuilder.build())
+    private fun syncMediaSessionAndNotification(state: PlaybackControllerState) {
+        val artworkToken = resolveArtworkToken(state.activeTrack)
+        syncMediaSessionOnly(state, artworkToken)
 
-        val sessionState = when (state.engineState.status) {
-            PlaybackStatus.PLAYING -> PlaybackState.STATE_PLAYING
-            PlaybackStatus.PREPARING -> PlaybackState.STATE_BUFFERING
-            PlaybackStatus.PAUSED, PlaybackStatus.COMPLETED -> PlaybackState.STATE_PAUSED
-            PlaybackStatus.ERROR -> PlaybackState.STATE_ERROR
-            PlaybackStatus.IDLE -> PlaybackState.STATE_STOPPED
-        }
-
-        val actions = PlaybackState.ACTION_PLAY or
-            PlaybackState.ACTION_PAUSE or
-            PlaybackState.ACTION_PLAY_PAUSE or
-            PlaybackState.ACTION_SKIP_TO_NEXT or
-            PlaybackState.ACTION_SKIP_TO_PREVIOUS or
-            PlaybackState.ACTION_SEEK_TO or
-            PlaybackState.ACTION_STOP
-
-        val playbackStateBuilder = PlaybackState.Builder()
-            .setActions(actions)
-            .setState(
-                sessionState,
-                state.currentPositionMs,
-                if (state.isPlaying) 1.0f else 0.0f,
+        val currentNotificationKey = buildNotificationKey(state, artworkToken)
+        when (
+            MediaSessionUpdatePolicy.resolveNotificationAction(
+                isForegroundActive = isForegroundActive,
+                isPlaying = state.isPlaying,
+                lastKey = lastNotificationKey,
+                currentKey = currentNotificationKey,
             )
-        state.engineState.errorMessage?.let { err ->
-            playbackStateBuilder.setErrorMessage(err)
+        ) {
+            NotificationDispatchAction.PROMOTE_FOREGROUND -> {
+                promoteToForeground(state, currentNotificationKey)
+            }
+            NotificationDispatchAction.UPDATE_NOTIFICATION -> {
+                updateNotification(state, currentNotificationKey)
+            }
+            NotificationDispatchAction.NONE -> Unit
         }
-        mediaSession.setPlaybackState(playbackStateBuilder.build())
     }
 
-    private fun promoteToForeground(state: PlaybackControllerState) {
+    private fun syncMediaSessionOnly(
+        state: PlaybackControllerState,
+        artworkToken: Int = resolveArtworkToken(state.activeTrack),
+    ) {
+        val track = state.activeTrack
+        val metadataKey = MediaMetadataKey(
+            trackUri = track?.uriString,
+            durationMs = state.durationMs,
+            artworkToken = artworkToken,
+        )
+        if (MediaSessionUpdatePolicy.shouldUpdateMetadata(lastMetadataKey, metadataKey)) {
+            val metadataBuilder = MediaMetadata.Builder()
+                .putString(MediaMetadata.METADATA_KEY_TITLE, track?.title ?: getString(R.string.app_name))
+                .putString(MediaMetadata.METADATA_KEY_ARTIST, track?.artist ?: "Offline Bit-Perfect Audio")
+                .putString(MediaMetadata.METADATA_KEY_ALBUM, track?.album ?: "")
+                .putLong(MediaMetadata.METADATA_KEY_DURATION, state.durationMs)
+            val currentArtwork = resolveActiveArtworkBitmap(track)
+            if (currentArtwork != null) {
+                metadataBuilder.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, currentArtwork)
+            }
+            mediaSession.setMetadata(metadataBuilder.build())
+            lastMetadataKey = metadataKey
+        }
+
+        val nowElapsedMs = SystemClock.elapsedRealtime()
+        val playbackSpeed = if (state.isPlaying) 1.0f else 0.0f
+        if (
+            MediaSessionUpdatePolicy.shouldUpdatePlaybackState(
+                last = lastPublishedPlaybackState,
+                status = state.engineState.status,
+                trackUri = track?.uriString,
+                errorMessage = state.engineState.errorMessage,
+                positionMs = state.currentPositionMs,
+                playbackSpeed = playbackSpeed,
+                nowElapsedMs = nowElapsedMs,
+            )
+        ) {
+            val sessionState = when (state.engineState.status) {
+                PlaybackStatus.PLAYING -> PlaybackState.STATE_PLAYING
+                PlaybackStatus.PREPARING -> PlaybackState.STATE_BUFFERING
+                PlaybackStatus.PAUSED, PlaybackStatus.COMPLETED -> PlaybackState.STATE_PAUSED
+                PlaybackStatus.ERROR -> PlaybackState.STATE_ERROR
+                PlaybackStatus.IDLE -> PlaybackState.STATE_STOPPED
+            }
+
+            val actions = PlaybackState.ACTION_PLAY or
+                PlaybackState.ACTION_PAUSE or
+                PlaybackState.ACTION_PLAY_PAUSE or
+                PlaybackState.ACTION_SKIP_TO_NEXT or
+                PlaybackState.ACTION_SKIP_TO_PREVIOUS or
+                PlaybackState.ACTION_SEEK_TO or
+                PlaybackState.ACTION_STOP
+
+            val playbackStateBuilder = PlaybackState.Builder()
+                .setActions(actions)
+                .setState(
+                    sessionState,
+                    state.currentPositionMs,
+                    playbackSpeed,
+                    nowElapsedMs,
+                )
+            state.engineState.errorMessage?.let { err ->
+                playbackStateBuilder.setErrorMessage(err)
+            }
+            mediaSession.setPlaybackState(playbackStateBuilder.build())
+            lastPublishedPlaybackState = PublishedPlaybackState(
+                status = state.engineState.status,
+                trackUri = track?.uriString,
+                errorMessage = state.engineState.errorMessage,
+                positionMs = state.currentPositionMs,
+                playbackSpeed = playbackSpeed,
+                publishedAtElapsedMs = nowElapsedMs,
+            )
+        }
+    }
+
+    private fun resolveActiveArtworkBitmap(track: PlaybackTrack?): Bitmap? {
+        val candidate = if (track != null && track.uriString == artworkTrackUri) artworkBitmap else null
+        return candidate?.takeUnless { it.isRecycled }
+    }
+
+    private fun resolveArtworkToken(track: PlaybackTrack?): Int {
+        val bmp = resolveActiveArtworkBitmap(track) ?: return 0
+        return System.identityHashCode(bmp)
+    }
+
+    private fun buildNotificationKey(
+        state: PlaybackControllerState,
+        artworkToken: Int,
+    ): NotificationContentKey = NotificationContentKey(
+        trackUri = state.activeTrack?.uriString,
+        isPlaying = state.isPlaying,
+        isBitPerfectMixerActive = state.engineState.diagnostics.isBitPerfectMixerActive,
+        artworkToken = artworkToken,
+    )
+
+    private fun promoteToForeground(
+        state: PlaybackControllerState,
+        notificationKey: NotificationContentKey,
+    ) {
         val notification = buildNotification(state)
         val serviceType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
@@ -232,10 +314,14 @@ class PlaybackForegroundService : Service() {
         runCatching {
             ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, serviceType)
             isForegroundActive = true
+            lastNotificationKey = notificationKey
         }
     }
 
-    private fun updateNotification(state: PlaybackControllerState) {
+    private fun updateNotification(
+        state: PlaybackControllerState,
+        notificationKey: NotificationContentKey,
+    ) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             val granted = ContextCompat.checkSelfPermission(
                 this,
@@ -245,11 +331,13 @@ class PlaybackForegroundService : Service() {
         }
         runCatching {
             notificationManager.notify(NOTIFICATION_ID, buildNotification(state))
+            lastNotificationKey = notificationKey
         }
     }
 
     private fun stopForegroundCompat() {
         isForegroundActive = false
+        lastNotificationKey = null
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
     }
 

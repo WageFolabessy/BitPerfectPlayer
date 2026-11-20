@@ -197,16 +197,30 @@ Following initial physical testing and logcat/screenshot analysis on POCO F4 (`H
 | **Actionable Code/Resource Lint Warnings** | `7` | `0` | Eliminated all 7 `UnusedResources` template colors in `res/values/colors.xml` |
 | **Total `lint-results-debug.txt` Issues** | `21` *(7 unused colors + 14 version notices)* | `0` *(No issues found)* | SDK 37, AGP `9.4.1`, Kotlin `2.2.10`, Compose BOM `2026.02.01` baseline preserved untouched |
 
-### Updated Software Verification Results (`./gradlew clean testDebugUnitTest lintDebug assembleDebug`)
-- **JVM Unit Tests:** **69 / 69 passed** (`0` failed, `0` errors, `0` skipped, `0` `@Ignore`) across 14 test classes (including newly added `PcmStreamRulesTest` [7/7], `LibraryPersistenceAndFavoritesTest` [3/3], and `AlbumArtworkHelperTest` [4/4]).
+### Code-Review Follow-Up Fixes (IPC Throttling & Edge Cases)
+1. **Eliminated 20 Hz Notification & `MediaSession` Binder IPC spam (`PlaybackForegroundService` + pure-Kotlin `MediaSessionUpdatePolicy`):**
+   - `mediaSession.setMetadata(...)` (including `600x600` album-art bitmaps) now runs ONLY when `activeTrack?.uriString`, `durationMs`, or resolved `artworkBitmap` identity changes.
+   - `ServiceCompat.startForeground(...)` and `notificationManager.notify(...)` run ONLY on foreground transition or when `activeTrack?.uriString`, `isPlaying`, `diagnostics.isBitPerfectMixerActive`, or `artworkBitmap` changes.
+   - `mediaSession.setPlaybackState(...)` runs ONLY on `status`, `trackUri`, `errorMessage`, or `playbackSpeed` change, or when position diverges by `> 1,500 ms` from the expected elapsed position (`SystemClock.elapsedRealtime()`).
+2. **Mid-stream format change safety & `floatBuffer` channel alignment (`AudioOutputEngine`):**
+   - Checked EOS (`bytesRead < 0`) prior to format-change handling and skipped writing (`continue`) after a mid-stream `AudioTrack` rebuild + `pcmBuffer` reallocation so freshly zeroed bytes are never written and shrinking buffers cannot cause `ArrayIndexOutOfBoundsException`.
+   - Changed `FloatArray(bufferSize / 4 + 1)` to `FloatArray(bufferSize / 4)` so `floatBuffer.size` is always an exact multiple of `channelCount`.
+3. **Explicit MediaStore runtime permission guard (`LocalLibraryRepository`):**
+   - Checked `ContextCompat.checkSelfPermission` for `READ_MEDIA_AUDIO` (API 33+) / `READ_EXTERNAL_STORAGE` (API <= 32) before querying MediaStore so an empty Scoped Storage cursor never prunes cached MediaStore tracks.
+4. **Safer 16-bit `MediaFormat` configuration (`MediaCodecAudioDecoder`):**
+   - Omitted `MediaFormat.KEY_PCM_ENCODING` for 16-bit sources (relying on Android's native 16-bit default) while still allowing retry without `KEY_PCM_ENCODING` if any vendor codec rejects a configured PCM encoding key.
+
+### Updated Software Verification Results (`./gradlew testDebugUnitTest lintDebug assembleDebug`)
+- **JVM Unit Tests:** **73 / 73 passed** (`0` failed, `0` errors, `0` skipped, `0` `@Ignore`) across 15 test classes (including newly added `MediaSessionUpdatePolicyTest` [4/4], plus updated `PcmStreamRulesTest` [7/7], `LibraryPersistenceAndFavoritesTest` [3/3], and `AlbumArtworkHelperTest` [4/4]).
 - **Android Lint:** `No issues found.` (`0` errors, `0` warnings in `app/build/reports/lint-results-debug.txt` & `.xml`).
-- **Debug APK:** `app/build/outputs/apk/debug/app-debug.apk` (`20 MB`, built cleanly from `clean`).
+- **Debug APK:** `app/build/outputs/apk/debug/app-debug.apk` (`20 MB`).
 - **Strict Offline Privacy Audit (Source + All Merged Debug Manifests):** **PASS** — **0 occurrences** of `android.permission.INTERNET` or `android.permission.MANAGE_EXTERNAL_STORAGE`.
-- **Pure-Kotlin Domain Boundary:** **PASS** — **0 `android.*` imports** across all 16 pure-Kotlin domain modules (`ContentFingerprintGenerator`, `LrcParser`, `PersistenceModels`, `PlaybackQueueManager`, `AudioSafetyController`, `AudioDiagnosticMapper`, `AudioDecoderModels`, `WavHeaderParser`, `PlaybackTrack`, `PcmStreamRules`, `AudioFormatFormatter`, `LibraryProjector`, `LibrarySyncDiffer`, `FavoriteStateReducer`, `AlbumArtworkHelper`, `MediaScanFilter`).
+- **Pure-Kotlin Domain Boundary:** **PASS** — **0 `android.*` imports** across all 17 pure-Kotlin domain modules (`ContentFingerprintGenerator`, `LrcParser`, `PersistenceModels`, `PlaybackQueueManager`, `AudioSafetyController`, `AudioDiagnosticMapper`, `AudioDecoderModels`, `WavHeaderParser`, `PlaybackTrack`, `PcmStreamRules`, `AudioFormatFormatter`, `MediaSessionUpdatePolicy`, `LibraryProjector`, `LibrarySyncDiffer`, `FavoriteStateReducer`, `AlbumArtworkHelper`, `MediaScanFilter`).
 - **Physical Hardware Re-Test Still Required (Not Executed in Cloud):** Re-install the rebuilt debug APK on POCO F4 + KZ EDX Pro 2 USB-C (IEMs out of ears first!) to confirm:
   1. Clean, distortion-free audio on 24-bit/96,000 Hz FLAC & WAV across both internal speaker and USB-C IEM (inspect `BitPerfectAudio` logcat tag for confirmed `MediaCodec` output encoding and `AudioTrack` encoding),
   2. Instant cached library display on cold restart without blank flash,
   3. Next-frame heart icon toggle reactivity & Favorites tab sync,
   4. Local embedded/SAF cover art rendering in Library, MiniPlayer, Now Playing, and Lock Screen Notification,
   5. Custom obsidian PCM icon on HyperOS launcher.
+
 
