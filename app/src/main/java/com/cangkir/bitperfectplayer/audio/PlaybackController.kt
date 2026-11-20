@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Combined UI-observable low-frequency playback state unifying queue state, active track, resolved
@@ -40,8 +41,8 @@ data class PlaybackControllerState(
 
 /**
  * Application-scoped playback coordinator bridging [PlaybackQueueManager], [AudioOutputEngine],
- * [PlaybackForegroundService], [UserPreferencesRepository], [LocalPersistenceRepository], and
- * [AndroidContentFingerprintProvider].
+ * [PlayCountTracker], [PlaybackForegroundService], [UserPreferencesRepository],
+ * [LocalPersistenceRepository], and [AndroidContentFingerprintProvider].
  */
 class PlaybackController(
     context: Context,
@@ -54,11 +55,14 @@ class PlaybackController(
 
     private val queueManager = PlaybackQueueManager<PlaybackTrack>()
     private val safetyController = AudioSafetyController()
+    private val playCountTracker = PlayCountTracker()
+    private val trackedTracksByUri = ConcurrentHashMap<String, PlaybackTrack>()
 
     private val engine = AudioOutputEngine(
         context = appContext,
         safetyController = safetyController,
         onTrackCompleted = { handleTrackCompleted() },
+        onActivePlaybackElapsedMs = { deltaMs -> handleActivePlaybackElapsed(deltaMs) },
     )
 
     private val _state = MutableStateFlow(
@@ -84,10 +88,14 @@ class PlaybackController(
         // Mirror engine state updates and persist playback position periodically while playing.
         scope.launch {
             engine.state.collect { engineState ->
+                if (engineState.durationMs > 0L) {
+                    playCountTracker.updateDuration(engineState.durationMs)
+                }
                 _state.update { it.copy(engineState = engineState) }
                 if (engineState.isPlaying) {
                     ensurePositionPersistenceRunning()
                 } else {
+                    flushPendingPlayCountTime()
                     stopPositionPersistenceAndSaveNow()
                 }
             }
@@ -144,6 +152,7 @@ class PlaybackController(
         _state.update { it.copy(queue = snapshot, activeTrack = newActive) }
 
         if (snapshot.isEmpty) {
+            playCountTracker.clearSession()?.let { persistPlayCountFlush(it) }
             engine.stop()
             _state.update { it.copy(activeFingerprint = null) }
             PlaybackForegroundService.stopService(appContext)
@@ -165,11 +174,15 @@ class PlaybackController(
             loadActiveTrack(active, startPositionMs = playbackPositionMs.value, autoPlay = true)
             return
         }
+        if (engine.state.value.status == PlaybackStatus.COMPLETED) {
+            playCountTracker.resetSessionForReplay()?.let { persistPlayCountFlush(it) }
+        }
         PlaybackForegroundService.startService(appContext)
         engine.play()
     }
 
     fun pause() {
+        flushPendingPlayCountTime()
         engine.pause()
         persistCurrentPositionAsync()
     }
@@ -210,11 +223,13 @@ class PlaybackController(
     }
 
     fun seekTo(positionMs: Long) {
+        playCountTracker.onSeek()
         engine.seekTo(positionMs)
         persistCurrentPositionAsync()
     }
 
     fun stop() {
+        playCountTracker.clearSession()?.let { persistPlayCountFlush(it) }
         persistCurrentPositionAsync()
         engine.stop()
         PlaybackForegroundService.stopService(appContext)
@@ -297,10 +312,12 @@ class PlaybackController(
     }
 
     fun persistCurrentPositionNow() {
+        flushPendingPlayCountTime()
         persistCurrentPositionAsync()
     }
 
     fun release() {
+        playCountTracker.clearSession()?.let { persistPlayCountFlush(it) }
         persistCurrentPositionAsync()
         positionPersistenceJob?.cancel()
         fingerprintJob?.cancel()
@@ -308,7 +325,53 @@ class PlaybackController(
     }
 
     private fun handleTrackCompleted() {
+        playCountTracker.onNaturalCompletion()?.let { persistPlayCountFlush(it) }
         next(userInitiated = false)
+    }
+
+    private fun handleActivePlaybackElapsed(deltaMs: Long) {
+        playCountTracker.onActivePlaybackElapsed(deltaMs)?.let { persistPlayCountFlush(it) }
+    }
+
+    private fun flushPendingPlayCountTime() {
+        playCountTracker.flushPendingPlayTime()?.let { persistPlayCountFlush(it) }
+    }
+
+    private fun persistPlayCountFlush(event: PlayCountFlushEvent) {
+        if (!event.incrementPlayCount && event.playTimeDeltaMs <= 0L) return
+        val track = trackedTracksByUri[event.trackUri]
+            ?: _state.value.activeTrack?.takeIf { it.uriString == event.trackUri }
+            ?: return
+        val cachedActiveFp = if (_state.value.activeTrack?.uriString == event.trackUri) {
+            _state.value.activeFingerprint
+        } else {
+            null
+        }
+        scope.launch(Dispatchers.IO) {
+            val resolvedFp = track.contentFingerprint?.takeIf { it.isNotBlank() }
+                ?: cachedActiveFp?.takeIf { it.isNotBlank() }
+                ?: fingerprintProvider.computeFingerprint(track.uriString.toUri()).getOrNull()
+                ?: return@launch
+
+            if (track.contentFingerprint != resolvedFp) {
+                trackedTracksByUri[track.uriString] = track.copy(contentFingerprint = resolvedFp)
+                runCatching {
+                    persistenceRepository.updateCachedTrackFingerprint(
+                        uriString = track.uriString,
+                        fingerprint = resolvedFp,
+                    )
+                }
+            }
+            runCatching {
+                persistenceRepository.recordTrackListeningDelta(
+                    contentFingerprint = resolvedFp,
+                    track = track,
+                    playCountDelta = if (event.incrementPlayCount) 1 else 0,
+                    playTimeDeltaMs = event.playTimeDeltaMs,
+                    playedAtEpochMs = System.currentTimeMillis(),
+                )
+            }
+        }
     }
 
     private fun loadActiveTrack(
@@ -316,6 +379,8 @@ class PlaybackController(
         startPositionMs: Long,
         autoPlay: Boolean,
     ) {
+        trackedTracksByUri[track.uriString] = track
+        playCountTracker.startSession(track.uriString, track.durationMs)?.let { persistPlayCountFlush(it) }
         if (autoPlay) {
             PlaybackForegroundService.startService(appContext)
         }
@@ -339,6 +404,7 @@ class PlaybackController(
                 ?: fingerprintProvider.computeFingerprint(track.uriString.toUri()).getOrNull()
 
             if (resolvedFp != null && track.contentFingerprint != resolvedFp) {
+                trackedTracksByUri[track.uriString] = track.copy(contentFingerprint = resolvedFp)
                 runCatching {
                     persistenceRepository.updateCachedTrackFingerprint(
                         uriString = track.uriString,

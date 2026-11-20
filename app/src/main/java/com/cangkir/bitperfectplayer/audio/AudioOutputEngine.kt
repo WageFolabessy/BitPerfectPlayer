@@ -84,6 +84,7 @@ class AudioOutputEngine(
     context: Context,
     private val safetyController: AudioSafetyController = AudioSafetyController(),
     private val onTrackCompleted: (() -> Unit)? = null,
+    private val onActivePlaybackElapsedMs: ((Long) -> Unit)? = null,
 ) {
     private val appContext = context.applicationContext
     private val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -866,12 +867,34 @@ class AudioOutputEngine(
 
         var seekBaseMs = initialSeekMs.coerceAtLeast(0L)
         var headBaseFrames = readUnsignedPlaybackHeadFrames(currentTrack)
+        var countHeadFrames = headBaseFrames
+        var pendingPlayCountMs = 0L
+        var wasPausedInLoop = false
         var lastUiUpdateNano = 0L
+
+        fun accumulateActivePlayTime(forceFlush: Boolean) {
+            val headFrames = readUnsignedPlaybackHeadFrames(currentTrack)
+            val stepFrames = (headFrames - countHeadFrames).coerceAtLeast(0L)
+            if (stepFrames > 0L) {
+                val stepMs = (stepFrames * 1000L) / sampleRate.toLong()
+                if (stepMs > 0L) {
+                    val consumedFrames = (stepMs * sampleRate.toLong()) / 1000L
+                    countHeadFrames += consumedFrames
+                    pendingPlayCountMs += stepMs
+                }
+            }
+            if ((forceFlush && pendingPlayCountMs > 0L) || pendingPlayCountMs >= 500L) {
+                val toEmit = pendingPlayCountMs
+                pendingPlayCountMs = 0L
+                onActivePlaybackElapsedMs?.invoke(toEmit)
+            }
+        }
 
         try {
             while (!stopWorkerFlag.get() && !releasedFlag.get()) {
                 val requestedSeek = pendingSeekMs.getAndSet(-1L)
                 if (requestedSeek >= 0L) {
+                    accumulateActivePlayTime(forceFlush = true)
                     val wasPlaying = !isPausedFlag.get()
                     safePauseTrack(currentTrack)
                     safeFlushTrack(currentTrack)
@@ -879,6 +902,7 @@ class AudioOutputEngine(
                     val actualSeekMs = decoder.seekToMs(requestedSeek)
                     seekBaseMs = actualSeekMs
                     headBaseFrames = readUnsignedPlaybackHeadFrames(currentTrack)
+                    countHeadFrames = headBaseFrames
                     _playbackPositionMs.value = actualSeekMs
                     if (wasPlaying) {
                         safePlayTrack(currentTrack)
@@ -887,6 +911,10 @@ class AudioOutputEngine(
                 }
 
                 if (isPausedFlag.get()) {
+                    if (!wasPausedInLoop) {
+                        accumulateActivePlayTime(forceFlush = true)
+                        wasPausedInLoop = true
+                    }
                     try {
                         Thread.sleep(25L)
                     } catch (_: InterruptedException) {
@@ -894,9 +922,14 @@ class AudioOutputEngine(
                     }
                     continue
                 }
+                if (wasPausedInLoop) {
+                    countHeadFrames = readUnsignedPlaybackHeadFrames(currentTrack)
+                    wasPausedInLoop = false
+                }
 
                 val bytesRead = decoder.readPcm(pcmBuffer)
                 if (bytesRead < 0) {
+                    accumulateActivePlayTime(forceFlush = true)
                     val finalPos = durationMs.takeIf { it > 0L } ?: _playbackPositionMs.value
                     _playbackPositionMs.value = finalPos
                     _state.update {
@@ -915,6 +948,7 @@ class AudioOutputEngine(
                         newFormat.sampleRateHz != currentFormat.sampleRateHz ||
                         newFormat.channelCount != currentFormat.channelCount
                     ) {
+                        accumulateActivePlayTime(forceFlush = true)
                         val rebuiltTrack = engineLock.withLock {
                             if (stopWorkerFlag.get() || releasedFlag.get()) {
                                 null
@@ -941,6 +975,7 @@ class AudioOutputEngine(
                         remainderLen = 0
                         seekBaseMs = _playbackPositionMs.value
                         headBaseFrames = readUnsignedPlaybackHeadFrames(currentTrack)
+                        countHeadFrames = headBaseFrames
                         // Skip writing bytes from the prior buffer/format into the newly allocated pcmBuffer.
                         continue
                     }
@@ -985,6 +1020,7 @@ class AudioOutputEngine(
                         directBuffer = directBuffer,
                         floatBuffer = floatBuffer,
                     )
+                    accumulateActivePlayTime(forceFlush = false)
                 }
 
                 // Publish hardware-clocked playback position (~20 Hz) to dedicated flow only (zero full-UI recompositions).
@@ -1016,6 +1052,8 @@ class AudioOutputEngine(
                     )
                 }
             }
+        } finally {
+            runCatching { accumulateActivePlayTime(forceFlush = true) }
         }
     }
 
