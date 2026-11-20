@@ -12,7 +12,7 @@ Execute unchecked `[ ]` items sequentially from top to bottom following `AGENTS.
   - Run `./gradlew testDebugUnitTest` and `./gradlew assembleDebug` on the untouched baseline project.
   - **Pass criteria:** Gradle syncs cleanly and both baseline `ExampleUnitTest` and debug APK build succeed without downgrading `compileSdk`/`targetSdk`. *(Foundational Blocker: If Android SDK 37 or the required Gradle JVM is unavailable and cannot be provisioned cleanly within the 3-attempt circuit breaker limit, document exact diagnostics in `BLOCKED.md` and `HANDOFF_REPORT.md`, commit/push them, and halt cleanly).*
 
-- [ ] **T0.2 — Configure Dependencies, Manifest Permissions, and Package Structure**
+- [x] **T0.2 — Configure Dependencies, Manifest Permissions, and Package Structure**
   - Add permissive-licensed (Apache 2.0 / MIT / BSD) dependencies via `gradle/libs.versions.toml` aligned with the existing AGP/Kotlin versions:
     - Compose Navigation, Material Icons Extended (if needed), Lifecycle ViewModel Compose, Kotlin Coroutines (`kotlinx-coroutines-android`, `kotlinx-coroutines-test`), and `androidx.documentfile:documentfile` for SAF tree traversal.
     - Local persistence: Room (`room-runtime`, `room-ktx`, `room-compiler` via KSP) + DataStore Preferences (`datastore-preferences`). *(Fallback clause: if KSP/Room has an unresolvable plugin incompatibility with the project's AGP/Kotlin/SDK 37 toolchain, document the exact error in `DECISIONS.md` and use Android's built-in `SQLiteOpenHelper` with clean repository/DAO abstractions instead).*
