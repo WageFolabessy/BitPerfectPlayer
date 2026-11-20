@@ -33,6 +33,8 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.VerifiedUser
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -41,7 +43,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.ScaffoldDefaults
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -50,15 +55,22 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.cangkir.bitperfectplayer.audio.AudioOutputMode
 import com.cangkir.bitperfectplayer.audio.PlaybackControllerState
+import com.cangkir.bitperfectplayer.audio.ReplayGainConfig
+import com.cangkir.bitperfectplayer.audio.ReplayGainMode
+import com.cangkir.bitperfectplayer.audio.ReplayGainProcessor
 import com.cangkir.bitperfectplayer.library.LibrarySnapshot
 import com.cangkir.bitperfectplayer.ui.theme.AmberIndicated
 import com.cangkir.bitperfectplayer.ui.theme.EmeraldSafe
 import com.cangkir.bitperfectplayer.ui.theme.IcePrimary
+import com.cangkir.bitperfectplayer.ui.theme.IcePrimaryContainer
+import com.cangkir.bitperfectplayer.ui.theme.OnIcePrimaryContainer
 import com.cangkir.bitperfectplayer.ui.theme.TextMuted
+import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -68,6 +80,10 @@ fun SettingsScreen(
     onImportFolder: (Uri) -> Unit,
     onRemoveSafFolder: (String) -> Unit,
     onRefreshLibrary: () -> Unit,
+    onSetGaplessEnabled: (Boolean) -> Unit,
+    onSetReplayGainMode: (ReplayGainMode) -> Unit,
+    onSetReplayGainPreampDb: (Float) -> Unit,
+    onSetReplayGainPreventClipping: (Boolean) -> Unit,
     onOpenDiagnostics: () -> Unit,
 ) {
     val folderPickerLauncher = rememberLauncherForActivityResult(
@@ -84,14 +100,17 @@ fun SettingsScreen(
 
     val safetyState = playbackState.engineState.safetyState
     val diagnostics = playbackState.engineState.diagnostics
+    val isBitPerfectOptIn = safetyState.mode == AudioOutputMode.BIT_PERFECT_OPT_IN
+    val rgConfig = playbackState.replayGainConfig
+
     val modeLabel = when {
         diagnostics.isBitPerfectMixerActive -> "Bit-Perfect USB Active"
-        safetyState.mode == AudioOutputMode.BIT_PERFECT_OPT_IN -> "Clean Native Fallback"
+        isBitPerfectOptIn -> "Clean Native Fallback"
         else -> "Safe Mode (Volume Active)"
     }
     val modeDotColor = when {
         diagnostics.isBitPerfectMixerActive -> IcePrimary
-        safetyState.mode == AudioOutputMode.BIT_PERFECT_OPT_IN -> AmberIndicated
+        isBitPerfectOptIn -> AmberIndicated
         else -> EmeraldSafe
     }
 
@@ -179,6 +198,202 @@ fun SettingsScreen(
                             contentDescription = "Open Audio Diagnostics",
                             tint = TextMuted,
                         )
+                    }
+                }
+            }
+
+            // Playback Engine & Safe-Mode-Only ReplayGain
+            item(key = "header_playback", contentType = "section_header") {
+                Spacer(modifier = Modifier.height(4.dp))
+                SectionLabel("PLAYBACK & REPLAYGAIN")
+            }
+
+            item(key = "card_gapless", contentType = "settings_card") {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.6f)),
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .sizeIn(minHeight = 60.dp)
+                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Gapless Playback",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "Pre-loads next track for zero-gap transitions when format & sample rate match.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Switch(
+                            checked = playbackState.gaplessEnabled,
+                            onCheckedChange = onSetGaplessEnabled,
+                        )
+                    }
+                }
+            }
+
+            item(key = "card_replaygain", contentType = "settings_card") {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.6f)),
+                ) {
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = "ReplayGain (Safe Mode Only)",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                            if (isBitPerfectOptIn && rgConfig.mode != ReplayGainMode.OFF) {
+                                Text(
+                                    text = "Bypassed",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = IcePrimary,
+                                    maxLines = 1,
+                                    softWrap = false,
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = if (isBitPerfectOptIn) {
+                                "Automatically bypassed in Bit-Perfect Opt-In mode so PCM samples remain bit-exact."
+                            } else {
+                                "Normalizes loudness from local FLAC/OGG/MP3/M4A tags in Safe Mode; always bypassed in Bit-Perfect Mode."
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        // Flat 3-way selector (Off / Track / Album)
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                            border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.65f)),
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(3.dp),
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                ReplayGainMode.entries.forEach { option ->
+                                    val selected = rgConfig.mode == option
+                                    Button(
+                                        onClick = { onSetReplayGainMode(option) },
+                                        shape = RoundedCornerShape(8.dp),
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .sizeIn(minHeight = 48.dp),
+                                        colors = if (selected) {
+                                            ButtonDefaults.buttonColors(
+                                                containerColor = IcePrimaryContainer,
+                                                contentColor = OnIcePrimaryContainer,
+                                            )
+                                        } else {
+                                            ButtonDefaults.textButtonColors(
+                                                contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            )
+                                        },
+                                    ) {
+                                        Text(
+                                            text = option.displayName,
+                                            maxLines = 1,
+                                            softWrap = false,
+                                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        if (rgConfig.mode != ReplayGainMode.OFF) {
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    text = "Preamp",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Text(
+                                    text = ReplayGainProcessor.formatSignedDb(rgConfig.clampedPreampDb),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    softWrap = false,
+                                )
+                            }
+                            Slider(
+                                value = rgConfig.clampedPreampDb,
+                                onValueChange = { raw ->
+                                    val snapped = (raw * 2f).roundToInt() / 2f
+                                    onSetReplayGainPreampDb(snapped)
+                                },
+                                valueRange = ReplayGainConfig.MIN_PREAMP_DB..ReplayGainConfig.MAX_PREAMP_DB,
+                                steps = 23, // 0.5 dB increments across -6.0..+6.0 dB
+                                colors = SliderDefaults.colors(
+                                    thumbColor = MaterialTheme.colorScheme.onSurface,
+                                    activeTrackColor = MaterialTheme.colorScheme.primary,
+                                    inactiveTrackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                                ),
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            HorizontalDivider(
+                                thickness = 0.5.dp,
+                                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .sizeIn(minHeight = 48.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Prevent Clipping",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                    )
+                                    Text(
+                                        text = "Clamps gain using track/album peak tag",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = TextMuted,
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Switch(
+                                    checked = rgConfig.preventClipping,
+                                    onCheckedChange = onSetReplayGainPreventClipping,
+                                )
+                            }
+                        }
                     }
                 }
             }

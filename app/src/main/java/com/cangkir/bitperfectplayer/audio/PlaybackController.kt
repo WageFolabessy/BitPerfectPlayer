@@ -5,6 +5,7 @@ import androidx.core.net.toUri
 import com.cangkir.bitperfectplayer.data.AudioSafetyModePreference
 import com.cangkir.bitperfectplayer.data.LocalPersistenceRepository
 import com.cangkir.bitperfectplayer.data.RepeatModePreference
+import com.cangkir.bitperfectplayer.data.ReplayGainModePreference
 import com.cangkir.bitperfectplayer.data.TrackHistoryRecord
 import com.cangkir.bitperfectplayer.data.UserPreferencesRepository
 import com.cangkir.bitperfectplayer.lyrics.AndroidContentFingerprintProvider
@@ -23,13 +24,16 @@ import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Combined UI-observable low-frequency playback state unifying queue state, active track, resolved
- * content fingerprint, playback status, safety state, and 6-stage diagnostics.
- * High-frequency playback position (~20 Hz) is exposed separately via [PlaybackController.playbackPositionMs].
+ * content fingerprint, gapless & ReplayGain preferences, playback status, safety state, and 6-stage
+ * diagnostics. High-frequency playback position (~20 Hz) is exposed separately via
+ * [PlaybackController.playbackPositionMs].
  */
 data class PlaybackControllerState(
     val queue: QueueSnapshot<PlaybackTrack> = QueueSnapshot(),
     val activeTrack: PlaybackTrack? = null,
     val activeFingerprint: String? = null,
+    val gaplessEnabled: Boolean = true,
+    val replayGainConfig: ReplayGainConfig = ReplayGainConfig(),
     val engineState: EnginePlaybackState = EnginePlaybackState(),
 ) {
     val isPlaying: Boolean
@@ -62,6 +66,7 @@ class PlaybackController(
         context = appContext,
         safetyController = safetyController,
         onTrackCompleted = { handleTrackCompleted() },
+        onGaplessTransition = { transitioned -> handleGaplessTransition(transitioned) },
         onActivePlaybackElapsedMs = { deltaMs -> handleActivePlaybackElapsed(deltaMs) },
     )
 
@@ -77,12 +82,27 @@ class PlaybackController(
     private var hasRestoredInitialSession = false
 
     init {
-        // Restore persisted shuffle/repeat preferences (hearing safety mode always boots in Safe Mode!).
+        // Restore persisted shuffle/repeat/gapless/ReplayGain preferences
+        // (hearing safety mode ALWAYS boots in Safe Mode!).
         scope.launch {
             val prefs = runCatching { preferencesRepository.getSnapshot() }.getOrNull() ?: return@launch
             queueManager.setShuffle(prefs.shuffleEnabled)
             queueManager.setRepeatMode(prefs.repeatMode.toQueueRepeatMode())
-            _state.update { it.copy(queue = queueManager.snapshot()) }
+            val rgConfig = ReplayGainConfig(
+                mode = prefs.replayGainMode.toAudioReplayGainMode(),
+                preampDb = prefs.replayGainPreampDb,
+                preventClipping = prefs.replayGainPreventClipping,
+            )
+            engine.setGaplessEnabled(prefs.gaplessEnabled)
+            engine.setReplayGainConfig(rgConfig)
+            _state.update {
+                it.copy(
+                    queue = queueManager.snapshot(),
+                    gaplessEnabled = prefs.gaplessEnabled,
+                    replayGainConfig = rgConfig,
+                )
+            }
+            syncNextTrackToEngine()
         }
 
         // Mirror engine state updates and persist playback position periodically while playing.
@@ -127,6 +147,8 @@ class PlaybackController(
         }
         if (wasEmpty && snapshot.currentItem != null) {
             loadActiveTrack(snapshot.currentItem!!, startPositionMs = 0L, autoPlay = false)
+        } else {
+            syncNextTrackToEngine()
         }
     }
 
@@ -141,6 +163,8 @@ class PlaybackController(
         }
         if (wasEmpty && snapshot.currentItem != null) {
             loadActiveTrack(snapshot.currentItem!!, startPositionMs = 0L, autoPlay = false)
+        } else {
+            syncNextTrackToEngine()
         }
     }
 
@@ -153,11 +177,14 @@ class PlaybackController(
 
         if (snapshot.isEmpty) {
             playCountTracker.clearSession()?.let { persistPlayCountFlush(it) }
+            engine.setNextTrack(null)
             engine.stop()
             _state.update { it.copy(activeFingerprint = null) }
             PlaybackForegroundService.stopService(appContext)
         } else if (activeIndex == previousActiveIndex && newActive != null && newActive.uriString != removed.uriString) {
             loadActiveTrack(newActive, startPositionMs = 0L, autoPlay = engine.state.value.isPlaying)
+        } else {
+            syncNextTrackToEngine()
         }
     }
 
@@ -165,6 +192,7 @@ class PlaybackController(
         if (queueManager.moveItem(fromIndex, toIndex)) {
             val snapshot = queueManager.snapshot()
             _state.update { it.copy(queue = snapshot, activeTrack = snapshot.currentItem) }
+            syncNextTrackToEngine()
         }
     }
 
@@ -177,6 +205,7 @@ class PlaybackController(
         if (engine.state.value.status == PlaybackStatus.COMPLETED) {
             playCountTracker.resetSessionForReplay()?.let { persistPlayCountFlush(it) }
         }
+        syncNextTrackToEngine()
         PlaybackForegroundService.startService(appContext)
         engine.play()
     }
@@ -199,6 +228,7 @@ class PlaybackController(
             loadActiveTrack(nextTrack, startPositionMs = 0L, autoPlay = true)
         } else {
             _state.update { it.copy(queue = snapshot) }
+            engine.setNextTrack(null)
             if (!userInitiated) {
                 engine.pause()
                 persistCurrentPositionAsync()
@@ -231,6 +261,7 @@ class PlaybackController(
     fun stop() {
         playCountTracker.clearSession()?.let { persistPlayCountFlush(it) }
         persistCurrentPositionAsync()
+        engine.setNextTrack(null)
         engine.stop()
         PlaybackForegroundService.stopService(appContext)
     }
@@ -239,6 +270,7 @@ class PlaybackController(
         val nextEnabled = !queueManager.snapshot().shuffleEnabled
         val snapshot = queueManager.setShuffle(nextEnabled)
         _state.update { it.copy(queue = snapshot, activeTrack = snapshot.currentItem) }
+        syncNextTrackToEngine()
         scope.launch(Dispatchers.IO) {
             runCatching { preferencesRepository.setShuffleEnabled(nextEnabled) }
         }
@@ -248,8 +280,46 @@ class PlaybackController(
         val nextMode = queueManager.cycleRepeatMode()
         val snapshot = queueManager.snapshot()
         _state.update { it.copy(queue = snapshot) }
+        syncNextTrackToEngine()
         scope.launch(Dispatchers.IO) {
             runCatching { preferencesRepository.setRepeatMode(nextMode.toPreference()) }
+        }
+    }
+
+    fun setGaplessEnabled(enabled: Boolean) {
+        engine.setGaplessEnabled(enabled)
+        _state.update { it.copy(gaplessEnabled = enabled) }
+        syncNextTrackToEngine()
+        scope.launch(Dispatchers.IO) {
+            runCatching { preferencesRepository.setGaplessEnabled(enabled) }
+        }
+    }
+
+    fun setReplayGainMode(mode: ReplayGainMode) {
+        val updated = _state.value.replayGainConfig.copy(mode = mode)
+        engine.setReplayGainConfig(updated)
+        _state.update { it.copy(replayGainConfig = updated) }
+        scope.launch(Dispatchers.IO) {
+            runCatching { preferencesRepository.setReplayGainMode(mode.toPreference()) }
+        }
+    }
+
+    fun setReplayGainPreampDb(preampDb: Float) {
+        val clamped = preampDb.coerceIn(ReplayGainConfig.MIN_PREAMP_DB, ReplayGainConfig.MAX_PREAMP_DB)
+        val updated = _state.value.replayGainConfig.copy(preampDb = clamped)
+        engine.setReplayGainConfig(updated)
+        _state.update { it.copy(replayGainConfig = updated) }
+        scope.launch(Dispatchers.IO) {
+            runCatching { preferencesRepository.setReplayGainPreampDb(clamped) }
+        }
+    }
+
+    fun setReplayGainPreventClipping(preventClipping: Boolean) {
+        val updated = _state.value.replayGainConfig.copy(preventClipping = preventClipping)
+        engine.setReplayGainConfig(updated)
+        _state.update { it.copy(replayGainConfig = updated) }
+        scope.launch(Dispatchers.IO) {
+            runCatching { preferencesRepository.setReplayGainPreventClipping(preventClipping) }
         }
     }
 
@@ -329,6 +399,62 @@ class PlaybackController(
         next(userInitiated = false)
     }
 
+    /**
+     * Handles a seamless same-format gapless transition performed directly inside [AudioOutputEngine]
+     * without tearing down or rebuilding `AudioTrack`. Advances queue state, flushes the finishing
+     * track's play-count session, starts a fresh session for the newly active track, resolves
+     * fingerprint/history, and primes the subsequent upcoming track.
+     */
+    private fun handleGaplessTransition(transitionedRequest: EngineTrackRequest) {
+        playCountTracker.onNaturalCompletion()?.let { persistPlayCountFlush(it) }
+        val nextTrack = queueManager.next(userInitiated = false)
+        val snapshot = queueManager.snapshot()
+
+        if (nextTrack == null) {
+            _state.update { it.copy(queue = snapshot) }
+            engine.setNextTrack(null)
+            engine.pause()
+            persistCurrentPositionAsync()
+            return
+        }
+
+        // If the queue mutated right as the transition fired, resync cleanly via standard load.
+        if (nextTrack.uriString != transitionedRequest.uri.toString()) {
+            _state.update { it.copy(queue = snapshot, activeTrack = nextTrack) }
+            loadActiveTrack(nextTrack, startPositionMs = 0L, autoPlay = true)
+            return
+        }
+
+        trackedTracksByUri[nextTrack.uriString] = nextTrack
+        playCountTracker.startSession(nextTrack.uriString, nextTrack.durationMs)?.let { persistPlayCountFlush(it) }
+        _state.update {
+            it.copy(
+                queue = snapshot,
+                activeTrack = nextTrack,
+                activeFingerprint = nextTrack.contentFingerprint,
+            )
+        }
+        syncNextTrackToEngine()
+        resolveFingerprintAndRecordHistory(nextTrack, recordHistory = true)
+    }
+
+    private fun syncNextTrackToEngine() {
+        val nextTrack = queueManager.peekNext(userInitiated = false)
+        if (nextTrack == null) {
+            engine.setNextTrack(null)
+            return
+        }
+        engine.setNextTrack(
+            EngineTrackRequest(
+                uri = nextTrack.uriString.toUri(),
+                fileName = nextTrack.fileName,
+                mimeType = nextTrack.mimeType,
+                startPositionMs = 0L,
+                autoPlay = true,
+            ),
+        )
+    }
+
     private fun handleActivePlaybackElapsed(deltaMs: Long) {
         playCountTracker.onActivePlaybackElapsed(deltaMs)?.let { persistPlayCountFlush(it) }
     }
@@ -394,6 +520,7 @@ class PlaybackController(
                 autoPlay = autoPlay,
             ),
         )
+        syncNextTrackToEngine()
         resolveFingerprintAndRecordHistory(track, autoPlay)
     }
 
@@ -503,5 +630,17 @@ class PlaybackController(
         RepeatMode.OFF -> RepeatModePreference.OFF
         RepeatMode.ALL -> RepeatModePreference.ALL
         RepeatMode.ONE -> RepeatModePreference.ONE
+    }
+
+    private fun ReplayGainModePreference.toAudioReplayGainMode(): ReplayGainMode = when (this) {
+        ReplayGainModePreference.OFF -> ReplayGainMode.OFF
+        ReplayGainModePreference.TRACK -> ReplayGainMode.TRACK
+        ReplayGainModePreference.ALBUM -> ReplayGainMode.ALBUM
+    }
+
+    private fun ReplayGainMode.toPreference(): ReplayGainModePreference = when (this) {
+        ReplayGainMode.OFF -> ReplayGainModePreference.OFF
+        ReplayGainMode.TRACK -> ReplayGainModePreference.TRACK
+        ReplayGainMode.ALBUM -> ReplayGainModePreference.ALBUM
     }
 }

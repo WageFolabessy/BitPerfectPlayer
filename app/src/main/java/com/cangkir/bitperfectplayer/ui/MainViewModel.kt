@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.cangkir.bitperfectplayer.AppContainer
 import com.cangkir.bitperfectplayer.audio.PlaybackControllerState
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
+import com.cangkir.bitperfectplayer.audio.ReplayGainMode
 import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
 import com.cangkir.bitperfectplayer.library.LibrarySnapshot
 import com.cangkir.bitperfectplayer.library.PlaylistsUiSnapshot
@@ -158,6 +159,11 @@ class MainViewModel(
     fun seekTo(positionMs: Long) = container.playbackController.seekTo(positionMs)
     fun toggleShuffle() = container.playbackController.toggleShuffle()
     fun cycleRepeatMode() = container.playbackController.cycleRepeatMode()
+    fun setGaplessEnabled(enabled: Boolean) = container.playbackController.setGaplessEnabled(enabled)
+    fun setReplayGainMode(mode: ReplayGainMode) = container.playbackController.setReplayGainMode(mode)
+    fun setReplayGainPreampDb(preampDb: Float) = container.playbackController.setReplayGainPreampDb(preampDb)
+    fun setReplayGainPreventClipping(preventClipping: Boolean) =
+        container.playbackController.setReplayGainPreventClipping(preventClipping)
 
     fun requestBitPerfectMode() {
         container.playbackController.requestBitPerfectMode()

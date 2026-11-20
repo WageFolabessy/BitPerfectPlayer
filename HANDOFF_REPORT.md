@@ -272,6 +272,37 @@ Graduated `BitPerfectPlayer` into Full APK Phase 1 on `feat/mvp-overnight` while
 - **Pure-Kotlin Domain Boundary:** **PASS** — **0 `android.*` imports** across all **20** pure-Kotlin domain modules (adding `PlayCountTracker` and `M3u8PlaylistCodec`).
 - **Physical Hardware Verification Pending (Not Executed in Cloud):** On POCO F4 (Android 14 / HyperOS) + KZ EDX Pro 2 USB-C, verify in-place Room v2 -> v3 upgrade preservation, live `Most Played` increment after 30s real listening (vs. non-increment on 3s skip or seek-to-end), SAF `.m3u8` export/import round-trip, and smooth 3-tab switching during active playback.
 
+---
+
+## 9. Full APK Phase 2 Summary (True Gapless Playback, Clean EOS Drain, & Safe-Mode-Only ReplayGain)
+
+Implemented true gapless playback, eliminated end-of-track audio truncation, and added Safe-Mode-only ReplayGain with mandatory Bit-Perfect bypass on `feat/mvp-overnight`:
+
+1. **Updated Audio Safety Rules & Specification (`.agents/rules/audio-safety-and-architecture.md`, `SPEC.md`, `DECISIONS.md`):**
+   - Explicitly authorized optional local **ReplayGain** (`OFF` by default) exclusively in `SAFE_VOLUME_MODE`, with mandatory automatic bypass (`gain = 1.0f`, zero PCM sample modification) whenever `BIT_PERFECT_OPT_IN` mode is active. Documented rationale in `DECISIONS.md` (`D7.2`).
+2. **True Gapless Playback & Zero End-of-Track Clipping (`GaplessTransitionPolicy.kt`, `PlaybackQueueManager.kt`, `AudioOutputEngine.kt`, `PlaybackController.kt`):**
+   - Persisted `gaplessEnabled: Boolean = true` in `UserPreferencesRepository` / `PersistenceModels`.
+   - Added pure-Kotlin `GaplessTransitionPolicy` (zero `android.*` imports) deciding `SEAMLESS_REUSE` vs `DRAIN_AND_REBUILD` vs `STOP_END_OF_QUEUE`, preload trigger lead window (`8,000 ms`, or immediate for short tracks), and bounded drain timeouts (`250..1,500 ms`).
+   - Added non-mutating `PlaybackQueueManager.peekNext(...)` and wired `PlaybackController.setNextTrack(...)` across all queue, shuffle, repeat, and active-track changes.
+   - Pre-opens and primes the next `PcmAudioDecoder` asynchronously on a dedicated background `BitPerfectGaplessPreload` thread with strict generation/URI validation and guaranteed cancellation/close on manual Next/Previous/Seek/Stop/Queue-change/Release (zero `MediaCodec` or FD leaks).
+   - **Same PCM format (`sampleRateHz`, `channelCount`, `encoding`) with `gaplessEnabled == true`:** Reuses the exact running `AudioTrack` (`SEAMLESS_REUSE`), swaps decoders immediately after the last PCM frame with 0 ms silence gap, anchors `headBaseFrames = totalFramesWrittenToTrack` for seamless `0 ms` hardware clock handoff, and invokes `onGaplessTransition` so `PlaybackController` advances queue/history/play-count without rebuilding `AudioTrack`.
+   - **Format mismatch or end-of-queue:** Cleanly drains `AudioTrack`'s remaining buffered frames via `drainAudioTrackCleanly` (`track.stop()` + bounded `playbackHeadPosition` wait) instead of `pause() + flush()`, preventing ~100–300 ms end-of-track truncation.
+3. **Pure-Kotlin ReplayGain Tag Parser, Safe-Mode Gain Processor, Stage 3 Diagnostics, & Settings Controls (`ReplayGainTagParser.kt`, `ReplayGainProcessor.kt`, `AudioDiagnosticMapper.kt`, `SettingsScreen.kt`):**
+   - Created pure-Kotlin OOM-safe header-only `ReplayGainTagParser` (zero `android.*` imports, positional reads on `SeekableByteSource`) supporting FLAC `VORBIS_COMMENT`, OGG Vorbis `\x03vorbis`, OGG Opus `OpusTags` (+ RFC 7845 `R128_TRACK_GAIN` / `R128_ALBUM_GAIN`), MP3 ID3v2.3/v2.4 `TXXX` (ISO-8859-1, UTF-8, UTF-16 BOM), and M4A/MP4 `moov->udta->meta->ilst->----` freeform atoms (+ optional `iTunNORM` fallback).
+   - Created pure-Kotlin zero-allocation in-place `ReplayGainProcessor` (`OFF` default, `TRACK`, `ALBUM`, `-6.0..+6.0 dB` preamp, peak-clipping clamp `1.0f / peak`), scaling `PCM_FLOAT`, `PCM_16BIT`, `PCM_24BIT_PACKED`, and `PCM_32BIT` ONLY in `SAFE_VOLUME_MODE` and strictly bypassing (`gain = 1.0f`, zero sample modification) whenever `BIT_PERFECT_OPT_IN` is active.
+   - Updated `AudioDiagnosticMapper` Stage 3 (`APP_TO_FRAMEWORK`) to honestly report `ReplayGain: OFF`, `ReplayGain: Track (-4.2 dB, Safe Mode)`, or `ReplayGain: Bypassed (Bit-Perfect Active)`.
+   - Persisted `replayGainMode`, `replayGainPreampDb`, and `replayGainPreventClipping` in `UserPreferencesRepository` and exposed clean obsidian Gapless + ReplayGain controls in `SettingsScreen`.
+
+### Full APK Phase 2 Software Verification (`./gradlew testDebugUnitTest lintDebug assembleDebug`)
+- **JVM Unit Tests:** **108 / 108 passed** across **21 suites** (`0` failed, `0` errors, `0` skipped, `0` `@Ignore`), including `GaplessTransitionPolicyTest` (6/6), `ReplayGainProcessorTest` (6/6), `ReplayGainTagParserTest` (5/5), updated `AudioDiagnosticMapperTest` (5/5), and updated `PersistenceAndPreferencesTest` (4/4).
+- **Kotlin & KSP Compiler Warnings:** `0` Kotlin warnings, `0` KSP warnings.
+- **Android Lint (`lintDebug`):** **0 errors**, **0 warnings across all `/app/src/` Kotlin, manifest, and resource files**.
+- **Debug APK:** `app/build/outputs/apk/debug/app-debug.apk` (`19.97 MB`).
+- **Strict Offline Privacy Audit (Source + All Merged Debug Manifests):** **PASS** — **0 `android.permission.INTERNET`**, **0 `android.permission.MANAGE_EXTERNAL_STORAGE`**.
+- **Pure-Kotlin Domain Boundary:** **PASS** — **0 `android.*` imports** across all **23** pure-Kotlin domain modules (adding `GaplessTransitionPolicy`, `ReplayGainProcessor`, and `ReplayGainTagParser`).
+- **Physical Hardware Verification Pending (Not Executed in Cloud):** On POCO F4 (Android 14 / HyperOS) + KZ EDX Pro 2 USB-C, verify continuous live-album/gapless FLAC transitions with 0 ms silence gap, clean unclipped track endings on sample-rate switches (e.g., 96,000 Hz -> 44,100 Hz), audible ReplayGain leveling in Safe Mode, and instant automatic ReplayGain bypass upon opting into Bit-Perfect Mode (verified in Diagnostics Stage 3).
+
+
 
 
 

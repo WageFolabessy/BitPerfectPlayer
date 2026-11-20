@@ -227,6 +227,10 @@ fun BitPerfectAppRoot(
                     onImportFolder = viewModel::importSafFolder,
                     onRemoveSafFolder = viewModel::removeSafFolder,
                     onRefreshLibrary = viewModel::refreshLibrary,
+                    onSetGaplessEnabled = viewModel::setGaplessEnabled,
+                    onSetReplayGainMode = viewModel::setReplayGainMode,
+                    onSetReplayGainPreampDb = viewModel::setReplayGainPreampDb,
+                    onSetReplayGainPreventClipping = viewModel::setReplayGainPreventClipping,
                     onOpenDiagnostics = openDiagnostics,
                 )
             }

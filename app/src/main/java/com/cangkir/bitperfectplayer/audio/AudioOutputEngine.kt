@@ -20,10 +20,12 @@ import android.os.Process
 import android.util.Log
 import androidx.annotation.RequiresApi
 import androidx.core.content.ContextCompat
+import com.cangkir.bitperfectplayer.lyrics.FileChannelSeekableByteSource
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import java.io.FileInputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.ExecutorService
@@ -72,20 +74,31 @@ data class EnginePlaybackState(
  * Native Android [AudioTrack] playback engine with:
  * - Confirmed `MediaCodec.outputFormat` negotiation before `AudioTrack` creation (and dynamic
  *   reconfiguration if `INFO_OUTPUT_FORMAT_CHANGED` occurs mid-stream).
+ * - True gapless playback (background next-track decoder pre-loading + seamless same-format
+ *   [AudioTrack] reuse with zero silence gap) and clean `AudioTrack` buffer draining on format
+ *   changes or end-of-queue so tail audio is never truncated.
+ * - Safe-Mode-only zero-allocation ReplayGain gain scaling with mandatory automatic bypass
+ *   (`gain = 1.0f`, zero sample modification) in [AudioOutputMode.BIT_PERFECT_OPT_IN] mode.
  * - Frame-aligned direct little-endian `ByteBuffer` writes for integer PCM and `FloatArray` writes
- *   for `ENCODING_PCM_FLOAT` with full partial-write loops (never drops remainder bytes or calls
- *   `write(ByteArray)` on float tracks).
+ *   for `ENCODING_PCM_FLOAT` with full partial-write loops.
  * - Runtime-adaptive Android 14+ (`API 34+`) `MIXER_BEHAVIOR_BIT_PERFECT` negotiation on USB audio outputs
  *   with mandatory `clearPreferredMixerAttributes` cleanup.
- * - Idempotent lifecycle transitions (no duplicate `AudioTrack.stop()` or redundant `pause()` calls).
  * - Hearing-safety auto-pause on `ACTION_AUDIO_BECOMING_NOISY`, USB connect/disconnect, and route change.
  */
 class AudioOutputEngine(
     context: Context,
     private val safetyController: AudioSafetyController = AudioSafetyController(),
     private val onTrackCompleted: (() -> Unit)? = null,
+    private val onGaplessTransition: ((EngineTrackRequest) -> Unit)? = null,
     private val onActivePlaybackElapsedMs: ((Long) -> Unit)? = null,
 ) {
+    private data class PreloadedTrack(
+        val request: EngineTrackRequest,
+        val decoder: PcmAudioDecoder,
+        val replayGainMetadata: ReplayGainMetadata?,
+        val generation: Long,
+    )
+
     private val appContext = context.applicationContext
     private val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -107,14 +120,40 @@ class AudioOutputEngine(
     val playbackPositionMs: StateFlow<Long> = _playbackPositionMs.asStateFlow()
 
     private val engineLock = ReentrantLock()
+    private val preloadLock = Any()
     private val controlExecutor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "BitPerfectEngineControl").apply { isDaemon = true }
+    }
+    private val preloadExecutor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "BitPerfectGaplessPreload").apply { isDaemon = true }
     }
     private val loadGeneration = AtomicLong(0L)
     private val isPausedFlag = AtomicBoolean(true)
     private val stopWorkerFlag = AtomicBoolean(false)
     private val releasedFlag = AtomicBoolean(false)
     private val pendingSeekMs = AtomicLong(-1L)
+
+    @Volatile
+    private var gaplessEnabled: Boolean = true
+
+    @Volatile
+    private var queuedNextRequest: EngineTrackRequest? = null
+
+    private var preloadedTrack: PreloadedTrack? = null
+    private var preloadingUri: Uri? = null
+
+    @Volatile
+    private var replayGainConfig: ReplayGainConfig = ReplayGainConfig()
+
+    @Volatile
+    private var activeTrackReplayGainMetadata: ReplayGainMetadata? = null
+
+    @Volatile
+    private var activeReplayGainResolution: ReplayGainResolution = ReplayGainProcessor.resolve(
+        config = ReplayGainConfig(),
+        metadata = null,
+        safetyMode = AudioOutputMode.SAFE_VOLUME_MODE,
+    )
 
     @Volatile
     private var currentRequest: EngineTrackRequest? = null
@@ -270,9 +309,49 @@ class AudioOutputEngine(
         publishDiagnostics()
     }
 
+    fun setGaplessEnabled(enabled: Boolean) {
+        if (gaplessEnabled == enabled) return
+        gaplessEnabled = enabled
+        if (!enabled) {
+            clearPreloadedNextAsync()
+        }
+    }
+
+    fun setReplayGainConfig(config: ReplayGainConfig) {
+        replayGainConfig = config
+        recomputeReplayGain()
+        publishDiagnostics()
+    }
+
+    /**
+     * Supplies the upcoming queue track for background gapless decoder pre-loading (or `null` when
+     * at end of queue). Automatically cancels/closes any stale pre-loaded decoder if the upcoming
+     * track URI changed or was cleared.
+     */
+    fun setNextTrack(request: EngineTrackRequest?) {
+        queuedNextRequest = request
+        val staleDecoder: PcmAudioDecoder? = synchronized(preloadLock) {
+            val existing = preloadedTrack
+            if (existing != null && (request == null || existing.request.uri != request.uri)) {
+                preloadedTrack = null
+                preloadingUri = null
+                existing.decoder
+            } else {
+                if (preloadingUri != null && (request == null || preloadingUri != request.uri)) {
+                    preloadingUri = null
+                }
+                null
+            }
+        }
+        if (staleDecoder != null) {
+            closeDecoderOffMainThread(staleDecoder)
+        }
+    }
+
     fun loadTrack(request: EngineTrackRequest) {
         if (releasedFlag.get()) return
         val generation = loadGeneration.incrementAndGet()
+        clearPreloadedNextAsync()
         stopWorkerFlag.set(true)
         isPausedFlag.set(true)
         currentRequest = request
@@ -303,8 +382,11 @@ class AudioOutputEngine(
         preserveAutoPauseNotice: Boolean,
     ) {
         if (releasedFlag.get() || loadGeneration.get() != generation) return
+        clearPreloadedNextLocked()
         stopWorkerAndReleaseTrackLocked(clearMixer = true)
         currentRequest = request
+        activeTrackReplayGainMetadata = null
+        recomputeReplayGain()
 
         // Open and prime decoder BEFORE creating AudioTrack so codec.outputFormat is confirmed.
         val decoder = try {
@@ -331,6 +413,14 @@ class AudioOutputEngine(
             runCatching { decoder.close() }
             return
         }
+
+        // OOM-safe header-only ReplayGain tag scan (< 1 ms on control thread, zero Main Thread I/O).
+        activeTrackReplayGainMetadata = readReplayGainMetadata(
+            uri = request.uri,
+            fileName = request.fileName,
+            mimeType = request.mimeType,
+        )
+        recomputeReplayGain()
 
         if (request.startPositionMs > 0L) {
             runCatching { decoder.seekToMs(request.startPositionMs) }
@@ -375,7 +465,10 @@ class AudioOutputEngine(
         publishDiagnostics()
 
         if (request.autoPlay) {
-            startPlaybackWorkerLocked(initialSeekMs = decoder.currentPositionMs)
+            startPlaybackWorkerLocked(
+                initialSeekMs = decoder.currentPositionMs,
+                expectedGeneration = generation,
+            )
         } else {
             isPausedFlag.set(true)
         }
@@ -421,7 +514,10 @@ class AudioOutputEngine(
                     )
                 }
                 if (playbackThread?.isAlive != true) {
-                    startPlaybackWorkerLocked(initialSeekMs = _playbackPositionMs.value)
+                    startPlaybackWorkerLocked(
+                        initialSeekMs = _playbackPositionMs.value,
+                        expectedGeneration = loadGeneration.get(),
+                    )
                 }
             }
         }
@@ -434,6 +530,7 @@ class AudioOutputEngine(
 
     fun seekTo(positionMs: Long) {
         if (releasedFlag.get()) return
+        clearPreloadedNextAsync()
         val clamped = positionMs.coerceIn(0L, _state.value.durationMs.coerceAtLeast(0L))
         _playbackPositionMs.value = clamped
         if (playbackThread?.isAlive == true) {
@@ -454,16 +551,22 @@ class AudioOutputEngine(
     fun stop() {
         if (releasedFlag.get()) return
         if (_state.value.status == PlaybackStatus.IDLE && activeAudioTrack == null && activeDecoder == null) {
+            clearPreloadedNextAsync()
             return
         }
         loadGeneration.incrementAndGet()
+        queuedNextRequest = null
+        clearPreloadedNextAsync()
         resumeAfterTransientFocusLoss = false
         stopWorkerFlag.set(true)
         isPausedFlag.set(true)
         enqueueControlTask {
             engineLock.withLock {
+                clearPreloadedNextLocked()
                 stopWorkerAndReleaseTrackLocked(clearMixer = true)
                 abandonAudioFocusLocked()
+                activeTrackReplayGainMetadata = null
+                recomputeReplayGain()
                 _playbackPositionMs.value = 0L
                 _state.update {
                     it.copy(
@@ -507,12 +610,15 @@ class AudioOutputEngine(
     fun release() {
         if (!releasedFlag.compareAndSet(false, true)) return
         loadGeneration.incrementAndGet()
+        queuedNextRequest = null
         stopWorkerFlag.set(true)
         isPausedFlag.set(true)
         unregisterAudioMonitors()
+        preloadExecutor.shutdownNow()
         runCatching {
             controlExecutor.execute {
                 engineLock.withLock {
+                    clearPreloadedNextLocked()
                     stopWorkerAndReleaseTrackLocked(clearMixer = true)
                     abandonAudioFocusLocked()
                 }
@@ -522,6 +628,7 @@ class AudioOutputEngine(
     }
 
     private fun handleSafetyCommand(command: SafetyCommand) {
+        recomputeReplayGain()
         when (command.type) {
             SafetyEventType.AUTO_PAUSE -> {
                 resumeAfterTransientFocusLoss = false
@@ -584,6 +691,7 @@ class AudioOutputEngine(
         autoResume: Boolean,
         preserveAutoPauseNotice: Boolean,
     ) {
+        clearPreloadedNextLocked()
         val req = currentRequest
         if (req == null || activeDecoder == null) {
             _state.update { it.copy(safetyState = safetyController.state()) }
@@ -822,7 +930,10 @@ class AudioOutputEngine(
         lastConfiguredMixerDevice = null
     }
 
-    private fun startPlaybackWorkerLocked(initialSeekMs: Long) {
+    private fun startPlaybackWorkerLocked(
+        initialSeekMs: Long,
+        expectedGeneration: Long,
+    ) {
         val decoder = activeDecoder ?: return
         val track = activeAudioTrack ?: return
         if (!requestAudioFocusLocked()) {
@@ -838,7 +949,12 @@ class AudioOutputEngine(
         val worker = Thread(
             {
                 runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO) }
-                runPlaybackLoop(decoder, track, initialSeekMs)
+                runPlaybackLoop(
+                    initialDecoder = decoder,
+                    initialTrack = track,
+                    initialSeekMs = initialSeekMs,
+                    expectedGeneration = expectedGeneration,
+                )
             },
             "BitPerfectAudioThread",
         )
@@ -847,15 +963,17 @@ class AudioOutputEngine(
     }
 
     private fun runPlaybackLoop(
-        decoder: PcmAudioDecoder,
+        initialDecoder: PcmAudioDecoder,
         initialTrack: AudioTrack,
         initialSeekMs: Long,
+        expectedGeneration: Long,
     ) {
+        var currentDecoder = initialDecoder
         var currentTrack = initialTrack
-        var observedFormatVersion = decoder.formatVersion
-        var currentFormat = decoder.format
+        var observedFormatVersion = currentDecoder.formatVersion
+        var currentFormat = currentDecoder.format
         var sampleRate = currentFormat.sampleRateHz.coerceAtLeast(1)
-        val durationMs = currentFormat.durationMs.coerceAtLeast(0L)
+        var durationMs = currentFormat.durationMs.coerceAtLeast(0L)
         var bytesPerFrame = currentFormat.bytesPerFrame.coerceAtLeast(1)
 
         var bufferSize = PcmStreamRules.computeAlignedBufferSize(16_384, bytesPerFrame)
@@ -867,6 +985,7 @@ class AudioOutputEngine(
 
         var seekBaseMs = initialSeekMs.coerceAtLeast(0L)
         var headBaseFrames = readUnsignedPlaybackHeadFrames(currentTrack)
+        var totalFramesWrittenToTrack = headBaseFrames
         var countHeadFrames = headBaseFrames
         var pendingPlayCountMs = 0L
         var wasPausedInLoop = false
@@ -899,9 +1018,10 @@ class AudioOutputEngine(
                     safePauseTrack(currentTrack)
                     safeFlushTrack(currentTrack)
                     remainderLen = 0
-                    val actualSeekMs = decoder.seekToMs(requestedSeek)
+                    val actualSeekMs = currentDecoder.seekToMs(requestedSeek)
                     seekBaseMs = actualSeekMs
                     headBaseFrames = readUnsignedPlaybackHeadFrames(currentTrack)
+                    totalFramesWrittenToTrack = headBaseFrames
                     countHeadFrames = headBaseFrames
                     _playbackPositionMs.value = actualSeekMs
                     if (wasPlaying) {
@@ -923,27 +1043,104 @@ class AudioOutputEngine(
                     continue
                 }
                 if (wasPausedInLoop) {
-                    countHeadFrames = readUnsignedPlaybackHeadFrames(currentTrack)
+                    countHeadFrames = maxOf(readUnsignedPlaybackHeadFrames(currentTrack), headBaseFrames)
                     wasPausedInLoop = false
                 }
 
-                val bytesRead = decoder.readPcm(pcmBuffer)
+                val bytesRead = currentDecoder.readPcm(pcmBuffer)
                 if (bytesRead < 0) {
                     accumulateActivePlayTime(forceFlush = true)
-                    val finalPos = durationMs.takeIf { it > 0L } ?: _playbackPositionMs.value
-                    _playbackPositionMs.value = finalPos
-                    _state.update {
-                        it.copy(status = PlaybackStatus.COMPLETED)
+                    val preloaded = takePreloadedTrackIfReady(expectedGeneration)
+                    val hasNext = queuedNextRequest != null
+                    val transitionAction = GaplessTransitionPolicy.decide(
+                        gaplessEnabled = gaplessEnabled,
+                        hasNextTrack = hasNext,
+                        currentFormat = currentFormat.toStreamSignature(),
+                        nextFormat = preloaded?.decoder?.format?.toStreamSignature(),
+                    )
+
+                    if (transitionAction == GaplessTransitionAction.SEAMLESS_REUSE && preloaded != null) {
+                        val transitioned = engineLock.withLock {
+                            if (stopWorkerFlag.get() || releasedFlag.get() || loadGeneration.get() != expectedGeneration) {
+                                false
+                            } else {
+                                val oldDecoder = currentDecoder
+                                currentDecoder = preloaded.decoder
+                                activeDecoder = preloaded.decoder
+                                currentRequest = preloaded.request
+                                // Clear consumed next-track pointer until PlaybackController supplies the subsequent track.
+                                if (queuedNextRequest?.uri == preloaded.request.uri) {
+                                    queuedNextRequest = null
+                                }
+                                activeTrackReplayGainMetadata = preloaded.replayGainMetadata
+                                recomputeReplayGain()
+                                runCatching { oldDecoder.close() }
+                                true
+                            }
+                        }
+
+                        if (!transitioned) {
+                            runCatching { preloaded.decoder.close() }
+                            break
+                        }
+
+                        // Keep the exact same AudioTrack running continuously (0 ms gap, zero flush/rebuild).
+                        observedFormatVersion = currentDecoder.formatVersion
+                        currentFormat = currentDecoder.format
+                        sampleRate = currentFormat.sampleRateHz.coerceAtLeast(1)
+                        durationMs = currentFormat.durationMs.coerceAtLeast(0L)
+                        bytesPerFrame = currentFormat.bytesPerFrame.coerceAtLeast(1)
+                        remainderLen = 0
+                        seekBaseMs = 0L
+                        // Track B begins playing at the exact hardware frame count already queued for Track A.
+                        headBaseFrames = totalFramesWrittenToTrack
+                        countHeadFrames = maxOf(readUnsignedPlaybackHeadFrames(currentTrack), headBaseFrames)
+                        lastUiUpdateNano = 0L
+                        _playbackPositionMs.value = 0L
+                        _state.update {
+                            it.copy(
+                                status = PlaybackStatus.PLAYING,
+                                activeTrackUri = preloaded.request.uri,
+                                durationMs = currentFormat.durationMs,
+                                errorMessage = null,
+                            )
+                        }
+                        publishDiagnostics()
+                        Log.d(
+                            TAG,
+                            "Gapless SEAMLESS_REUSE -> ${preloaded.request.fileName} " +
+                                "(${currentFormat.sampleRateHz}Hz, ${currentFormat.encoding}, ${currentFormat.channelCount}ch)",
+                        )
+                        mainHandler.post { onGaplessTransition?.invoke(preloaded.request) }
+                        continue
                     }
-                    mainHandler.post { onTrackCompleted?.invoke() }
+
+                    // Format mismatch, gapless disabled, preload unavailable, or end of queue:
+                    // close any unused preloaded decoder and cleanly drain AudioTrack's tail buffer
+                    // so the final ~100-300 ms of audio is NEVER truncated.
+                    preloaded?.let { runCatching { it.decoder.close() } }
+                    drainAudioTrackCleanly(
+                        track = currentTrack,
+                        totalFramesWritten = totalFramesWrittenToTrack,
+                        sampleRateHz = sampleRate,
+                    )
+                    accumulateActivePlayTime(forceFlush = true)
+                    if (!stopWorkerFlag.get() && !releasedFlag.get()) {
+                        val finalPos = durationMs.takeIf { it > 0L } ?: _playbackPositionMs.value
+                        _playbackPositionMs.value = finalPos
+                        _state.update {
+                            it.copy(status = PlaybackStatus.COMPLETED)
+                        }
+                        mainHandler.post { onTrackCompleted?.invoke() }
+                    }
                     break
                 }
 
                 // Reconfigure AudioTrack dynamically if MediaCodec emitted INFO_OUTPUT_FORMAT_CHANGED mid-stream.
-                val latestVersion = decoder.formatVersion
+                val latestVersion = currentDecoder.formatVersion
                 if (latestVersion != observedFormatVersion) {
                     observedFormatVersion = latestVersion
-                    val newFormat = decoder.format
+                    val newFormat = currentDecoder.format
                     if (newFormat.encoding != currentFormat.encoding ||
                         newFormat.sampleRateHz != currentFormat.sampleRateHz ||
                         newFormat.channelCount != currentFormat.channelCount
@@ -966,6 +1163,7 @@ class AudioOutputEngine(
                         currentTrack = rebuiltTrack
                         currentFormat = newFormat
                         sampleRate = currentFormat.sampleRateHz.coerceAtLeast(1)
+                        durationMs = currentFormat.durationMs.coerceAtLeast(0L)
                         bytesPerFrame = currentFormat.bytesPerFrame.coerceAtLeast(1)
                         bufferSize = PcmStreamRules.computeAlignedBufferSize(16_384, bytesPerFrame)
                         pcmBuffer = ByteArray(bufferSize)
@@ -975,6 +1173,7 @@ class AudioOutputEngine(
                         remainderLen = 0
                         seekBaseMs = _playbackPositionMs.value
                         headBaseFrames = readUnsignedPlaybackHeadFrames(currentTrack)
+                        totalFramesWrittenToTrack = headBaseFrames
                         countHeadFrames = headBaseFrames
                         // Skip writing bytes from the prior buffer/format into the newly allocated pcmBuffer.
                         continue
@@ -1012,14 +1211,25 @@ class AudioOutputEngine(
                 }
 
                 if (alignedLen > 0) {
-                    writeAlignedPcmFully(
+                    // Mandatory Bit-Perfect Invariant: strictly bypass ReplayGain (gain = 1.0f) in BIT_PERFECT_OPT_IN.
+                    val effectiveLinearGain =
+                        if (safetyController.state().mode == AudioOutputMode.BIT_PERFECT_OPT_IN) {
+                            1.0f
+                        } else {
+                            activeReplayGainResolution.linearGain
+                        }
+                    val bytesWritten = writeAlignedPcmFully(
                         track = currentTrack,
                         encoding = currentFormat.encoding,
                         bytes = combinedBytes,
                         alignedByteCount = alignedLen,
                         directBuffer = directBuffer,
                         floatBuffer = floatBuffer,
+                        linearGain = effectiveLinearGain,
                     )
+                    if (bytesWritten > 0) {
+                        totalFramesWrittenToTrack += (bytesWritten / bytesPerFrame).toLong()
+                    }
                     accumulateActivePlayTime(forceFlush = false)
                 }
 
@@ -1032,6 +1242,19 @@ class AudioOutputEngine(
                     val computedPos = seekBaseMs + (deltaFrames * 1000L) / sampleRate.toLong()
                     val clampedPos = if (durationMs > 0L) computedPos.coerceIn(0L, durationMs) else computedPos
                     _playbackPositionMs.value = clampedPos
+
+                    // Trigger background gapless pre-loading when entering the final ~8 seconds.
+                    val nextReq = queuedNextRequest
+                    if (GaplessTransitionPolicy.shouldStartPreload(
+                            gaplessEnabled = gaplessEnabled,
+                            hasNextTrack = nextReq != null,
+                            isAlreadyPreloadingOrReady = isNextPreloadedOrLoading(nextReq?.uri),
+                            currentPositionMs = clampedPos,
+                            durationMs = durationMs,
+                        )
+                    ) {
+                        triggerPreloadAsync(nextReq, expectedGeneration)
+                    }
                 }
             }
         } catch (e: AudioDecodeException) {
@@ -1058,13 +1281,49 @@ class AudioOutputEngine(
     }
 
     /**
-     * Writes every byte of an aligned PCM chunk to [AudioTrack], looping cleanly on partial writes.
-     *
-     * - For [PcmEncodingType.PCM_FLOAT]: converts little-endian float32 PCM bytes to [FloatArray] and
-     *   uses `AudioTrack.write(FloatArray, offset, count, WRITE_BLOCKING)` (avoids `ERROR_BAD_VALUE`
-     *   from `AudioTrack.write(ByteArray, ...)` on `ENCODING_PCM_FLOAT` tracks).
-     * - For integer PCM (`PCM_16BIT`, `PCM_24BIT_PACKED`, `PCM_32BIT`): writes via a direct
-     *   little-endian [ByteBuffer] using `AudioTrack.write(ByteBuffer, remaining, WRITE_BLOCKING)`.
+     * Cleanly drains any remaining PCM frames buffered inside [track] upon natural EOS so the last
+     * ~100–300 ms of audio is never truncated by an abrupt `pause() + flush()`.
+     */
+    private fun drainAudioTrackCleanly(
+        track: AudioTrack,
+        totalFramesWritten: Long,
+        sampleRateHz: Int,
+    ) {
+        if (track.state != AudioTrack.STATE_INITIALIZED || track.playState != AudioTrack.PLAYSTATE_PLAYING) {
+            return
+        }
+        val headBefore = readUnsignedPlaybackHeadFrames(track)
+        val remainingFrames = (totalFramesWritten - headBefore).coerceAtLeast(0L)
+        val timeoutMs = GaplessTransitionPolicy.computeDrainTimeoutMs(remainingFrames, sampleRateHz)
+
+        // Calling stop() on a MODE_STREAM AudioTrack plays out all queued frames cleanly before halting.
+        runCatching { track.stop() }
+
+        val deadlineNano = System.nanoTime() + timeoutMs * 1_000_000L
+        var lastHead = headBefore
+        var stagnantTicks = 0
+        while (!stopWorkerFlag.get() && !releasedFlag.get() && System.nanoTime() < deadlineNano) {
+            val head = readUnsignedPlaybackHeadFrames(track)
+            if (head >= totalFramesWritten) break
+            if (head == lastHead) {
+                stagnantTicks++
+                if (stagnantTicks >= 8) break // ~120 ms stationary head -> HAL drain complete
+            } else {
+                lastHead = head
+                stagnantTicks = 0
+            }
+            try {
+                Thread.sleep(15L)
+            } catch (_: InterruptedException) {
+                break
+            }
+        }
+    }
+
+    /**
+     * Writes every byte of an aligned PCM chunk to [AudioTrack], looping cleanly on partial writes,
+     * applying optional Safe-Mode-only ReplayGain with zero per-buffer GC allocations when
+     * [linearGain] != `1.0f`. Returns total bytes written.
      */
     private fun writeAlignedPcmFully(
         track: AudioTrack,
@@ -1073,9 +1332,13 @@ class AudioOutputEngine(
         alignedByteCount: Int,
         directBuffer: ByteBuffer,
         floatBuffer: FloatArray,
-    ) {
+        linearGain: Float,
+    ): Int {
+        val applyGain = ReplayGainProcessor.needsSampleScaling(linearGain)
+
         if (encoding == PcmEncodingType.PCM_FLOAT) {
             var byteOffset = 0
+            var totalBytesWritten = 0
             while (byteOffset < alignedByteCount && !stopWorkerFlag.get() && !releasedFlag.get()) {
                 val chunkBytes = minOf(alignedByteCount - byteOffset, floatBuffer.size * 4)
                 val totalFloats = PcmStreamRules.convertLittleEndianBytesToFloats(
@@ -1084,6 +1347,9 @@ class AudioOutputEngine(
                     byteCount = chunkBytes,
                     destFloats = floatBuffer,
                 )
+                if (applyGain) {
+                    ReplayGainProcessor.applyGainToFloatSamples(floatBuffer, totalFloats, linearGain)
+                }
                 var floatOffset = 0
                 while (floatOffset < totalFloats && !stopWorkerFlag.get() && !releasedFlag.get()) {
                     val written = track.write(
@@ -1096,18 +1362,32 @@ class AudioOutputEngine(
                         throw AudioDecodeException.IoError("AudioTrack float write failed with code $written")
                     }
                     if (written == 0) {
-                        if (isPausedFlag.get()) return
+                        if (isPausedFlag.get()) return totalBytesWritten
                         Thread.sleep(2L)
                     } else {
                         floatOffset += written
+                        totalBytesWritten += written * 4
                     }
                 }
                 byteOffset += totalFloats * 4
             }
-            return
+            return totalBytesWritten
+        }
+
+        if (applyGain) {
+            when (encoding) {
+                PcmEncodingType.PCM_16BIT ->
+                    ReplayGainProcessor.applyGainToPcm16LittleEndian(bytes, 0, alignedByteCount, linearGain)
+                PcmEncodingType.PCM_24BIT_PACKED ->
+                    ReplayGainProcessor.applyGainToPcm24PackedLittleEndian(bytes, 0, alignedByteCount, linearGain)
+                PcmEncodingType.PCM_32BIT ->
+                    ReplayGainProcessor.applyGainToPcm32LittleEndian(bytes, 0, alignedByteCount, linearGain)
+                PcmEncodingType.PCM_FLOAT -> Unit
+            }
         }
 
         var offset = 0
+        var totalBytesWritten = 0
         while (offset < alignedByteCount && !stopWorkerFlag.get() && !releasedFlag.get()) {
             val chunkLen = minOf(alignedByteCount - offset, directBuffer.capacity())
             directBuffer.clear()
@@ -1124,13 +1404,185 @@ class AudioOutputEngine(
                     throw AudioDecodeException.IoError("AudioTrack ByteBuffer write failed with code $written")
                 }
                 if (written == 0) {
-                    if (isPausedFlag.get()) return
+                    if (isPausedFlag.get()) return totalBytesWritten
                     Thread.sleep(2L)
+                } else {
+                    totalBytesWritten += written
                 }
             }
             offset += chunkLen
         }
+        return totalBytesWritten
     }
+
+    private fun isNextPreloadedOrLoading(uri: Uri?): Boolean {
+        if (uri == null) return true
+        return synchronized(preloadLock) {
+            preloadedTrack?.request?.uri == uri || preloadingUri == uri
+        }
+    }
+
+    private fun triggerPreloadAsync(
+        request: EngineTrackRequest?,
+        expectedGeneration: Long,
+    ) {
+        if (request == null || releasedFlag.get() || !gaplessEnabled) return
+        val shouldLaunch = synchronized(preloadLock) {
+            if (preloadedTrack?.request?.uri == request.uri || preloadingUri == request.uri) {
+                false
+            } else {
+                preloadingUri = request.uri
+                true
+            }
+        }
+        if (!shouldLaunch) return
+
+        runCatching {
+            preloadExecutor.execute {
+                if (releasedFlag.get() ||
+                    !gaplessEnabled ||
+                    loadGeneration.get() != expectedGeneration ||
+                    queuedNextRequest?.uri != request.uri
+                ) {
+                    synchronized(preloadLock) {
+                        if (preloadingUri == request.uri) preloadingUri = null
+                    }
+                    return@execute
+                }
+
+                val rgMeta = readReplayGainMetadata(
+                    uri = request.uri,
+                    fileName = request.fileName,
+                    mimeType = request.mimeType,
+                )
+                val openedDecoder = try {
+                    MediaCodecAudioDecoder.open(
+                        context = appContext,
+                        uri = request.uri,
+                        fileName = request.fileName,
+                        mimeHint = request.mimeType,
+                    )
+                } catch (e: Exception) {
+                    Log.w(TAG, "Gapless preload skipped for ${request.fileName}: ${e.message}")
+                    synchronized(preloadLock) {
+                        if (preloadingUri == request.uri) preloadingUri = null
+                    }
+                    return@execute
+                }
+
+                var decoderToClose: PcmAudioDecoder? = null
+                synchronized(preloadLock) {
+                    val stillValid = !releasedFlag.get() &&
+                        gaplessEnabled &&
+                        loadGeneration.get() == expectedGeneration &&
+                        queuedNextRequest?.uri == request.uri
+                    if (stillValid) {
+                        decoderToClose = preloadedTrack?.decoder
+                        preloadedTrack = PreloadedTrack(
+                            request = request,
+                            decoder = openedDecoder,
+                            replayGainMetadata = rgMeta,
+                            generation = expectedGeneration,
+                        )
+                        if (preloadingUri == request.uri) preloadingUri = null
+                    } else {
+                        if (preloadingUri == request.uri) preloadingUri = null
+                        decoderToClose = openedDecoder
+                    }
+                }
+                decoderToClose?.let { runCatching { it.close() } }
+            }
+        }.onFailure {
+            synchronized(preloadLock) {
+                if (preloadingUri == request.uri) preloadingUri = null
+            }
+        }
+    }
+
+    private fun takePreloadedTrackIfReady(expectedGeneration: Long): PreloadedTrack? {
+        var staleToClose: PcmAudioDecoder? = null
+        val ready = synchronized(preloadLock) {
+            val existing = preloadedTrack ?: return@synchronized null
+            preloadedTrack = null
+            preloadingUri = null
+            val matches = existing.generation == expectedGeneration &&
+                queuedNextRequest?.uri == existing.request.uri
+            if (matches) {
+                existing
+            } else {
+                staleToClose = existing.decoder
+                null
+            }
+        }
+        staleToClose?.let { runCatching { it.close() } }
+        return ready
+    }
+
+    private fun clearPreloadedNextAsync() {
+        val toClose = synchronized(preloadLock) {
+            val prev = preloadedTrack?.decoder
+            preloadedTrack = null
+            preloadingUri = null
+            prev
+        }
+        if (toClose != null) {
+            closeDecoderOffMainThread(toClose)
+        }
+    }
+
+    private fun clearPreloadedNextLocked() {
+        val toClose = synchronized(preloadLock) {
+            val prev = preloadedTrack?.decoder
+            preloadedTrack = null
+            preloadingUri = null
+            prev
+        }
+        toClose?.let { runCatching { it.close() } }
+    }
+
+    private fun closeDecoderOffMainThread(decoder: PcmAudioDecoder) {
+        if (releasedFlag.get()) {
+            runCatching { decoder.close() }
+            return
+        }
+        runCatching {
+            preloadExecutor.execute { runCatching { decoder.close() } }
+        }.onFailure {
+            runCatching { decoder.close() }
+        }
+    }
+
+    private fun recomputeReplayGain(): ReplayGainResolution {
+        val resolved = ReplayGainProcessor.resolve(
+            config = replayGainConfig,
+            metadata = activeTrackReplayGainMetadata,
+            safetyMode = safetyController.state().mode,
+        )
+        activeReplayGainResolution = resolved
+        return resolved
+    }
+
+    private fun readReplayGainMetadata(
+        uri: Uri,
+        fileName: String,
+        mimeType: String?,
+    ): ReplayGainMetadata? = runCatching {
+        val formatHint = AudioFormatClassifier.classify(fileName, mimeType)
+        appContext.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+            FileInputStream(pfd.fileDescriptor).use { fis ->
+                val channel = fis.channel
+                val size = runCatching { channel.size() }.getOrDefault(-1L)
+                if (size > 0L) {
+                    ReplayGainTagParser.parse(
+                        source = FileChannelSeekableByteSource(channel, size),
+                        formatHint = formatHint,
+                    )
+                } else {
+                    null
+                }
+            }
+        }
+    }.getOrNull()
 
     private fun safePlayTrack(track: AudioTrack) {
         runCatching {
@@ -1259,6 +1711,7 @@ class AudioOutputEngine(
 
     private fun publishDiagnostics() {
         val safety = safetyController.state()
+        val rgResolution = recomputeReplayGain()
         val fmt = activeDecoder?.format
         val device = activeOutputDevice ?: detectPreferredOutputDevice()
         val connType = mapConnectionType(device)
@@ -1286,6 +1739,8 @@ class AudioOutputEngine(
                 outputConnectionType = connType,
                 negotiatedMixerBehavior = activeNegotiatedMixerBehavior,
                 negotiatedMixerSummary = activeNegotiatedMixerSummary,
+                replayGainSummary = rgResolution.diagnosticLabel,
+                isReplayGainModifyingSamples = rgResolution.isModifyingSamples,
             ),
         )
         _state.update {
