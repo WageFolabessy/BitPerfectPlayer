@@ -6,6 +6,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
+import androidx.core.net.toUri
 import androidx.documentfile.provider.DocumentFile
 import com.cangkir.bitperfectplayer.audio.AudioFormatClassifier
 import com.cangkir.bitperfectplayer.audio.AudioMetadataReader
@@ -72,10 +73,10 @@ class LocalLibraryRepository(
             val prefs = runCatching { preferencesRepository.getSnapshot() }.getOrNull()
             val mediaStoreList = scanMediaStore()
             val safTreeList = prefs?.persistedSafTreeUris
-                ?.flatMap { uriStr -> scanSafTree(Uri.parse(uriStr)) }
+                ?.flatMap { uriStr -> scanSafTree(uriStr.toUri()) }
                 .orEmpty()
             val safFileList = prefs?.persistedSafFileUris
-                ?.mapNotNull { uriStr -> scanSingleSafFile(Uri.parse(uriStr)) }
+                ?.mapNotNull { uriStr -> scanSingleSafFile(uriStr.toUri()) }
                 .orEmpty()
 
             scannedTracks.value = LibraryProjector.mergeAndDeduplicate(
@@ -112,7 +113,7 @@ class LocalLibraryRepository(
 
     suspend fun toggleFavorite(track: PlaybackTrack): Boolean = withContext(Dispatchers.IO) {
         val fp = track.contentFingerprint?.takeIf { it.isNotBlank() }
-            ?: fingerprintProvider.computeFingerprint(Uri.parse(track.uriString)).getOrNull()
+            ?: fingerprintProvider.computeFingerprint(track.uriString.toUri()).getOrNull()
             ?: return@withContext false
 
         // Cache resolved fingerprint into in-memory library list for instant UI updates.

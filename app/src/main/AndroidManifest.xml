@@ -3,6 +3,8 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <!-- Minimal Scoped Storage & local playback permissions (100% offline: strictly NO INTERNET, NO MANAGE_EXTERNAL_STORAGE) -->
+    <!-- MODIFY_AUDIO_SETTINGS is a normal install-time permission required by Android 14+ AudioManager.setPreferredMixerAttributes/clearPreferredMixerAttributes -->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
@@ -24,7 +26,6 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:label="@string/app_name"
             android:theme="@style/Theme.BitPerfectPlayer"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>

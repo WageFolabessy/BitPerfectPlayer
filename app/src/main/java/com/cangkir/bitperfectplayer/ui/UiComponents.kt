@@ -55,9 +55,9 @@ fun formatDurationMs(durationMs: Long): String {
 @Composable
 fun FormatBadgeChip(
     text: String,
+    modifier: Modifier = Modifier,
     containerColor: Color = MaterialTheme.colorScheme.surfaceContainerHighest,
     contentColor: Color = MaterialTheme.colorScheme.primary,
-    modifier: Modifier = Modifier,
 ) {
     Surface(
         modifier = modifier,

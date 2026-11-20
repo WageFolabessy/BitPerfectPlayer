@@ -5,6 +5,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
+import androidx.core.net.toUri
 import androidx.documentfile.provider.DocumentFile
 import com.cangkir.bitperfectplayer.audio.AudioFormatClassifier
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
@@ -213,7 +214,7 @@ class LyricsRepository(
         upsertStoredLyrics = { rec -> persistenceRepository.upsertLyrics(rec) },
         deleteStoredLyrics = { fp -> persistenceRepository.deleteLyricsByFingerprint(fp) },
         resolveFingerprint = { track ->
-            fingerprintProvider.computeFingerprint(Uri.parse(track.uriString)).getOrNull()
+            fingerprintProvider.computeFingerprint(track.uriString.toUri()).getOrNull()
         },
         findAutoDetectLrcBytes = { track -> findMatchingSidecarLrcBytes(track) },
     )
@@ -253,7 +254,7 @@ class LyricsRepository(
             ?.forEach { candidateTrees.add(it) }
 
         for (treeUriStr in candidateTrees) {
-            val matchUri = findLrcInSafTree(Uri.parse(treeUriStr), track.fileName, depth = 0)
+            val matchUri = findLrcInSafTree(treeUriStr.toUri(), track.fileName, depth = 0)
             if (matchUri != null) {
                 readUriBytesCapped(matchUri)?.let { return it }
             }

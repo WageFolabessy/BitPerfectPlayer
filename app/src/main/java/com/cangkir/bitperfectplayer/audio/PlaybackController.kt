@@ -1,7 +1,7 @@
 package com.cangkir.bitperfectplayer.audio
 
 import android.content.Context
-import android.net.Uri
+import androidx.core.net.toUri
 import com.cangkir.bitperfectplayer.data.AudioSafetyModePreference
 import com.cangkir.bitperfectplayer.data.LocalPersistenceRepository
 import com.cangkir.bitperfectplayer.data.RepeatModePreference
@@ -319,7 +319,7 @@ class PlaybackController(
         if (autoPlay) {
             PlaybackForegroundService.startService(appContext)
         }
-        val uri = Uri.parse(track.uriString)
+        val uri = track.uriString.toUri()
         engine.loadTrack(
             EngineTrackRequest(
                 uri = uri,
@@ -336,7 +336,7 @@ class PlaybackController(
         fingerprintJob?.cancel()
         fingerprintJob = scope.launch(Dispatchers.IO) {
             val resolvedFp = track.contentFingerprint?.takeIf { it.isNotBlank() }
-                ?: fingerprintProvider.computeFingerprint(Uri.parse(track.uriString)).getOrNull()
+                ?: fingerprintProvider.computeFingerprint(track.uriString.toUri()).getOrNull()
 
             if (_state.value.activeTrack?.uriString == track.uriString) {
                 val updatedTrack = if (resolvedFp != null) {

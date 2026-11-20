@@ -142,7 +142,7 @@ Execute unchecked `[ ]` items sequentially from top to bottom following `AGENTS.
   - Build the real-time Audio Diagnostics screen/sheet displaying all required fields from `SPEC.md` Section 3.5 with clear **Verified**, **Indicated**, and **Unverifiable** badges plus the maximum verification claim notice.
   - **Verification:** `./gradlew assembleDebug` 100% green.
 
-- [ ] **T5.4 — Full End-to-End Wiring, Final Audit, & `HANDOFF_REPORT.md`**
+- [x] **T5.4 — Full End-to-End Wiring, Final Audit, & `HANDOFF_REPORT.md`**
   - Wire all layers (Application container/DI, Repositories, `AudioOutputEngine`, `PlaybackForegroundService`, ViewModels, and Compose Navigation) cleanly in `MainActivity.kt` with zero placeholder buttons or dummy flows.
   - Execute the full audit procedure in `.agents/skills/android-audio-verify/SKILL.md` (`testDebugUnitTest`, `lintDebug`, `assembleDebug`, deterministic source & merged manifest privacy audit, and `git status` check).
   - Write `HANDOFF_REPORT.md` per `.agents/skills/overnight-task-loop/SKILL.md`, check off this task, commit, and push.

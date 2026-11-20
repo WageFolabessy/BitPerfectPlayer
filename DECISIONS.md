@@ -29,3 +29,10 @@ This file records autonomous architectural, dependency, and environment decision
 - **Decision:** Configured `AudioTrack.Builder.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_NONE)` and paused playback (rather than digitally scaling volume) on `AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK` whenever Bit-Perfect Mode is active.
 - **Rationale:** `PERFORMANCE_MODE_LOW_LATENCY` routes through Android's fast mixer (typically fixed at 48 kHz) on many HALs, preventing native sample-rate bit-perfect USB paths; `PERFORMANCE_MODE_NONE` preserves direct USB/bit-perfect eligibility. Pausing on transient ducking in Bit-Perfect Mode avoids software volume attenuation (which alters PCM sample values and has no effect on fixed-volume paths) while Safe Mode continues to duck cleanly at `0.25f`.
 - **Rejected Alternatives:** `PERFORMANCE_MODE_LOW_LATENCY` (risks forced HAL resampling); applying digital gain reduction during Bit-Perfect Mode.
+
+---
+
+## D5.4 — `MODIFY_AUDIO_SETTINGS` Normal Permission for Android 14+ Bit-Perfect Mixer APIs (`T5.4`)
+- **Decision:** Declared `<uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />` in `app/src/main/AndroidManifest.xml`.
+- **Rationale:** Android Lint (`[MissingPermission]`) and the Android 14 SDK (`@RequiresPermission(Manifest.permission.MODIFY_AUDIO_SETTINGS)`) strictly require `MODIFY_AUDIO_SETTINGS` to invoke `AudioManager.setPreferredMixerAttributes()` and `AudioManager.clearPreferredMixerAttributes()`. `MODIFY_AUDIO_SETTINGS` is a normal install-time audio permission (no runtime prompt, zero network/storage/privacy exposure), whereas `INTERNET` and `MANAGE_EXTERNAL_STORAGE` remain strictly absent from both source and merged manifests.
+- **Rejected Alternatives:** Suppressing `[MissingPermission]` via `@SuppressLint` (would cause `SecurityException` on physical Android 14 devices when enabling Bit-Perfect Mode or clearing preferred mixer attributes).

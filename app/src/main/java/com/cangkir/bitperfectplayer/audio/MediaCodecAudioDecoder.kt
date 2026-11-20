@@ -375,13 +375,12 @@ class MediaCodecAudioDecoder private constructor(
                 if (sourceBitDepth != null && sourceBitDepth > 16) {
                     runCatching { codec.release() }
                     val fallbackCodec = MediaCodec.createDecoderByType(mime)
-                    val fallbackFormat = MediaFormat(trackFormat)
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        fallbackFormat.removeKey(MediaFormat.KEY_PCM_ENCODING)
+                        trackFormat.removeKey(MediaFormat.KEY_PCM_ENCODING)
                     } else {
-                        fallbackFormat.setInteger(MediaFormat.KEY_PCM_ENCODING, AudioFormat.ENCODING_PCM_16BIT)
+                        trackFormat.setInteger(MediaFormat.KEY_PCM_ENCODING, AudioFormat.ENCODING_PCM_16BIT)
                     }
-                    fallbackCodec.configure(fallbackFormat, null, null, 0)
+                    fallbackCodec.configure(trackFormat, null, null, 0)
                     return fallbackCodec
                 }
                 runCatching { codec.release() }
