@@ -40,6 +40,10 @@ import com.cangkir.bitperfectplayer.library.SortDirection
 import com.cangkir.bitperfectplayer.library.TrackSortOption
 import com.cangkir.bitperfectplayer.library.TrackSortSpec
 import com.cangkir.bitperfectplayer.library.TrackTechnicalInfo
+import com.cangkir.bitperfectplayer.ui.library.LibraryScreen
+import com.cangkir.bitperfectplayer.ui.nowplaying.NowPlayingScreen
+import com.cangkir.bitperfectplayer.ui.playlists.PlaylistsScreen
+import com.cangkir.bitperfectplayer.ui.settings.SettingsScreen
 import com.cangkir.bitperfectplayer.ui.theme.BitPerfectPlayerTheme
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.assertEquals

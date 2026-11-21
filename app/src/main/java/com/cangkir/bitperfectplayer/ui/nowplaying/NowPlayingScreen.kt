@@ -1,0 +1,463 @@
+package com.cangkir.bitperfectplayer.ui.nowplaying
+
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.cangkir.bitperfectplayer.audio.AlbumPaletteExtractor
+import com.cangkir.bitperfectplayer.audio.AudioOutputMode
+import com.cangkir.bitperfectplayer.audio.PlaybackControllerState
+import com.cangkir.bitperfectplayer.audio.PlaybackTrack
+import com.cangkir.bitperfectplayer.audio.SleepTimerPreset
+import com.cangkir.bitperfectplayer.audio.SleepTimerState
+import com.cangkir.bitperfectplayer.data.NowPlayingArtworkStyle
+import com.cangkir.bitperfectplayer.data.SpectrumColorStyle
+import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
+import com.cangkir.bitperfectplayer.ui.CompactSpectrumBarStrip
+import com.cangkir.bitperfectplayer.ui.InteractiveVinylDisc
+import com.cangkir.bitperfectplayer.ui.RADIAL_SPECTRUM_VINYL_DIAMETER
+import com.cangkir.bitperfectplayer.ui.RadialSpectrumRing
+import com.cangkir.bitperfectplayer.ui.SleepTimerBottomSheet
+import com.cangkir.bitperfectplayer.ui.SleepTimerTopBarButton
+import com.cangkir.bitperfectplayer.ui.theme.AmberIndicated
+import com.cangkir.bitperfectplayer.ui.theme.EmeraldSafe
+import com.cangkir.bitperfectplayer.ui.theme.IcePrimary
+import com.cangkir.bitperfectplayer.ui.theme.TextMuted
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.withContext
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun NowPlayingScreen(
+    playbackState: PlaybackControllerState,
+    playbackPositionMsFlow: StateFlow<Long>,
+    sleepTimerStateFlow: StateFlow<SleepTimerState>,
+    albumArtworkLoader: AlbumArtworkLoader,
+    isFavorite: Boolean,
+    artworkStyle: NowPlayingArtworkStyle = NowPlayingArtworkStyle.VINYL_DISC,
+    onSetArtworkStyle: (NowPlayingArtworkStyle) -> Unit = {},
+    spectrumVisualizerEnabled: Boolean = true,
+    onSetSpectrumVisualizerEnabled: (Boolean) -> Unit = {},
+    spectrumColorStyle: SpectrumColorStyle = SpectrumColorStyle.PRISM,
+    onCycleSpectrumColorStyle: () -> Unit = {},
+    spectrumSparksEnabled: Boolean = true,
+    onSetSpectrumSparksEnabled: (Boolean) -> Unit = {},
+    onSetSpectrumVisualizerActive: (Boolean) -> Unit = {},
+    onSampleSpectrumWindow: (FloatArray) -> Int = { 0 },
+    onBack: () -> Unit,
+    onToggleFavorite: (PlaybackTrack) -> Unit,
+    onAddToPlaylist: (PlaybackTrack) -> Unit,
+    onShowTrackInfo: (PlaybackTrack) -> Unit,
+    onSelectSleepTimerPreset: (SleepTimerPreset) -> Unit,
+    onTogglePlayPause: () -> Unit,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
+    onSeekTo: (Long) -> Unit,
+    onBeginTurntableScratch: () -> Boolean = { false },
+    onUpdateTurntableScratchRate: (Float) -> Unit = {},
+    onEndTurntableScratch: (Long?) -> Unit = {},
+    onToggleShuffle: () -> Unit,
+    onCycleRepeatMode: () -> Unit,
+    onRequestBitPerfectMode: () -> Unit,
+    onConfirmBitPerfectWarning: () -> Unit,
+    onDismissSafetyWarning: () -> Unit,
+    onSwitchToSafeMode: () -> Unit,
+    onClearAutoPauseNotice: () -> Unit,
+    onOpenQueue: () -> Unit,
+    onOpenLyrics: () -> Unit,
+    onOpenDiagnostics: () -> Unit,
+) {
+    val track = playbackState.activeTrack
+    val safetyState = playbackState.engineState.safetyState
+    val diagnostics = playbackState.engineState.diagnostics
+    val durationMs = playbackState.durationMs.coerceAtLeast(0L)
+
+    // Strict lifecycle gate: activate read-only PCM spectrum tap ONLY while NowPlayingScreen
+    // is foreground-visible (ON_START..ON_STOP) AND spectrumVisualizerEnabled is ON.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val latestSetSpectrumActive by rememberUpdatedState(onSetSpectrumVisualizerActive)
+    DisposableEffect(lifecycleOwner, spectrumVisualizerEnabled) {
+        val lifecycle = lifecycleOwner.lifecycle
+        latestSetSpectrumActive(spectrumVisualizerEnabled && lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_START -> latestSetSpectrumActive(spectrumVisualizerEnabled)
+                Lifecycle.Event.ON_STOP -> latestSetSpectrumActive(false)
+                else -> Unit
+            }
+        }
+        lifecycle.addObserver(observer)
+        onDispose {
+            lifecycle.removeObserver(observer)
+            latestSetSpectrumActive(false)
+        }
+    }
+
+    // Async local cover-art accent extraction strictly on Dispatchers.Default when Album style is selected.
+    var albumSpectrumPalette by remember(track?.uriString) {
+        mutableStateOf(AlbumPaletteExtractor.FALLBACK_STUDIO_PALETTE)
+    }
+    LaunchedEffect(track?.uriString, spectrumVisualizerEnabled, spectrumColorStyle) {
+        if (track == null || !spectrumVisualizerEnabled || spectrumColorStyle != SpectrumColorStyle.ALBUM_ADAPTIVE) {
+            return@LaunchedEffect
+        }
+        val bitmap = albumArtworkLoader.loadArtwork(track, AlbumArtworkLoader.THUMBNAIL_SIZE_PX)
+        albumSpectrumPalette = withContext(Dispatchers.Default) { extractAlbumPaletteFromBitmap(bitmap) }
+    }
+
+    var showAudioModeSheet by remember { mutableStateOf(false) }
+    var showSleepTimerSheet by remember { mutableStateOf(false) }
+
+    // Mandatory Hearing Safety Warning Dialog before activating potentially fixed-volume Bit-Perfect Mode.
+    if (safetyState.isPendingSafetyWarning) {
+        HearingSafetyWarningDialog(
+            deviceName = safetyState.activeDeviceName,
+            onConfirmBitPerfect = onConfirmBitPerfectWarning,
+            onDismissStaySafe = onDismissSafetyWarning,
+        )
+    }
+
+    if (showSleepTimerSheet) {
+        SleepTimerBottomSheet(
+            sleepTimerStateFlow = sleepTimerStateFlow,
+            isBitPerfectOptIn = safetyState.mode == AudioOutputMode.BIT_PERFECT_OPT_IN,
+            onSelectPreset = onSelectSleepTimerPreset,
+            onDismiss = { showSleepTimerSheet = false },
+        )
+    }
+
+    if (showAudioModeSheet) {
+        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ModalBottomSheet(
+            onDismissRequest = { showAudioModeSheet = false },
+            sheetState = sheetState,
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+            contentColor = MaterialTheme.colorScheme.onSurface,
+        ) {
+            AudioModeSheetContent(
+                mode = safetyState.mode,
+                isBitPerfectMixerActive = diagnostics.isBitPerfectMixerActive,
+                isUsbOutputConnected = safetyState.isUsbAudioConnected,
+                isFixedVolumeRisk = safetyState.isFixedVolumeRisk,
+                headline = diagnostics.pathStatusHeadline,
+                outputDeviceSummary = diagnostics.activeOutputDeviceSummary,
+                onSwitchToSafeMode = onSwitchToSafeMode,
+                onRequestBitPerfectMode = onRequestBitPerfectMode,
+                onOpenDiagnostics = {
+                    showAudioModeSheet = false
+                    onOpenDiagnostics()
+                },
+            )
+        }
+    }
+
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
+        topBar = {
+            TopAppBar(
+                title = {
+                    Column {
+                        Text(
+                            text = "Now Playing",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        if (track != null) {
+                            Text(
+                                text = playbackState.queueContext.formatCompactLabel(),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TextMuted,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                },
+                navigationIcon = {
+                    IconButton(onClick = onBack, modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)) {
+                        Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to library")
+                    }
+                },
+                actions = {
+                    // Isolated 1-second tick leaf: only this button recomposes while sleep timer counts down.
+                    SleepTimerTopBarButton(
+                        sleepTimerStateFlow = sleepTimerStateFlow,
+                        onClick = { showSleepTimerSheet = true },
+                    )
+                    if (track != null) {
+                        IconButton(
+                            onClick = { onToggleFavorite(track) },
+                            modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
+                        ) {
+                            Icon(
+                                imageVector = if (isFavorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+                                contentDescription = if (isFavorite) "Remove from favorites" else "Add to favorites",
+                                tint = if (isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        NowPlayingOverflowMenuButton(
+                            track = track,
+                            artworkStyle = artworkStyle,
+                            spectrumVisualizerEnabled = spectrumVisualizerEnabled,
+                            spectrumColorStyle = spectrumColorStyle,
+                            spectrumSparksEnabled = spectrumSparksEnabled,
+                            onAddToPlaylist = onAddToPlaylist,
+                            onShowTrackInfo = onShowTrackInfo,
+                            onOpenSleepTimer = { showSleepTimerSheet = true },
+                            onSetArtworkStyle = onSetArtworkStyle,
+                            onSetSpectrumVisualizerEnabled = onSetSpectrumVisualizerEnabled,
+                            onCycleSpectrumColorStyle = onCycleSpectrumColorStyle,
+                            onSetSpectrumSparksEnabled = onSetSpectrumSparksEnabled,
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
+            )
+        },
+    ) { innerPadding ->
+        if (track == null) {
+            Column(
+                modifier = Modifier.fillMaxSize().padding(innerPadding).padding(24.dp),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Icon(Icons.Filled.MusicNote, contentDescription = null, tint = TextMuted, modifier = Modifier.size(48.dp))
+                Spacer(modifier = Modifier.height(12.dp))
+                Text("No track selected", style = MaterialTheme.typography.titleMedium)
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "Select a local FLAC, WAV, MP3, M4A, or OGG track from your library.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                )
+            }
+            return@Scaffold
+        }
+
+        val isSafe = safetyState.mode == AudioOutputMode.SAFE_VOLUME_MODE
+        val modeDotColor = when {
+            diagnostics.isBitPerfectMixerActive -> IcePrimary
+            isSafe -> EmeraldSafe
+            else -> AmberIndicated
+        }
+        val modeShortLabel = when {
+            diagnostics.isBitPerfectMixerActive -> "Bit-Perfect"
+            isSafe -> "Safe Mode"
+            else -> "Clean Native"
+        }
+        val formatSpecText = remember(diagnostics.sourceFormatSummary, track.formatBadge) {
+            diagnostics.sourceFormatSummary
+                .takeIf { it != "No active track loaded" }
+                ?.replace(" • ", " · ")
+                ?: track.formatBadge
+        }
+
+        // Decoupled scrub preview state holder: NEVER read `.value` inside NowPlayingScreen root
+        // so rotational vinyl scrubbing/coasting updates ONLY the pill leaf and NowPlayingSeekSection.
+        val vinylScrubPreviewMs = remember(track.uriString) { mutableStateOf<Long?>(null) }
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 24.dp, vertical = 12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            playbackState.engineState.lastAutoPauseNotice?.let { notice ->
+                SafetyAlertBanner(message = notice, isError = false, onDismiss = onClearAutoPauseNotice)
+                Spacer(modifier = Modifier.height(12.dp))
+            }
+            playbackState.engineState.errorMessage?.let { err ->
+                SafetyAlertBanner(message = err, isError = true, onDismiss = null)
+                Spacer(modifier = Modifier.height(12.dp))
+            }
+
+            // Hero Artwork Centerpiece: Interactive Spinning Vinyl Disc (wrapped by optional Radial Spectrum)
+            // or Swipeable Square Cover (with optional compact 42.dp bar + sparks spectrum strip).
+            when (artworkStyle) {
+                NowPlayingArtworkStyle.VINYL_DISC -> {
+                    if (spectrumVisualizerEnabled) {
+                        RadialSpectrumRing(
+                            isEnabled = true,
+                            isPlaying = playbackState.isPlaying,
+                            sampleSpectrumWindow = onSampleSpectrumWindow,
+                            colorStyle = spectrumColorStyle,
+                            sparksEnabled = spectrumSparksEnabled,
+                            albumPalette = albumSpectrumPalette,
+                            trackKey = track.uriString,
+                        ) {
+                            InteractiveVinylDisc(
+                                track = track,
+                                isPlaying = playbackState.isPlaying,
+                                isSafeMode = isSafe,
+                                durationMs = durationMs,
+                                playbackPositionMsFlow = playbackPositionMsFlow,
+                                scrubPreviewMsState = vinylScrubPreviewMs,
+                                albumArtworkLoader = albumArtworkLoader,
+                                onSeekTo = onSeekTo,
+                                discDiameter = RADIAL_SPECTRUM_VINYL_DIAMETER,
+                                onBeginTurntableScratch = onBeginTurntableScratch,
+                                onUpdateTurntableScratchRate = onUpdateTurntableScratchRate,
+                                onEndTurntableScratch = onEndTurntableScratch,
+                            )
+                        }
+                    } else {
+                        InteractiveVinylDisc(
+                            track = track,
+                            isPlaying = playbackState.isPlaying,
+                            isSafeMode = isSafe,
+                            durationMs = durationMs,
+                            playbackPositionMsFlow = playbackPositionMsFlow,
+                            scrubPreviewMsState = vinylScrubPreviewMs,
+                            albumArtworkLoader = albumArtworkLoader,
+                            onSeekTo = onSeekTo,
+                            onBeginTurntableScratch = onBeginTurntableScratch,
+                            onUpdateTurntableScratchRate = onUpdateTurntableScratchRate,
+                            onEndTurntableScratch = onEndTurntableScratch,
+                        )
+                    }
+                }
+                NowPlayingArtworkStyle.SQUARE_COVER -> {
+                    SwipeableSquareArtwork(
+                        track = track,
+                        albumArtworkLoader = albumArtworkLoader,
+                        onPrevious = onPrevious,
+                        onNext = onNext,
+                    )
+                    if (spectrumVisualizerEnabled) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        CompactSpectrumBarStrip(
+                            isEnabled = true,
+                            isPlaying = playbackState.isPlaying,
+                            sampleSpectrumWindow = onSampleSpectrumWindow,
+                            colorStyle = spectrumColorStyle,
+                            sparksEnabled = spectrumSparksEnabled,
+                            albumPalette = albumSpectrumPalette,
+                            trackKey = track.uriString,
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // Track Metadata
+            Text(
+                text = track.title,
+                style = MaterialTheme.typography.headlineSmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = track.artistAlbumLine,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = formatSpecText,
+                style = MaterialTheme.typography.labelSmall,
+                color = TextMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable(onClick = onOpenDiagnostics)
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+            )
+
+            Spacer(modifier = Modifier.height(18.dp))
+
+            // Isolated 20 Hz Seekable Progress Leaf (hero art & controls do NOT recompose on ticks)
+            NowPlayingSeekSection(
+                durationMs = durationMs,
+                playbackPositionMsFlow = playbackPositionMsFlow,
+                externalScrubPreviewMsState = vinylScrubPreviewMs,
+                onSeekTo = onSeekTo,
+            )
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            NowPlayingTransportRow(
+                isPlaying = playbackState.isPlaying,
+                shuffleEnabled = playbackState.queue.shuffleEnabled,
+                repeatMode = playbackState.queue.repeatMode,
+                onToggleShuffle = onToggleShuffle,
+                onPrevious = onPrevious,
+                onTogglePlayPause = onTogglePlayPause,
+                onNext = onNext,
+                onCycleRepeatMode = onCycleRepeatMode,
+            )
+
+            Spacer(modifier = Modifier.height(22.dp))
+
+            NowPlayingAudioModeStrip(
+                modeDotColor = modeDotColor,
+                modeShortLabel = modeShortLabel,
+                activeDeviceName = safetyState.activeDeviceName,
+                onClick = { showAudioModeSheet = true },
+            )
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            NowPlayingUtilityStrip(
+                queueSize = playbackState.queue.size,
+                onOpenQueue = onOpenQueue,
+                onOpenLyrics = onOpenLyrics,
+                onOpenDiagnostics = onOpenDiagnostics,
+            )
+        }
+    }
+}

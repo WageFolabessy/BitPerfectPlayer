@@ -38,6 +38,11 @@ import androidx.navigation.compose.rememberNavController
 import com.cangkir.bitperfectplayer.audio.BrowsingQueueContext
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
 import com.cangkir.bitperfectplayer.audio.QueueSourceType
+import com.cangkir.bitperfectplayer.ui.library.LibraryScreen
+import com.cangkir.bitperfectplayer.ui.nowplaying.NowPlayingScreen
+import com.cangkir.bitperfectplayer.ui.playlists.AddToPlaylistDialog
+import com.cangkir.bitperfectplayer.ui.playlists.PlaylistsScreen
+import com.cangkir.bitperfectplayer.ui.settings.SettingsScreen
 import com.cangkir.bitperfectplayer.ui.theme.IcePrimaryContainer
 import com.cangkir.bitperfectplayer.ui.theme.TextMuted
 
