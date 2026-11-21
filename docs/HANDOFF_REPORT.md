@@ -693,4 +693,42 @@ Following physical testing of the signed Release APK on POCO F4 (Android 14 / Hy
 - **Strict Offline & Zero-Permission Audit (Source + All Generated Debug, Release, & UnitTest Manifests):** **PASS — 0 `INTERNET`, 0 `RECORD_AUDIO`, 0 `MANAGE_EXTERNAL_STORAGE`**.
 - **Physical Hardware Verification Pending (Not Executed in Cloud):** Real POCO F4 (Android 14 / HyperOS) + KZ EDX Pro 2 USB-C runtime testing (including bit-perfect mixer negotiation, audible playback, live Safe-Mode turntable scratch, and physical USB plug/unplug auto-pause) remains unverified in this software-only environment.
 
+---
 
+## 23. `AudioOutputEngine` Modularization into 4 Cohesive Internal Collaborators (`D10.2`)
+
+### Delivered Architecture & Before/After LOC Breakdown
+Refactored the monolithic `AudioOutputEngine.kt` (`2,754` lines at `5e33ebe`) into a clean, readable coordinator (**`642` lines**, a **76.7% reduction**) delegating to 4 focused `internal` collaborators inside `com.cangkir.bitperfectplayer.audio` while preserving 100% of `AudioOutputEngine`'s public API, thread-safety boundaries (`engineLock`, `preloadLock`, `BitPerfectEngineControl`, `BitPerfectGaplessPreload`, `BitPerfectAudioThread` with `Process.THREAD_PRIORITY_AUDIO`), hearing safety invariants, and zero-allocation hot-path contracts:
+
+| File (`com.cangkir.bitperfectplayer.audio`) | Before (`5e33ebe`) | After (`D10.2`) | Primary Responsibility |
+| :--- | :---: | :---: | :--- |
+| [`AudioOutputEngine.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/AudioOutputEngine.kt) | `2,754` lines | **`642` lines** | Public API (`PlaybackStatus`, `EngineTrackRequest`, `EnginePlaybackState`, 20 public methods/flows), `engineLock` & `BitPerfectEngineControl` lifecycle coordination, track loading, and `BitPerfectAudioThread` orchestration. |
+| [`AudioRouteAndMixerManager.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/AudioRouteAndMixerManager.kt) | *(inlined)* | **`484` lines** | Output device detection, `AudioDeviceCallback` (with cold-start initial-callback suppression), `ACTION_AUDIO_BECOMING_NOISY` receiver, `AudioFocusRequest` lifecycle (Bit-Perfect ducking isolation), API 34+ `MIXER_BEHAVIOR_BIT_PERFECT` negotiation + mandatory `clearPreferredMixerAttributesOnApi34(...)` cleanup, and 6-stage `AudioDiagnosticSnapshot` construction. |
+| [`AudioTrackWriter.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/AudioTrackWriter.kt) | *(inlined)* | **`543` lines** | `AudioTrack` creation/configuration (`PERFORMANCE_MODE_NONE`, frame-aligned buffer sizing, API 31+ PCM encoding guards), idempotent `safePlay`/`safePause`/`safeFlush`/`safeStopAndRelease`, `drainAudioTrackCleanly(...)`, `readUnsignedPlaybackHeadFrames(...)`, zero-allocation `writeAlignedPcmFully(...)` & `writeNormalizedFloatsToTrack(...)`, and post-write read-only `SpectrumPcmTap` lifecycle & window sampling. |
+| [`GaplessPreloadController.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/GaplessPreloadController.kt) | *(inlined)* | **`311` lines** | Dedicated `"BitPerfectGaplessPreload"` single-thread executor, `preloadLock`, `setNextTrack(...)`, `maybeTriggerPreloadForPosition(...)`, generation/URI validation, OOM-safe header-only `readReplayGainMetadata(...)`, `pollSeamlessPreloadedTrack(...)`, and leak-free off-main-thread decoder disposal. |
+| [`TurntableScratchRunner.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/TurntableScratchRunner.kt) | *(inlined)* | **`859` lines** | `PlaybackLoopState` per-worker buffer/cursor container + `TurntableScratchRunner` owning the Safe-Mode-only lazy 8 MB `TurntablePcmRingBuffer` lifecycle, pre-ReplayGain PCM ring-buffer teeing, normal PCM chunk writing, lock-free UI -> audio thread scratch rate atomics, `~65 ms` (`sampleRate / 15`) fill-throttled varispeed/reverse resampler loop with `2 ms` sleep, forward scratch decode-ahead, and click-free exit transition (Fast Seamless `1.0x` ring drain vs Deep Rewind `seekToMs`). |
+
+### Pure-Kotlin Domain Helper Extraction & Unit Test Coverage
+- [`PcmStreamRules.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/PcmStreamRules.kt) + [`PcmStreamRulesTest.kt`](../app/src/test/java/com/cangkir/bitperfectplayer/audio/PcmStreamRulesTest.kt): Extracted and tested `PcmStreamRules.computeAudioTrackBufferSizeBytes(...)` (`2x` OS minimum buffer with `1024`-frame or `50 ms` floor, rounded up to whole frames across 16-bit, 24-bit packed 6-byte frames, and float32).
+- [`TurntableAudioDsp.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/TurntableAudioDsp.kt) (`TurntableScratchPolicy`) + [`TurntableAudioDspTest.kt`](../app/src/test/java/com/cangkir/bitperfectplayer/audio/TurntableAudioDspTest.kt): Extracted and tested `computeScratchEntryCursorFrame(...)`, `computeVirtualFrameBounds(...)`, `computeClampedScratchPositionMs(...)`, and `canResumeViaSeamlessRingDrain(...)`.
+- [`AudioSafetyController.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/AudioSafetyController.kt) + [`AudioSafetyControllerTest.kt`](../app/src/test/java/com/cangkir/bitperfectplayer/audio/AudioSafetyControllerTest.kt): Extracted and tested `AudioSafetyController.formatAutoPauseNotice(...)` across all `AutoPauseReason` values.
+
+### Software Verification (`./gradlew clean ktlintCheck detekt testDebugUnitTest lintDebug assembleDebug assembleRelease`)
+- **Kotlin Formatting (`ktlintCheck`):** **PASS — 0 violations** across `main`, `test`, and Kotlin Gradle scripts.
+- **Static Analysis (`detekt`):** **PASS — 0 issues** (0 baseline files).
+- **Automated JVM Unit + Robolectric SQLite Migration + Headless Compose UI Tests (`testDebugUnitTest`):** **183 / 183 passed** across **32 test suites** (`0` failed, `0` errors, `0` skipped, `0` `@Ignore`).
+- **Compiler, KSP, & R8 Warnings:** **0** Kotlin compiler warnings (production + test), **0** KSP warnings, **0** R8 warnings.
+- **Android Lint (`lintDebug` & `lintVitalRelease`):** **0 errors**, **0 warnings across all `/app/src/` Kotlin, manifest, and resource files**.
+- **Debug APK (`assembleDebug`):** `app/build/outputs/apk/debug/app-debug.apk` (`20.08 MB` / `21,060,133 bytes`).
+- **Release APK (`assembleRelease` with R8 optimization):** `app/build/outputs/apk/release/app-release-unsigned.apk` (`2.57 MB` / `2,696,688 bytes`).
+- **ART DEX Compactness Audit (`dexdump` across `AudioOutputEngine` + 4 Collaborators):**
+  - `AudioOutputEngine`: max **`420` DEX code units (Debug)** / **`404` DEX code units (Release)** (`<init>`)
+  - `AudioRouteAndMixerManager`: max **`246` (Debug)** / **`186` (Release)**
+  - `AudioTrackWriter`: max **`319` (Debug)** / **`273` (Release)**
+  - `GaplessPreloadController`: max **`240` (Debug)** / **`176` (Release)**
+  - `TurntableScratchRunner`: max **`457` (Debug)** / **`410` (Release)** (`processTurntableScratchStep`)
+  - `PlaybackLoopState`: max **`268` (Debug)** / **`242` (Release)**
+  - Every method is ~36x–90x below ART's `16,384` instruction JIT/AOT compiler ceiling.
+- **Pure-Kotlin Domain Boundary (`35` pure-Kotlin source files, including all `30` core domain files):** **PASS — 0 `android.*` / `androidx.*` imports**.
+- **Strict Offline & Zero-Permission Audit (Source + All 8 Generated Debug, Release, & UnitTest Manifests):** **PASS — 0 `INTERNET`, 0 `RECORD_AUDIO`, 0 `MANAGE_EXTERNAL_STORAGE`**.
+- **Physical Hardware Verification Pending (Not Executed in Cloud):** Real POCO F4 (Android 14 / HyperOS) + KZ EDX Pro 2 USB-C runtime testing (including bit-perfect mixer negotiation, audible playback, live Safe-Mode turntable scratch, and physical USB plug/unplug auto-pause) remains unverified in this software-only environment.
