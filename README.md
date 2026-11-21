@@ -66,7 +66,7 @@ Every diagnostic item is tagged `VERIFIED`, `INDICATED`, or `UNVERIFIABLE`, acco
 - **Playlists and `.m3u8` Import/Export (`M3u8PlaylistCodec.kt`, `PlaylistRepository.kt`):** Local playlist CRUD with `.m3u8` SAF export and import resolving tracks by SHA-256 fingerprint, URI, relative path, or filename.
 - **100% Offline Local Backup and Restore (`LocalBackupCodec.kt`, `LocalBackupRepository.kt`):** Custom dependency-free RFC 8259 JSON encoder and strict parser (`schemaVersion = 1`) exporting and non-destructively merging playlists, fingerprint-bound lyrics, favorites, and listening stats via SAF `.json` files.
 - **Local Album Artwork (`AlbumArtworkLoader.kt`):** Extracts embedded cover art, MediaStore thumbnails, and SAF sibling cover images (`cover.jpg`, `folder.jpg`, `front.jpg`, `album.jpg`, `.png`) with bounded memory/disk caching.
-- **Background Playback:** `PlaybackForegroundService` (`foregroundServiceType="mediaPlayback"`) using `ServiceCompat.startForeground(...)`, platform `android.media.session.MediaSession`, and `Notification.MediaStyle`.
+- **Background Playback & Android 17 (`targetSdk = 37`) Hardening (`PlaybackForegroundService.kt`, `ForegroundPlaybackGate.kt`):** `PlaybackForegroundService` (`foregroundServiceType="mediaPlayback"`) using `ServiceCompat.startForeground(...)`, platform `android.media.session.MediaSession`, and `Notification.MediaStyle`. When playback is started or resumed from the background (such as via lock-screen or headset `MediaSession.Callback` after the foreground service was stopped), pure-Kotlin `ForegroundPlaybackGate` awaits active `mediaPlayback` Foreground Service While-In-Use (WIU) promotion before `AudioOutputEngine` calls `AudioManager.requestAudioFocus(...)` or `AudioTrack.play()`/`write()` (with **0 ms added latency** during in-app playback or when the service is already promoted), and guards `startForegroundService()` / `startForeground()` against `ForegroundServiceStartNotAllowedException` and `SecurityException`.
 
 ### Offline Lyrics System
 
@@ -77,14 +77,17 @@ Every diagnostic item is tagged `VERIFIED`, `INDICATED`, or `UNVERIFIABLE`, acco
 - **Fault-Tolerant `.lrc` Parser (`LrcParser.kt`):** Supports `[mm:ss.xx]`, `[mm:ss.xxx]`, multi-timestamp lines, metadata tags (`[ti:]`, `[ar:]`, `[al:]`, `[offset:]`), `UTF-8`, `UTF-8 BOM`, `UTF-16LE`, `UTF-16BE`, and `ISO-8859-1` fallback, plus static display for plain untimestamped text.
 - **Sync and Editing:** Auto-detects sibling `.lrc` files, imports `.lrc` files via SAF, includes a local manual lyrics editor, and derives active line highlighting directly from `AudioOutputEngine` playback position.
 
-### Now Playing UI, Vinyl Turntable, and Spectrum Visualizer
+### Now Playing UI, Vinyl Turntable, Spectrum Visualizer, and Adaptive Large-Screen Layout
 
 - **Matte Obsidian Dark Theme (`ui/theme/`):** High-contrast neutral dark palette (`#0E0E10` background, `#141417` surface cards, `0.5.dp` hairline dividers, `#7BA7D9` slate-ice accent, minimum `48.dp` touch targets).
+- **Adaptive Phones, Foldables, Tablets, & Multi-Window Layout (`WindowLayoutMetrics.kt`, `BitPerfectAppNav.kt`, `ui/nowplaying/`):**
+  - **Compact Portrait (`< 600.dp`):** Bottom `NavigationBar` with persistent `MiniPlayerBar` and single-column `NowPlayingScreen` (`316.dp` radial spectrum ring around `240.dp` vinyl disc).
+  - **Wide / Landscape / Foldable / Tablet (`>= 600.dp`):** Left-docked matte-obsidian `NavigationRail` separated by a `0.5.dp` `VerticalDivider` with `MiniPlayerBar` docked strictly in the right content pane; balanced 2-column `NowPlayingScreen` (`46%` left pane with proportionally scaled `220..316.dp` Vinyl Disc + Radial Spectrum Ring so it never clips vertically in landscape or split-screen; `54%` right pane with metadata, isolated `NowPlayingSeekSection`, transport controls, audio-mode strip, and utility buttons); and centered `840.dp` max-width containers on `SettingsScreen`, `DiagnosticsScreen`, `QueueScreen`, and `LyricsScreen`.
 - **Interactive Vinyl Disc (`VinylDiscPlayer.kt`, `VinylScrubMath.kt`, `TurntableAudioDsp.kt`):** Switchable between **Vinyl Disc** (default) and **Square Cover** modes. Renders a GPU-rotated vinyl disc (`graphicsLayer { rotationZ }`) with velocity-sensitive finger scrubbing and catchable bounded flick inertia:
   - In **Safe Mode** while playing, touching/dragging engages a pure-Kotlin real-time varispeed/reverse turntable resampler (`-4.0x` to `+4.0x` and `HOLD` braking) backed by a capped 8 MB float PCM ring buffer with zero `AudioTrack` rebuilds.
   - In **Bit-Perfect Opt-In** mode (or when paused), turntable DSP and ring buffering are completely bypassed, falling back to silent seek preview and a single `seekTo` on release.
 - **Read-Only Radial Ring Spectrum Visualizer (`SpectrumAnalyzerDsp.kt`, `SpectrumPcmTap.kt`, `SpectrumVisualDsp.kt`, `RadialSpectrumRing.kt`):**
-  - Zero-permission (`no RECORD_AUDIO`, `no android.media.audiofx.Visualizer`) 1024-point Hann-windowed radix-2 FFT driving 64 radial ticks around the `240.dp` vinyl disc (or a compact `42.dp` 32-bar strip under Square Cover).
+  - Zero-permission (`no RECORD_AUDIO`, `no android.media.audiofx.Visualizer`) 1024-point Hann-windowed radix-2 FFT driving 64 radial ticks around the vinyl disc (or a compact `42.dp` 32-bar strip under Square Cover).
   - Reads from a post-write PCM side-tap (`48,000`-float mono ring buffer, ~192 KB) with sample-rate decimation for 88.2-192 kHz streams and `AudioTrack.playbackHeadPosition` alignment, leaving PCM output strictly unmodified in both Safe Mode and Bit-Perfect Opt-In mode.
   - Lifecycle-gated (`ON_START..ON_STOP` on `NowPlayingScreen` only) so FFT CPU usage and tap buffer allocation drop to zero off-screen or when disabled.
   - Switchable **Studio**, **Prism**, and local cover-art **Album** (`AlbumPaletteExtractor`) color palettes, plus optional pre-allocated **Kinetic Sparks** (`MAX_SPARKS = 64`).
@@ -115,13 +118,19 @@ Strictly prohibited and verified absent from both source and merged manifests:
 
 ```text
 app/src/main/java/com/cangkir/bitperfectplayer/
-|-- BitPerfectApplication.kt      # Application container & repository wiring
+|-- BitPerfectApplication.kt      # Application container, repository wiring, & foreground lifecycle tracking
 |-- MainActivity.kt               # Single-activity Compose entry point (edge-to-edge)
-|-- audio/                        # Decoders, WAV parser, AudioTrack engine, safety, diagnostics, DSP
+|-- audio/                        # Decoders, WAV parser, modular AudioOutputEngine + collaborators,
+|                                 # ForegroundPlaybackGate, safety state machine, 6-stage diagnostics, DSP
 |-- data/                         # Room v4 DB, entities, DAOs, DataStore prefs, JSON backup codec
 |-- library/                      # MediaStore/SAF scanning, scan filter, sorting, artwork, playlists, .m3u8
 |-- lyrics/                       # SHA-256 content fingerprint generator, .lrc parser, repository
-`-- ui/                           # Compose screens, ViewModel, navigation, sheets, theme/
+`-- ui/                           # Adaptive navigation (WindowLayoutMetrics), ViewModel, vinyl/spectrum,
+    |-- library/                  # LibraryScreen, header controls, track list, & group views
+    |-- nowplaying/               # Adaptive 1/2-pane NowPlayingScreen, controls, & hearing safety dialog
+    |-- playlists/                # PlaylistsScreen, overview, detail view, & dialogs
+    |-- settings/                 # SettingsScreen, audio engine, display/library, & backup/about sections
+    `-- theme/                    # Matte obsidian Color, Theme, & Type definitions
 ```
 
 Local persistence uses Room (`BitPerfectDatabase.kt`, schema `version = 4`) with seven entities and verified non-destructive SQLite migrations (`MIGRATION_1_2`, `MIGRATION_2_3`, `MIGRATION_3_4`):
@@ -139,7 +148,7 @@ Preferences (Safe Mode default, shuffle, repeat, gapless toggle, ReplayGain sett
 
 ## Tech Stack and Build Requirements
 
-- **Application ID / Namespace:** `com.cangkir.bitperfectplayer`
+- **Application ID / Namespace:** `com.cangkir.bitperfectplayer` (`versionName = "1.1"`, `versionCode = 2`)
 - **SDK Levels:** `minSdk = 26` (Android 8.0), `compileSdk = 37`, `targetSdk = 37`
 - **Toolchain:** Gradle Wrapper `9.9.1`, Gradle Daemon JVM `25`, Java Compatibility `JavaVersion.VERSION_11`
 - **Core Stack:** Android Gradle Plugin `9.5.1`, Kotlin `2.4.21`, KSP `2.3.14`
@@ -199,7 +208,7 @@ grep -E "INTERNET|RECORD_AUDIO|MANAGE_EXTERNAL_STORAGE" \
 
 ## Verification Scope and Hardware Safety Notice
 
-- **Automated Software Verification:** Core pure-Kotlin domain logic, Room v1-to-v4 schema migrations, and headless Compose UI behaviors (including the mandatory `HearingSafetyWarningDialog` gate) are covered by 180 automated tests across 32 suites under `./gradlew testDebugUnitTest`, alongside `ktlintCheck`, `detekt`, Android Lint, and R8 release builds.
+- **Automated Software Verification:** Core pure-Kotlin domain logic (including `ForegroundPlaybackGate` and `WindowLayoutMetrics`), Room v1-to-v4 schema migrations, and headless Compose UI behaviors (including the mandatory `HearingSafetyWarningDialog` gate and adaptive `NavigationRail` / 2-column `NowPlayingScreen` layouts) are covered by **197 automated tests across 34 suites** under `./gradlew testDebugUnitTest`, alongside `ktlintCheck`, `detekt`, Android Lint, and R8 release builds.
 - **Physical Hardware Limits:** Runtime behavior of `AudioManager.MIXER_BEHAVIOR_BIT_PERFECT`, Qualcomm/OEM `MediaCodec` 24-bit output support, UAC hardware volume attenuation, and internal USB-C DAC firmware processing depend on the target device's Android Audio HAL and DAC hardware. The reference hardware profile used during specification is a POCO F4 (Android 14 / HyperOS) paired with a KZ EDX Pro 2 USB-C IEM (107 dB/mW at 24 ohms).
 - **Safety Warning:** Before toggling **Bit-Perfect Opt-In** on an unfamiliar phone or USB-C DAC, keep high-sensitivity earphones out of your ears until you confirm whether volume buttons attenuate output or the DAC plays at fixed 100% full scale.
 

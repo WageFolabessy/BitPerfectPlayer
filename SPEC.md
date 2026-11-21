@@ -181,3 +181,19 @@ Having graduated from the verified MVP baseline, the Full APK roadmap authorizes
    - Switchable OLED-tuned color palettes (`Studio`, `Prism`, and local cover-art `Album` via pure-Kotlin RGB->HSL extraction) plus optional zero-allocation `Kinetic Sparks` transient particle bursts (`MAX_SPARKS = 64`, crisp velocity-aligned micro-streaks + dots, zero GPU blur masks).
    - Strictly read-only post-write PCM side-tap (`48,000`-float ≈ `192 KB` rolling mono buffer) with Hi-Res decimation (`88.2/96 kHz -> stride 2`, `176.4/192 kHz -> stride 4`) and `AudioTrack.playbackHeadPosition` sync, making it 100% safe in both `SAFE_VOLUME_MODE` and `BIT_PERFECT_OPT_IN` mode.
    - Strictly lifecycle-gated (`ON_START..ON_STOP` on `NowPlayingScreen` only): 0% FFT CPU and 0 KB tap buffer when off-screen, backgrounded, or disabled in Settings/overflow menu.
+
+---
+
+## 7. Version `1.1` Architectural Hardening & Android 17 (`targetSdk = 37`) Readiness
+
+1. **Late-2026 Toolchain & Build-Time Static Analysis (`D10.1`):**
+   - Kotlin `2.4.21` + Jetpack Compose BOM `2026.09.00` (with `AGP 9.5.1`, `KSP 2.3.14`, `JDK 25`, `compileSdk = 37`, `targetSdk = 37`).
+   - Build-time `ktlint` (`14.2.0`, `.editorconfig`) and `detekt` (`2.0.0-alpha.6`, `config/detekt/detekt.yml`) enforced in Gradle and GitHub Actions CI with `0` violations and `0` baseline suppression files.
+2. **Modular Audio Engine & Feature UI Sub-Packages (`D10.2`, `D10.3`):**
+   - `AudioOutputEngine.kt` decomposed into 4 focused `internal` collaborators (`AudioRouteAndMixerManager`, `AudioTrackWriter`, `GaplessPreloadController`, `TurntableScratchRunner`) with every method verified well below ART's `16,384` instruction JIT/AOT ceiling (`max <= 457` DEX code units).
+   - Compose screen layer decomposed into 4 cohesive feature sub-packages (`ui/library/`, `ui/playlists/`, `ui/nowplaying/`, `ui/settings/`).
+3. **Android 17 (`targetSdk = 37`) Background Audio Hardening (`D10.4`):**
+   - Pure-Kotlin `ForegroundPlaybackGate` coordinates background playback resume so `PlaybackForegroundService` (`ServiceCompat.startForeground(..., FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)`) promotes with While-In-Use (WIU) capability before `AudioManager.requestAudioFocus(...)` or `AudioTrack.play()`/`write()` is invoked, with **0 ms added latency** when the app is in the foreground or the service is already promoted.
+   - Explicit `ForegroundServiceStartNotAllowedException` (API 31+) and `SecurityException` guards plus defensive `AUDIOFOCUS_REQUEST_FAILED` revert-to-paused handling.
+4. **Adaptive Large-Screen, Foldable, Tablet, & Multi-Window UI (`D10.5`):**
+   - Pure-Kotlin `WindowLayoutMetrics` drives adaptive top-level navigation (`NavigationRail` + right-pane `MiniPlayerBar` at `width >= 600.dp`; bottom `NavigationBar` at `< 600.dp`), a balanced 2-column `NowPlayingScreen` (`46%` scaled `220..316.dp` Vinyl + Radial Spectrum left pane / `54%` scrollable controls right pane) in landscape and tablet viewports, and centered `840.dp` max-width containers on `SettingsScreen`, `DiagnosticsScreen`, `QueueScreen`, and `LyricsScreen`.

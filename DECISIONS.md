@@ -212,3 +212,24 @@ This file records autonomous architectural, dependency, and environment decision
   - Eliminates the race condition between `ContextCompat.startForegroundService(...)` and `AudioOutputEngine.play()` during background resume (e.g., lock-screen / headset `MediaSession.Callback.onPlay()`) while guaranteeing 0 ms latency for all in-app interactions.
 - **Rejected Alternatives:** Adding an unconditional delay before `engine.play()` (adds perceptible latency to in-app taps and is still a race condition); adding `androidx.lifecycle:lifecycle-process` (`ProcessLifecycleOwner`) when a 15-line `ActivityLifecycleCallbacks` counter in `BitPerfectApplication` achieves exact foreground tracking with zero extra dependencies.
 
+---
+
+## D10.5 — Zero-Dependency Adaptive Large-Screen, Foldable, Tablet, & Multi-Window UI (`WindowLayoutMetrics`)
+- **Decision:**
+  1. Created pure-Kotlin **`WindowLayoutMetrics`** (`com.cangkir.bitperfectplayer.ui.WindowLayoutMetrics`, `0` `android.*` / `androidx.*` imports) providing deterministic layout classification and proportional hero artwork sizing:
+     - `useNavigationRail(widthDp: Int): Boolean` -> `widthDp >= 600`
+     - `useTwoPaneNowPlaying(widthDp: Int, heightDp: Int): Boolean` -> `(widthDp >= 600 && widthDp > heightDp) || widthDp >= 720`
+     - `computeNowPlayingDiscContainerDp(availableWidthDp: Int, availableHeightDp: Int, isTwoPane: Boolean): Int` -> smoothly scales the Vinyl Disc + Radial Spectrum Ring container in `220..316 dp` (keeping the exact `316 dp` container / `240 dp` vinyl disc on portrait phones while scaling cleanly in phone landscape `872x392` and square split-screen `420x420` so it never clips vertically or overlaps controls).
+     - `contentMaxWidthDp(widthDp: Int): Int?` -> returns `840` when `widthDp >= 900`, else `null`.
+  2. Implemented `BitPerfectAdaptiveTopLevelFrame` in `BitPerfectAppNav.kt` using `BoxWithConstraints`:
+     - On compact portrait viewports (`< 600.dp`), renders the exact `v1.0` bottom `MiniPlayerBar` + `NavigationBar` (`BitPerfectBottomNavBar`).
+     - On wide/landscape/tablet viewports (`>= 600.dp`) on top-level routes (`Library`, `Playlists`, `Settings`), renders a left-docked matte-obsidian `NavigationRail` (`BitPerfectNavigationRail`) separated by a `0.5.dp` `VerticalDivider` and docks `MiniPlayerBar` at the bottom of the right content pane (keeping the `NavHost` composition slot identical across screen rotations and route transitions).
+  3. Implemented adaptive 2-column `NowPlayingScreen` (`ui/nowplaying/NowPlayingScreen.kt`):
+     - When `useTwoPaneNowPlaying == false`, renders the exact `v1.0` portrait `verticalScroll` layout.
+     - When `useTwoPaneNowPlaying == true`, renders a balanced 2-column studio `Row` (`widthIn(max = 1120.dp)`): left pane (`46%` width) centers `NowPlayingHeroCenterpiece` (`RadialSpectrumRing` + `InteractiveVinylDisc` or `SwipeableSquareArtwork` + `CompactSpectrumBarStrip`) scaled to `computeNowPlayingDiscContainerDp(...)`; right pane (`54%` width, vertically scrollable) renders safety alert banners, track metadata, isolated `NowPlayingSeekSection`, `NowPlayingTransportRow`, `NowPlayingAudioModeStrip`, and `NowPlayingUtilityStrip`.
+  4. Centered content within `widthIn(max = 840.dp)` on `SettingsScreen`, `DiagnosticsScreen`, `QueueScreen`, and `LyricsScreen` for comfortable reading on wide displays.
+  5. Bumped application version to **`versionName = "1.1"` (`versionCode = 2`)** in `app/build.gradle.kts`.
+- **Rationale:**
+  - Android 17 (`targetSdk = 37`) mandates adaptive layouts across large screens (`sw >= 600dp`), foldables, landscape rotation, and multi-window split-screen.
+  - Using Compose's built-in `BoxWithConstraints` + Material 3 `NavigationRail` + pure-Kotlin `WindowLayoutMetrics` adds **0 external dependencies** (keeping the R8 Release APK lean at `2.62 MB` / `2,746,000 bytes`) and enables fast, deterministic JVM unit tests (`WindowLayoutMetricsTest`) plus Robolectric headless Compose UI tests (`BitPerfectUiBehaviorTest`).
+- **Rejected Alternatives:** Pulling in `androidx.compose.material3.adaptive:*` + `androidx.window:window` artifacts (adds extra AAR footprint and transitive complexity for simple `600.dp` / `840.dp` breakpoint rules that `BoxWithConstraints` + `WindowLayoutMetrics` handle in ~100 lines of pure Kotlin).

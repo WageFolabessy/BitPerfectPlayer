@@ -167,6 +167,10 @@ Every library added or upgraded in `gradle/libs.versions.toml` uses a permissive
      `adb shell cmd audio set-enable-hardening throw`
      Then background the app, pause, wait or dismiss notification, and resume from the lock screen / notification / headset button (`MediaSession.Callback.onPlay()`); verify `ServiceCompat.startForeground(..., FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)` promotes before `AudioManager.requestAudioFocus(...)` / `AudioTrack.play()` with zero `AUDIOFOCUS_REQUEST_FAILED` rejections, zero silent muting, and zero hardening exceptions.
    - Force-close or swipe app away while paused, relaunch, and confirm last track & playback position restore cleanly in paused state (`autoPlay = false`, zero background FGS start or audio focus request).
+8. **Adaptive Landscape Rotation & Split-Screen Multi-Window (`v1.1`):**
+   - On POCO F4 in portrait (`< 600.dp`), confirm bottom `NavigationBar`, `MiniPlayerBar`, and single-column `NowPlayingScreen` (`316.dp` radial spectrum ring + `240.dp` spinning vinyl disc) match `v1.0` with zero layout shift.
+   - Rotate POCO F4 to landscape (`>= 600.dp`): confirm top-level tabs switch smoothly to the left `NavigationRail` with `MiniPlayerBar` docked in the right content pane, and `NowPlayingScreen` switches to the 2-column studio layout (left pane: proportionally scaled spinning Vinyl Disc + Radial Spectrum Ring with zero vertical clipping; right pane: metadata, seek slider, transport buttons, audio-mode strip, and utility buttons) without interrupting audio playback or vinyl rotational scrubbing.
+   - Enter Android split-screen multi-window mode and resize the divider: confirm smooth reflow between compact and wide layouts with all touch targets `>= 48.dp`.
 
 ---
 
@@ -804,4 +808,36 @@ Split the 4 oversized Compose screen files (`LibraryScreen.kt`, `PlaylistsScreen
 - **Pure-Kotlin Domain Boundary (`ForegroundPlaybackGate.kt`):** **PASS — 0 `android.*` / `androidx.*` imports**.
 - **Strict Offline & Zero-Permission Audit (Source + All 8 Generated Debug, Release, & UnitTest Manifests):** **PASS — 0 `INTERNET`, 0 `RECORD_AUDIO`, 0 `MANAGE_EXTERNAL_STORAGE`**.
 - **Physical Hardware Verification Pending (Not Executed in Cloud):** Real POCO F4 (Android 14 / HyperOS) + KZ EDX Pro 2 USB-C runtime testing and Android 17 (`API 37`) `adb shell cmd audio set-enable-hardening throw` verification remain unverified in this software-only environment.
+
+---
+
+## 26. Adaptive Large-Screen, Foldable, & Multi-Window UI (`WindowLayoutMetrics`) & `v1.1` Release Readiness (`D10.5`)
+
+### Delivered Architecture & Adaptive Layouts
+1. **Pure-Kotlin Adaptive Layout Classifier ([`WindowLayoutMetrics.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/WindowLayoutMetrics.kt) + [`WindowLayoutMetricsTest.kt`](../app/src/test/java/com/cangkir/bitperfectplayer/ui/WindowLayoutMetricsTest.kt)):**
+   - Pure-Kotlin classifier (`0` `android.*` / `androidx.*` imports) computing `useNavigationRail(widthDp)` (`widthDp >= 600`), `useTwoPaneNowPlaying(widthDp, heightDp)` (`(widthDp >= 600 && widthDp > heightDp) || widthDp >= 720`), `contentMaxWidthDp(widthDp)` (`840` when `widthDp >= 900`, else `null`), and `computeNowPlayingDiscContainerDp(availableWidthDp, availableHeightDp, isTwoPane)` (`220..316 dp`, preserving `316 dp` container / `240 dp` vinyl disc on portrait phones and scaling proportionally in landscape and compact split-screen).
+2. **Adaptive Top-Level Navigation ([`BitPerfectAppNav.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/BitPerfectAppNav.kt)):**
+   - Added `BitPerfectAdaptiveTopLevelFrame` using `BoxWithConstraints` at `BitPerfectAppRoot`:
+     - `< 600.dp`: renders the exact `v1.0` bottom `MiniPlayerBar` + `BitPerfectBottomNavBar`.
+     - `>= 600.dp` on top-level tabs (`Library`, `Playlists`, `Settings`): renders a left-docked matte-obsidian `BitPerfectNavigationRail` separated by a `0.5.dp` `VerticalDivider` and docks `MiniPlayerBar` cleanly at the bottom of the right content pane while keeping `NavHost` in a stable composition slot.
+3. **Adaptive 2-Column `NowPlayingScreen` ([`ui/nowplaying/NowPlayingScreen.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/nowplaying/NowPlayingScreen.kt), [`RadialSpectrumRing.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/RadialSpectrumRing.kt), [`ui/nowplaying/NowPlayingControls.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/nowplaying/NowPlayingControls.kt)):**
+   - Single-column portrait (`useTwoPaneNowPlaying == false`) and balanced 2-column studio `Row` (`useTwoPaneNowPlaying == true`, `46%` left pane with scaled `NowPlayingHeroCenterpiece` and `54%` right pane with scrollable `NowPlayingTrackControlsSection`) share the exact same hero and control composables with 120 Hz recomposition isolation intact.
+4. **Centered Max-Width Containers on Wide Displays (`840.dp`):**
+   - Centered inner content within `widthIn(max = 840.dp)` across [`SettingsScreen.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/settings/SettingsScreen.kt), [`DiagnosticsScreen.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/DiagnosticsScreen.kt), [`QueueScreen.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/QueueScreen.kt), and [`LyricsScreen.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/LyricsScreen.kt).
+5. **Version Bump & Documentation Alignment (`v1.1`):**
+   - Bumped [`app/build.gradle.kts`](../app/build.gradle.kts) to `versionCode = 2`, `versionName = "1.1"`.
+   - Updated [`README.md`](../README.md), [`SPEC.md`](../SPEC.md), [`DECISIONS.md`](../DECISIONS.md) (`D10.5`), and [`docs/HANDOFF_REPORT.md`](HANDOFF_REPORT.md).
+
+### Final `v1.1` Software Verification (`./gradlew clean ktlintCheck detekt testDebugUnitTest lintDebug assembleDebug assembleRelease`)
+- **Kotlin Formatting (`ktlintCheck`):** **PASS — 0 violations** across `main`, `test`, and Kotlin Gradle scripts.
+- **Static Analysis (`detekt`):** **PASS — 0 issues** (0 baseline files).
+- **Automated JVM Unit + Robolectric SQLite Migration + Headless Compose UI Tests (`testDebugUnitTest`):** **197 / 197 passed** across **34 test suites** (`0` failed, `0` errors, `0` skipped, `0` `@Ignore`), including `4 / 4` in [`WindowLayoutMetricsTest.kt`](../app/src/test/java/com/cangkir/bitperfectplayer/ui/WindowLayoutMetricsTest.kt) and `17 / 17` in [`BitPerfectUiBehaviorTest.kt`](../app/src/test/java/com/cangkir/bitperfectplayer/ui/BitPerfectUiBehaviorTest.kt) (covering wide `840x480` `NavigationRail`, wide `840x480` 2-column `NowPlayingScreen` + rotational vinyl scrubbing, and compact `392x800` portrait `NavigationBar`).
+- **Compiler, KSP, & R8 Warnings:** **0** Kotlin compiler warnings (production + test), **0** KSP warnings, **0** R8 warnings.
+- **Android Lint (`lintDebug` & `lintVitalRelease`):** **0 errors**, **0 warnings across all `/app/src/` Kotlin, manifest, and resource files**.
+- **Debug APK (`assembleDebug`):** `app/build/outputs/apk/debug/app-debug.apk` (`20.19 MB` / `21,175,006 bytes`).
+- **Release APK (`assembleRelease` with R8 optimization):** `app/build/outputs/apk/release/app-release-unsigned.apk` (`2.62 MB` / `2,746,000 bytes`).
+- **Pure-Kotlin Domain Boundary (`WindowLayoutMetrics.kt`, `ForegroundPlaybackGate.kt`, + all 30 core domain files):** **PASS — 0 `android.*` / `androidx.*` imports**.
+- **Strict Offline & Zero-Permission Audit (Source + All 8 Generated Debug, Release, & UnitTest Manifests):** **PASS — 0 `INTERNET`, 0 `RECORD_AUDIO`, 0 `MANAGE_EXTERNAL_STORAGE`**.
+- **Physical Hardware Verification Pending (Not Executed in Cloud):** Real POCO F4 (Android 14 / HyperOS) + KZ EDX Pro 2 USB-C portrait/landscape/split-screen runtime testing and Android 17 (`API 37`) `adb shell cmd audio set-enable-hardening throw` verification remain unverified in this software-only environment.
+
 
