@@ -1,0 +1,90 @@
+name: Android CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Test, Lint, Build, and Privacy Audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+
+      - name: Ensure Android SDK 37 is available
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          export ANDROID_HOME="$SDK_ROOT"
+          export ANDROID_SDK_ROOT="$SDK_ROOT"
+
+          SDKMANAGER=""
+          if command -v sdkmanager >/dev/null 2>&1; then
+            SDKMANAGER="$(command -v sdkmanager)"
+          elif [ -x "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]; then
+            SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          else
+            LATEST_CMDTOOLS=$(find "$SDK_ROOT/cmdline-tools" -maxdepth 3 -name sdkmanager -type f 2>/dev/null | head -n 1 || true)
+            if [ -n "$LATEST_CMDTOOLS" ]; then
+              SDKMANAGER="$LATEST_CMDTOOLS"
+            fi
+          fi
+
+          if [ -n "$SDKMANAGER" ]; then
+            yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+            if [ ! -d "$SDK_ROOT/platforms/android-37.0" ] && [ ! -d "$SDK_ROOT/platforms/android-37" ]; then
+              "$SDKMANAGER" --install "platforms;android-37.0" || "$SDKMANAGER" --install "platforms;android-37"
+            fi
+            if [ ! -d "$SDK_ROOT/build-tools/37.0.0" ]; then
+              "$SDKMANAGER" --install "build-tools;37.0.0"
+            fi
+          fi
+
+          if [ -d "$SDK_ROOT/platforms/android-37.0" ] && [ ! -e "$SDK_ROOT/platforms/android-37" ]; then
+            ln -s "$SDK_ROOT/platforms/android-37.0" "$SDK_ROOT/platforms/android-37"
+          fi
+
+      - name: Run unit tests, Android Lint, and debug build
+        run: |
+          chmod +x gradlew
+          ./gradlew testDebugUnitTest lintDebug assembleDebug --stacktrace
+
+      - name: Audit source and merged manifests for forbidden permissions
+        shell: bash
+        run: |
+          set -euo pipefail
+          MERGED_MANIFESTS="$(find app/build/intermediates/merged_manifest* -name 'AndroidManifest.xml' 2>/dev/null || true)"
+          if [ -z "$MERGED_MANIFESTS" ]; then
+            echo "FAIL: No merged debug AndroidManifest.xml found."
+            exit 1
+          fi
+          MANIFESTS="app/src/main/AndroidManifest.xml $MERGED_MANIFESTS"
+          echo "Auditing manifests: $MANIFESTS"
+          if grep -Eni "permission\.(INTERNET|MANAGE_EXTERNAL_STORAGE|RECORD_AUDIO)" $MANIFESTS; then
+            echo "FAIL: Forbidden permission detected in manifest."
+            exit 1
+          fi
+          echo "PASS: Zero INTERNET, MANAGE_EXTERNAL_STORAGE, or RECORD_AUDIO permissions found."

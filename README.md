@@ -204,3 +204,13 @@ grep -E "INTERNET|RECORD_AUDIO|MANAGE_EXTERNAL_STORAGE" \
 - [`DECISIONS.md`](DECISIONS.md) -- Architectural decisions and rationale log
 - [`TASKS.md`](TASKS.md) -- MVP execution checklist
 - [`HANDOFF_REPORT.md`](HANDOFF_REPORT.md) -- Build verification and implementation history report
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) -- Contribution guidelines, architectural invariants, and local verification steps
+- [`SECURITY.md`](SECURITY.md) -- Security, privacy, and hearing-safety vulnerability reporting policy
+
+---
+
+## License
+
+Copyright 2026 Endricho Folabessy.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use this repository except in compliance with the License. You may obtain a copy of the License at `http://www.apache.org/licenses/LICENSE-2.0`, or see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE) in this repository.
