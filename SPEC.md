@@ -107,7 +107,7 @@ Required real-time diagnostic fields:
 ## 4. MVP Application Features
 
 ### 4.1 Local Music Player & Library Management
-- Scan local audio via `MediaStore` and allow manual folder/file selection via Storage Access Framework (SAF, using `takePersistableUriPermission` defensively), complying with Scoped Storage without excessive permissions (`READ_MEDIA_AUDIO` on API 33+, `READ_EXTERNAL_STORAGE` capped at `android:maxSdkVersion="32"` for API 26–32 compatibility; never `MANAGE_EXTERNAL_STORAGE`).
+- Scan local audio via `MediaStore` and allow manual folder/file selection via Storage Access Framework (SAF, using `takePersistableUriPermission` defensively), complying with Scoped Storage using only minimal local permissions (`MODIFY_AUDIO_SETTINGS` normal install-time permission for Android 14+ mixer APIs, `READ_MEDIA_AUDIO` on API 33+, `READ_EXTERNAL_STORAGE` capped at `android:maxSdkVersion="32"` for API 26–32 compatibility, `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_MEDIA_PLAYBACK`, and `POST_NOTIFICATIONS`; never `MANAGE_EXTERNAL_STORAGE`, `INTERNET`, or `RECORD_AUDIO`).
 - Library navigation views: **All Songs, Folders, Artists, Albums, Recently Played, Playback Queue, and Favorites**.
 - Graceful handling of missing/corrupted metadata (fallback to filename).
 - Full playback controls: Play, Pause, Next, Previous, Seek, Progress Bar, Queue management (add, remove, reorder), Shuffle, and Repeat (`OFF` / `ALL` / `ONE`).
@@ -167,7 +167,7 @@ Having graduated from the verified MVP baseline, the Full APK roadmap authorizes
 4. **Safe-Mode-Only ReplayGain:**
    - Optional local ReplayGain metadata attenuation permitted strictly in Safe Mode (`SAFE_VOLUME_MODE`), automatically and unconditionally bypassed in Bit-Perfect Opt-In mode so PCM bits remain untouched.
 5. **Sleep Timer:**
-   - Local countdown or end-of-track auto-pause timer with clean fade-free or Safe-Mode stop.
+   - Local countdown or end-of-track auto-pause timer with a 3-second linear fade-out in Safe Mode and clean fade-free stop (zero digital volume scaling) in Bit-Perfect Opt-In mode.
 6. **Track Technical Info Sheet:**
    - On-demand detailed inspection of local container, codec, exact sample rate (`Hz`), bit depth, channels, file size, path/URI, and SHA-256 content fingerprint.
 7. **Local Backup & Restore (SAF):**

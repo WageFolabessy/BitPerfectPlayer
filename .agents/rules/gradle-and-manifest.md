@@ -18,7 +18,7 @@ description: "Constraints for Gradle build files, Version Catalog dependencies, 
    - For media controls, prefer platform `android.media.session.MediaSession` + `Notification.MediaStyle` (built into API 26+) or offline-clean `androidx.media:media`; avoid pulling heavy `media3-exoplayer` networking modules.
    - Use `androidx.documentfile:documentfile` (Apache 2.0) for clean SAF tree traversal where helpful.
 3. **Manifest Permissions (Strict Minimal Set):**
-   - Allowed runtime/service permissions: `READ_MEDIA_AUDIO`, `READ_EXTERNAL_STORAGE` (strictly capped with `android:maxSdkVersion="32"`), `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_MEDIA_PLAYBACK`, and `POST_NOTIFICATIONS`.
-   - Strictly forbidden: `android.permission.INTERNET` and `android.permission.MANAGE_EXTERNAL_STORAGE`.
-4. **Untracked Local Config:**
-   - Never stage or commit `local.properties`. Use existing untracked `local.properties` (when present locally) or `ANDROID_HOME` / `ANDROID_SDK_ROOT` environment variables.
+   - Allowed runtime/service permissions: `MODIFY_AUDIO_SETTINGS` (normal install-time permission required by Android 14+ `AudioManager.setPreferredMixerAttributes()` / `clearPreferredMixerAttributes()`, per `DECISIONS.md` `D5.4`), `READ_MEDIA_AUDIO`, `READ_EXTERNAL_STORAGE` (strictly capped with `android:maxSdkVersion="32"`), `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_MEDIA_PLAYBACK`, and `POST_NOTIFICATIONS`.
+   - Strictly forbidden: `android.permission.INTERNET`, `android.permission.MANAGE_EXTERNAL_STORAGE`, and `android.permission.RECORD_AUDIO`.
+4. **Untracked Local Config & Release Outputs:**
+   - Never stage or commit `local.properties` or `app/release/` (signed APK & R8 `mapping.txt` output). Use existing untracked `local.properties` (when present locally) or `ANDROID_HOME` / `ANDROID_SDK_ROOT` environment variables.

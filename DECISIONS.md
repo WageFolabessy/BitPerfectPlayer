@@ -1,12 +1,12 @@
 # Architectural & Implementation Decisions (`BitPerfectPlayer`)
 
-This file records autonomous architectural, dependency, and environment decisions made during MVP implementation, including rationale and rejected alternatives.
+This file records autonomous architectural, dependency, and environment decisions made during implementation, including rationale and rejected alternatives.
 
 ---
 
 ## D0.1 — Build Environment Provisioning & `gradlew` Executable Bit (`T0.1`)
 - **Decision:** Provisioned Temurin JDK 25 (`25.0.3+9`, matching `gradle/gradle-daemon-jvm.properties` `toolchainVersion=25`) and Android SDK 37 (`platforms;android-37.0`, `build-tools;37.0.0`, `platform-tools`) outside the repository in `/home/antigravity/`, pointed untracked/gitignored `local.properties` at the local SDK directory, and set the executable mode (`+x`) on `gradlew`.
-- **Rationale:** Preserves the exact Android Studio project baseline (`compileSdk { version = release(37) }`, `targetSdk = 37`, `minSdk = 26`, AGP `9.4.1`, Kotlin `2.2.10`, Gradle `9.6.0`) without downgrading SDK levels or modifying Gradle wrapper/daemon files. Marking `gradlew` executable allows `./gradlew` invocations to succeed directly on Linux/CI hosts.
+- **Rationale:** Preserves the exact Android Studio project baseline (`compileSdk { version = release(37) }`, `targetSdk = 37`, `minSdk = 26`, AGP `9.4.1`, Kotlin `2.2.10`, Gradle `9.6.0`) *(baseline later upgraded to AGP `9.5.1` and Gradle `9.9.1`)* without downgrading SDK levels or modifying Gradle wrapper/daemon files. Marking `gradlew` executable allows `./gradlew` invocations to succeed directly on Linux/CI hosts.
 - **Rejected Alternatives:** Downgrading `compileSdk` or `toolchainVersion` (prohibited by workspace invariants); committing `local.properties` (prohibited by Git hygiene rules).
 
 ---
@@ -100,7 +100,7 @@ This file records autonomous architectural, dependency, and environment decision
 - **Rationale:** Avoiding `org.json` makes `LocalBackupCodec` 100% deterministic under plain JVM JUnit 4 tests (where Android stubs throw `Method not mocked`) while adding zero external dependencies or APK bloat. Decoupling `sleepTimerState` preserves silky 120 Hz scrolling across all top-level tabs even while a sleep timer counts down.
 - **Rejected Alternatives:** Adding Gson/Moshi/Jackson (unnecessary dependency weight); collecting `sleepTimerState` in `BitPerfectAppRoot` (would trigger 1 Hz full-tree recompositions across `LibraryScreen` and `BottomNavigationBar`); reading ReplayGain tags or SHA-256 hashes inside `TrackListRow` (would cause scroll jank).
 
-### D8.1: Room v3 -> v4 Non-Destructive Migration, Cursor-Only Track/Disc Backfill, `QueueContext`, & Background Context-Aware Sorting
+## D8.1 — Room v3 -> v4 Non-Destructive Migration, Cursor-Only Track/Disc Backfill, `QueueContext`, & Background Context-Aware Sorting
 - **Decision:**
   1. Upgraded `BitPerfectDatabase` from `v3` to `v4` with an explicit non-destructive `MIGRATION_3_4` executing `ALTER TABLE cached_tracks ADD COLUMN disc_number INTEGER NOT NULL DEFAULT 0` and `ALTER TABLE cached_tracks ADD COLUMN track_number INTEGER NOT NULL DEFAULT 0`, preserving all 7 existing tables (`cached_tracks`, `lyrics`, `track_history`, `favorite_tracks`, `playlists`, `playlist_tracks`, `track_stats`) untouched.
   2. Read `MediaStore.Audio.Media.TRACK` (and `CD_TRACK_NUMBER` / `DISC_NUMBER` on API 30+) directly inside the single MediaStore cursor query and perform a one-time atomic `@Transaction` backfill for unchanged cached rows with `disc_number == 0 && track_number == 0`, avoiding any `MediaMetadataRetriever` Binder IPC slowdown on existing libraries. For FLAC files, `FlacStreamInfoParser` walks past `STREAMINFO` (seeking past `PICTURE` blocks) to read `VORBIS_COMMENT` `TRACKNUMBER`/`DISCNUMBER` on the same already-open `FileChannel`.
@@ -110,18 +110,18 @@ This file records autonomous architectural, dependency, and environment decision
 
 ---
 
-### D9.1: Safe-Mode-Only Real-Time Turntable Audio DSP (8 MB Rolling Ring Buffer + Click-Free Varispeed Resampler)
+## D9.1 — Safe-Mode-Only Real-Time Turntable Audio DSP (8 MB Rolling Ring Buffer + Click-Free Varispeed Resampler)
 - **Decision:**
   1. Implemented pure-Kotlin `TurntablePcmRingBuffer`, `TurntablePcmCodec`, `TurntableSpeedController`, `TurntableResampler`, and `TurntableScratchPolicy` in `TurntableAudioDsp.kt` (zero `android.*`/`androidx.*` imports) and wired them into `AudioOutputEngine.runPlaybackLoop` strictly behind `AudioOutputMode.SAFE_VOLUME_MODE && isPlaying`.
   2. Capped the rolling float ring buffer strictly at **8 MB** (`2,097,152` floats rounded down to a whole multiple of `channelCount`, yielding ~23.8 s stereo history at 44,100 Hz, ~21.8 s at 48,000 Hz, ~10.9 s at 96,000 Hz, and ~5.46 s at 192,000 Hz) with zero per-chunk heap allocations. During normal Safe-Mode playback, unmodified pre-ReplayGain PCM frames are teed into the ring buffer before `writeAlignedPcmFully(...)` applies ReplayGain so gain is never double-applied during scratch or `1.0x` exit draining.
-  3. Kept the existing running `AudioTrack` intact during live scratch (0 rebuilds), flushing the ~160 ms lookahead once on entry, throttling writes to ~40 ms lookahead (`sampleRate / 25`) in ~15 ms chunks, applying ~12 ms exponential rate smoothing + 4 ms linear click-free gain envelopes on entry/hold/boundary/exit, and freezing `PlayCountTracker` accumulation throughout. On release, cursors still inside the ring buffer use the **Fast Seamless Path** (drain buffered frames at `1.0x` with 4 ms fade-in and zero `MediaCodec.flush()`), while deep rewinds past `oldestAvailableFrame` use the **Deep Rewind Path** (single clean `currentDecoder.seekToMs(targetMs)`).
+  3. Kept the existing running `AudioTrack` intact during live scratch (0 rebuilds), flushing the ~160 ms lookahead once on entry, throttling writes to ~40 ms lookahead (`sampleRate / 25`) *(later raised to ~65 ms / `sampleRate / 15` with 2 ms sleep in D9.4 / `3268e73`)* in ~15 ms chunks, applying ~12 ms exponential rate smoothing + 4 ms linear click-free gain envelopes on entry/hold/boundary/exit, and freezing `PlayCountTracker` accumulation throughout. On release, cursors still inside the ring buffer use the **Fast Seamless Path** (drain buffered frames at `1.0x` with 4 ms fade-in and zero `MediaCodec.flush()`), while deep rewinds past `oldestAvailableFrame` use the **Deep Rewind Path** (single clean `currentDecoder.seekToMs(targetMs)`).
   4. Enforced strict **Bit-Perfect Isolation**: in `BIT_PERFECT_OPT_IN`, `turntableRingBuffer` is never allocated (immediately released upon switching into Bit-Perfect mode), `beginTurntableScratch()` returns `false`, and `InteractiveVinylDisc` transparently runs silent rotational seek-preview + single `onSeekTo` on release.
 - **Rationale:** Provides authentic vinyl DJ tactile audio feedback (forward varispeed up to `+4.0x`, finger-hold braking via a 65 ms idle watchdog, and smooth real-time reverse scratch down to `-4.0x`) without adding native C++/NDK/FFmpeg bloat, without risking OOM on 192 kHz 24-bit tracks, without distorting listening stats, and without compromising a single bit in `BIT_PERFECT_OPT_IN` mode.
 - **Rejected Alternatives:** Android `PlaybackParams.setSpeed()` on `AudioTrack` (cannot play negative/reverse rates, fails or glitches on many OEM HALs, and cannot brake cleanly to `0.0x` hold); full-track PCM decoding into RAM (OOM risk on 100+ MB Hi-Res WAV/FLAC files); calling `MediaExtractor.seekTo()` repeatedly during reverse drag (causes severe codec stutter and keyframe snapping on FLAC/MP3/AAC); enabling turntable DSP inside `BIT_PERFECT_OPT_IN` (violates unmodified PCM and exclusive HAL mixer invariants).
 
 ---
 
-### D9.2: Zero-Permission Read-Only Head-Synced FFT Radial Ring Spectrum Visualizer
+## D9.2 — Zero-Permission Read-Only Head-Synced FFT Radial Ring Spectrum Visualizer
 - **Decision:**
   1. Implemented pure-Kotlin `SpectrumAnalyzerDsp` / `SpectrumAnalyzer` (pre-allocated 1024-point Hann-windowed iterative radix-2 FFT, logarithmic 32-band mapping across `30 Hz..16,000 Hz` with `-62 dB..-4 dB` scaling and gentle high-frequency perceptual tilt, frame-rate-independent fast-attack `25 ms` / smooth-decay `140 ms` ballistics, and seamless 64-bar left/right radial mirroring) plus pure-Kotlin `SpectrumPcmTap` (`48,000`-float ≈ `192 KB` rolling mono buffer with boxcar-averaged Hi-Res decimation strides `1/2/4` and lock-free generation-checked `playbackHeadPosition` window alignment).
   2. Tapped PCM strictly **read-only AFTER `writeAlignedPcmFully(...)` / `writeNormalizedFloatsToTrack(...)`** inside `AudioOutputEngine.runPlaybackLoop`, so `AudioTrack` always receives completely unmodified bytes in `BIT_PERFECT_OPT_IN` mode while the visualizer works seamlessly in Safe Mode (including live turntable scratch), Clean Native, and Bit-Perfect Opt-In mode.
@@ -132,7 +132,7 @@ This file records autonomous architectural, dependency, and environment decision
 
 ---
 
-### D9.3: Switchable Spectrum Palettes (`Studio`/`Prism`/`Album`), Pure-Kotlin Album Palette Extractor, & Zero-Allocation `KineticSparkPool`
+## D9.3 — Switchable Spectrum Palettes (`Studio`/`Prism`/`Album`), Pure-Kotlin Album Palette Extractor, & Zero-Allocation `KineticSparkPool`
 - **Decision:**
   1. Added pure-Kotlin `SpectrumVisualDsp.kt` (zero `android.*`/`androidx.*` imports, zero external palette dependencies) containing `AlbumPaletteExtractor` (coarse-stride ~1,600-sample RGB->HSL 24-hue bucketing with `>= 36°` separation, OLED vibrancy clamping `S in 0.55..0.90`, `L in 0.52..0.72`, monochromatic harmony derivation, and Studio slate-ice fallback on grayscale/missing artwork), `SpectrumColorMapper` (`STUDIO`, 5-stop OLED-tuned `PRISM`, and `ALBUM_ADAPTIVE`), and fixed-capacity `KineticSparkPool` (`MAX_SPARKS = 64` pre-allocated primitive arrays with per-band `85 ms` transient cooldowns and exponential drag physics).
   2. Expanded `RadialSpectrumRing` cleanly to `316.dp` around a centered `240.dp` `InteractiveVinylDisc` (`38.dp` radial headroom) and `CompactSpectrumBarStrip` to `42.dp` (`24.dp` bars + `18.dp` upward spark headroom), drawing sparks as crisp velocity-aligned `drawLine` micro-streaks + `drawCircle` core dots inside the same draw-phase-only `Canvas` (zero GPU blur masks, zero Compose recompositions, zero per-frame allocations) while keeping `AudioOutputEngine.runPlaybackLoop()` completely untouched.
@@ -140,10 +140,11 @@ This file records autonomous architectural, dependency, and environment decision
 - **Rationale:** Delivers lively, audiophile-grade OLED reactivity across both Vinyl Disc and Square Cover modes without introducing `androidx.palette` dependencies, GPU blur thermal overhead, Compose recomposition jank, or ART instruction-limit bloat on `AudioOutputEngine`.
 - **Rejected Alternatives:** Adding `androidx.palette:palette-ktx` (extra dependency and not pure-Kotlin unit-testable without Robolectric); using `BlurMaskFilter` / `RenderEffect` glow shaders on particles (causes 120 Hz GPU frame drops and heat on mobile GPUs); spawning `data class Spark` objects per beat (causes GC churn during 120 Hz animation).
 
+---
 
-
-
-
-
+## D9.4 — ART JIT/AOT Playback Loop Split & 65 ms Scratch Headroom (`3268e73`)
+- **Decision:** Extracted `PlaybackLoopState` and focused private helper methods (`handlePendingSeekInLoop`, `processTurntableScratchStep`, `decodeAheadForForwardScratch`, `exitTurntableScratchCleanly`, `writeScratchFloatsAndTapSpectrum`, `processRingDrainStepInLoop`, `handleEndOfStreamInLoop`, `handleMidStreamFormatChangeInLoop`, `processNormalPcmChunkInLoop`, and `publishPlaybackPositionAndPreload`) out of `AudioOutputEngine.runPlaybackLoop(...)`, raised the scratch lookahead headroom from `sampleRate / 25` (~40 ms, 4 ms sleep) to `sampleRate / 15` (~65 ms, 2 ms sleep), and pre-fed up to 2 chunks of `1.0x` ring-buffer drain immediately after Fast Seamless scratch exit.
+- **Rationale:** Keeps every `AudioOutputEngine` method well under ART's JIT/AOT compiler instruction limit (largest method verified at `807` Debug / `756` Release DEX code units, resolving `Method exceeds compiler instruction limit: 20666` fallback to interpreted execution) while eliminating 44,100 Hz scratch underruns (`AudioTrack W restartIfDisabled`).
+- **Rejected Alternatives:** Keeping monolithic `runPlaybackLoop` with capturing local lambdas (forces ART bytecode interpretation on `BitPerfectAudioThread` and increases audio underrun risk).
 
 

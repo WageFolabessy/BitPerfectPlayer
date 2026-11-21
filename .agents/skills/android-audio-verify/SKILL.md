@@ -1,6 +1,6 @@
 ---
 name: android-audio-verify
-description: Runs Gradle JVM unit tests, Android Lint, debug APK builds, source and merged AndroidManifest privacy audits (verifying zero INTERNET or MANAGE_EXTERNAL_STORAGE permissions), and Git cleanliness checks for com.cangkir.bitperfectplayer. Use before checkpointing milestones or completing final handoff.
+description: Runs Gradle JVM unit tests, Android Lint, debug APK builds, source and merged AndroidManifest privacy audits (verifying zero INTERNET, MANAGE_EXTERNAL_STORAGE, or RECORD_AUDIO permissions), and Git cleanliness checks for com.cangkir.bitperfectplayer. Use before checkpointing milestones or completing final handoff.
 ---
 
 # Android Software Verification & Privacy Audit Skill
@@ -33,15 +33,15 @@ Use this workflow to verify software health without touching ADB, emulators, or 
    set -euo pipefail
    MANIFESTS="app/src/main/AndroidManifest.xml $(find app/build/intermediates/merged_manifest* -name 'AndroidManifest.xml' 2>/dev/null || true)"
    echo "Auditing manifests: $MANIFESTS"
-   if grep -Eni "permission\.(INTERNET|MANAGE_EXTERNAL_STORAGE)" $MANIFESTS; then
+   if grep -Eni "permission\.(INTERNET|MANAGE_EXTERNAL_STORAGE|RECORD_AUDIO)" $MANIFESTS; then
      echo "FAIL: Forbidden permission detected in manifest!"
      exit 1
    fi
-   echo "PASS: Zero INTERNET or MANAGE_EXTERNAL_STORAGE permissions found."
+   echo "PASS: Zero INTERNET, MANAGE_EXTERNAL_STORAGE, or RECORD_AUDIO permissions found."
    ```
    - Also verify at least one merged debug `AndroidManifest.xml` was found after `assembleDebug`.
    - If any transitive dependency injects `android.permission.INTERNET`, remove or replace that dependency with an offline-clean alternative; do not leave it unaddressed.
 
 5. **Baseline & Git Hygiene Check:**
    - Verify `app/build.gradle.kts` still preserves `com.cangkir.bitperfectplayer`, `compileSdk { version = release(37) }`, `targetSdk = 37`, `minSdk = 26`, `JavaVersion.VERSION_11`, and the `release { optimization { ... } }` block.
-   - Verify via `git status` that `local.properties` and `app/build/` artifacts are untracked/ignored and never staged.
+   - Verify via `git status` that `local.properties`, `app/build/`, and `app/release/` artifacts are untracked/ignored and never staged.

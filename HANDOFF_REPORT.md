@@ -1,8 +1,8 @@
 # BitPerfectPlayer MVP — Autonomous Build Handoff Report
 
 - **Project:** `com.cangkir.bitperfectplayer` (Kotlin + Jetpack Compose, 100% Offline Android Music Player)
-- **Active Branch:** `feat/mvp-overnight`
-- **Overall Status:** **Complete (Software-Verified — Awaiting Physical Hardware Verification on POCO F4 + KZ EDX Pro 2 USB-C)**
+- **Active Branch:** `main` *(merged from `feat/mvp-overnight`, feature branch deleted locally and on `origin`; release tag `v1.0` published)*
+- **Overall Status:** **Complete — `v1.0` Released on `main`** *(181 / 181 automated tests passing across 33 suites; core playback, safety, and release APK verified on POCO F4 + KZ EDX Pro 2 USB-C, with final Section 18–19 ART/visual polish pending follow-up on-device check)*
 - **Tasks Completed:** **17 / 17** (`T0.1` through `T5.4` in `TASKS.md`)
 - **Active Blockers:** None (`BLOCKED.md` not required)
 
@@ -30,7 +30,7 @@ All 5 milestones from `TASKS.md` were implemented sequentially in production Kot
 | **M5: Compose Dark UI** | `T5.1` | `8fb3eb3` | Evolved `ui/theme/{Color.kt, Theme.kt, Type.kt}` into consistent audiophile Material 3 Dark Theme, `MainViewModel`, `LibraryScreen` (6 tabs, search, SAF import, runtime permissions), and persistent `MiniPlayerBar` (`>= 48.dp` targets). |
 | **M5: Compose Dark UI** | `T5.2` | `a8bc867` | `NowPlayingScreen` (format badges, seekbar, transport controls, quick Pause, Safe Mode vs Bit-Perfect Opt-In controls), mandatory `HearingSafetyWarningDialog`, and `QueueScreen` (add, remove, reorder, jump). |
 | **M5: Compose Dark UI** | `T5.3` | `09b27d6` | `LyricsScreen` (`AudioOutputEngine.currentPositionMs`-clocked synced `.lrc` view with auto-scroll & tap-to-seek, static view, SAF `.lrc` import, manual editor) and 6-stage real-time `DiagnosticsScreen`. |
-| **M5: Final Wiring & Audit** | `T5.4` | *(this commit)* | `BitPerfectAppNav.kt` & `MainActivity.kt` end-to-end Compose Navigation wiring, Android Lint resolution (`MODIFY_AUDIO_SETTINGS` for API 34+ mixer APIs, `minSdk = 26` `MediaFormat` fix), full audit, and `HANDOFF_REPORT.md`. |
+| **M5: Final Wiring & Audit** | `T5.4` | `404352e` | `BitPerfectAppNav.kt` & `MainActivity.kt` end-to-end Compose Navigation wiring, Android Lint resolution (`MODIFY_AUDIO_SETTINGS` for API 34+ mixer APIs, `minSdk = 26` `MediaFormat` fix), full audit, and `HANDOFF_REPORT.md`. |
 
 ---
 
@@ -314,7 +314,7 @@ Completed the Full-APK daily user experience on `feat/mvp-overnight` while keepi
      - **Audio Engine:** Gapless Playback toggle, ReplayGain mode selector (`Off` / `Track` / `Album`), Pre-amp slider (`-6 dB` to `+6 dB`), Prevent Clipping toggle with explicit note *"Automatically bypassed in Bit-Perfect Opt-In mode."*, Sleep Timer row with isolated countdown leaf (`SleepTimerSettingsValueLeaf`), and 6-Stage Audio Diagnostics shortcut.
      - **Library & Storage (100% Offline):** Linked SAF folders list displaying persisted folder name/URI with per-folder Remove action (`viewModel.removeSafFolder(...)`), plus **Add Folder (SAF)** and **Refresh Library** controls.
      - **Local Backup & Restore (100% Offline via SAF):** **Export Backup (`.json`)** via `CreateDocument("application/json")` and **Import / Restore Backup (`.json`)** via `OpenDocument` using non-destructive merge/upsert.
-     - **About & Privacy:** Concise offline verification badge confirming zero `INTERNET` / `MANAGE_EXTERNAL_STORAGE` permissions plus app version (`BuildConfig.VERSION_NAME`).
+     - **About & Privacy:** Concise offline verification badge confirming zero `INTERNET` / `MANAGE_EXTERNAL_STORAGE` permissions plus app version (`PackageInfo.versionName` via `PackageManager.getPackageInfo`).
 2. **100% Offline Local Backup & Restore (`LocalBackupCodec.kt`, `LocalBackupRepository.kt`, `LocalDaos.kt`, `LocalEntities.kt`, `LocalPersistenceRepository.kt`):**
    - Built pure-Kotlin `LocalBackupCodec` (zero `android.*` / zero `org.json.*` / zero external serialization dependencies) implementing an RFC 8259 JSON encoder and strict validating recursive-descent parser with `schemaVersion = 1` and explicit rejection of malformed JSON or unsupported schema versions.
    - Backs up and restores **Playlists** (with ordered track entries), **Saved Lyrics (keyed by SHA-256 content fingerprint)**, **Favorites**, and **Play Count / Listening Stats** via SAF `content://` streams with a 16 MB read guard.
@@ -621,8 +621,22 @@ Following physical testing of the signed Release APK on POCO F4 (Android 14 / Hy
 - **Pure-Kotlin Domain Boundary (`SpectrumVisualDsp.kt`) & Audio Loop Preservation (`AudioOutputEngine.kt`):** **PASS** — **0 `android.*` / `androidx.*` imports** in `SpectrumVisualDsp.kt`; **0 bytes diff** on `AudioOutputEngine.kt`.
 - **Physical Hardware Verification Pending (Not Executed in Cloud):** On POCO F4 (Android 14 / HyperOS, 120 Hz OLED) + KZ EDX Pro 2 USB-C, confirm visual legibility and OLED contrast across `Studio`, `Prism`, and `Album` palettes on varied/grayscale/missing cover art, crisp beat-synced `Kinetic Sparks` bursts without clipped bounds or frame drops at 120 Hz in both Vinyl Disc and Square Cover modes, clean spark fade-out on pause/track change, unobstructed turntable touch scrubbing, and unchanged bit-perfect/Hi-Res playback stability.
 
+---
 
+## 20. Release `v1.0` Merge, Documentation, & Signed APK Publication
 
-
-
+### Delivered Repository & Release Actions
+1. **Branch Consolidation (`feat/mvp-overnight` -> `main`):**
+   - Restored 3 CRLF-only line-ending diffs back to `HEAD` and fast-forward merged `feat/mvp-overnight` (`ec2b888`) cleanly into `main`.
+   - Pushed `main` to `origin` and deleted `feat/mvp-overnight` both locally and on `origin`.
+2. **Root Documentation & Release Build Hygiene (`457d89e`, `6af1209`):**
+   - Added [`README.md`](README.md) documenting architecture, supported formats, hearing safety invariants, 6-stage diagnostics, permissions, Room v4 persistence, build requirements, and hardware safety notices.
+   - Updated [`app/.gitignore`](app/.gitignore) to ignore `/release` so Android Studio's generated signed APK and R8 `mapping.txt` outputs remain untracked.
+3. **Annotated Tag & GitHub Release Publication (`v1.0`):**
+   - Created and pushed annotated Git tag `v1.0` (`6af1209b186ef9a439df244e358a9d3ab11d89da`, matching `versionName = "1.0"`, `versionCode = 1`).
+   - Published GitHub Release **`BitPerfectPlayer v1.0`** (`Latest`) at `https://github.com/WageFolabessy/BitPerfectPlayer/releases/tag/v1.0` attaching `BitPerfectPlayer-v1.0-release.apk` (`2,628,802` bytes).
+   - **Verified Signed Release APK Integrity & Privacy:**
+     - **APK SHA-256:** `725481a31d4786cecd7c2ed17ee7d0ba38a3a7a7b6d8884486c1b93ea4bd847a`
+     - **Signing Scheme:** `Verifies` via APK Signature Scheme v2 (`CN=Endricho Folabessy`, Cert SHA-256: `c4dd7e0c9f5b883f56b268e54bd02361788fc9d8f52c313075c4f0447eef89d4`)
+     - **Compiled APK Manifest Privacy Check:** Zero `INTERNET`, `RECORD_AUDIO`, or `MANAGE_EXTERNAL_STORAGE` permissions.
 

@@ -26,7 +26,7 @@ This repository contains the native Android project **`com.cangkir.bitperfectpla
 - Never claim bit-perfect output is proven without hardware verification.
 
 ## 3. Code, Privacy & Test Integrity Invariants
-- **100% Offline:** `android.permission.INTERNET` is strictly prohibited in both `app/src/main/AndroidManifest.xml` and the merged debug manifest. Never add network libraries, telemetry, analytics, or `MANAGE_EXTERNAL_STORAGE`.
+- **100% Offline:** `android.permission.INTERNET` is strictly prohibited in both `app/src/main/AndroidManifest.xml` and the merged debug manifest. Never add network libraries, telemetry, analytics, `RECORD_AUDIO`, or `MANAGE_EXTERNAL_STORAGE`.
 - **Production-only implementation:** No mock audio playback engines, dead buttons, or `TODO()` stubs on production user flows.
 - **Pure-Kotlin domain boundary:** Keep core logic modules (SHA-256 content fingerprinting, `.lrc` parser, WAV header/PCM parser, playback queue, hearing safety state machine, and audio diagnostics mapper) free of `android.*` imports so they execute cleanly and deterministically under plain JUnit 4 JVM tests (`./gradlew testDebugUnitTest`).
 - **Zero test tampering:** Never delete, `@Ignore`, skip, or weaken assertions in tests to force a green build.
@@ -35,4 +35,4 @@ This repository contains the native Android project **`com.cangkir.bitperfectpla
 ## 4. Circuit Breaker & Git Safety Invariants
 - **Maximum 3 fix attempts per task item** in @TASKS.md. If a task still fails after 3 attempts, reset uncommitted code changes cleanly to `HEAD` (preserving untracked `local.properties` and `.idea/` if present), record exact diagnostics in `BLOCKED.md`, and immediately commit and push `BLOCKED.md` so the record is never lost.
 - If a foundational blocker occurs (such as missing Android SDK 37 or incompatible Gradle JVM during `T0.1` that cannot be provisioned cleanly), halt cleanly and write, commit, and push `HANDOFF_REPORT.md`.
-- **Git discipline:** Work strictly on the active feature branch. Never commit directly to `main`/`master`, never commit `local.properties`, never delete branches, and never run `git push --force`. If `git push` fails due to a transient remote/network error, keep the local commit (do not reset passing work or trigger the task circuit breaker), retry on the next checkpoint, and record any remaining unpushed commits in `HANDOFF_REPORT.md`.
+- **Git discipline:** Work strictly on the active feature branch. Never commit directly to `main`/`master`, never commit `local.properties` or `app/release/`, never delete branches, and never run `git push --force`. If `git push` fails due to a transient remote/network error, keep the local commit (do not reset passing work or trigger the task circuit breaker), retry on the next checkpoint, and record any remaining unpushed commits in `HANDOFF_REPORT.md`.
