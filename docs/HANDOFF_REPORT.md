@@ -161,9 +161,12 @@ Every library added or upgraded in `gradle/libs.versions.toml` uses a permissive
 6. **Offline Lyrics & Fingerprint Persistence:**
    - Test SAF folder import containing `<song>.flac` + `<song>.lrc` (verify auto-detection, synced active-line scrolling, and immediate jump on forward/backward seek).
    - Test manual lyrics editor (paste, save, edit, delete), then rename the audio file externally and confirm lyrics remain bound via SHA-256 content fingerprint.
-7. **Background Playback & Resume State:**
+7. **Background Playback & Resume State (Including Android 17 `targetSdk = 37` Hardening):**
    - Play audio, lock screen, test notification & lock-screen Play/Pause/Next/Previous/Seek controls via `MediaSession`.
-   - Force-close or swipe app away while paused, relaunch, and confirm last track & playback position restore cleanly in paused state.
+   - On Android 17 (`API 37`) devices/test builds, enable strict background audio hardening enforcement via:
+     `adb shell cmd audio set-enable-hardening throw`
+     Then background the app, pause, wait or dismiss notification, and resume from the lock screen / notification / headset button (`MediaSession.Callback.onPlay()`); verify `ServiceCompat.startForeground(..., FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)` promotes before `AudioManager.requestAudioFocus(...)` / `AudioTrack.play()` with zero `AUDIOFOCUS_REQUEST_FAILED` rejections, zero silent muting, and zero hardening exceptions.
+   - Force-close or swipe app away while paused, relaunch, and confirm last track & playback position restore cleanly in paused state (`autoPlay = false`, zero background FGS start or audio focus request).
 
 ---
 
@@ -768,3 +771,37 @@ Split the 4 oversized Compose screen files (`LibraryScreen.kt`, `PlaylistsScreen
 - **Release APK (`assembleRelease` with R8 optimization):** `app/build/outputs/apk/release/app-release-unsigned.apk` (`2.59 MB` / `2,713,232 bytes`).
 - **Strict Offline & Zero-Permission Audit (Source + All 8 Generated Debug, Release, & UnitTest Manifests):** **PASS — 0 `INTERNET`, 0 `RECORD_AUDIO`, 0 `MANAGE_EXTERNAL_STORAGE`**.
 - **Physical Hardware Verification Pending (Not Executed in Cloud):** Real POCO F4 (Android 14 / HyperOS) + KZ EDX Pro 2 USB-C runtime testing remains unverified in this software-only environment.
+
+---
+
+## 25. Android 17 (`targetSdk = 37`) Background Audio Hardening & `ForegroundPlaybackGate` (`D10.4`)
+
+### Delivered Architecture & Hardened Startup Flows
+1. **Pure-Kotlin Foreground Startup Handshake ([`ForegroundPlaybackGate.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/ForegroundPlaybackGate.kt) + [`ForegroundPlaybackGateTest.kt`](../app/src/test/java/com/cangkir/bitperfectplayer/audio/ForegroundPlaybackGateTest.kt)):**
+   - Created pure-Kotlin `ForegroundPlaybackGate` (`0` `android.*` / `androidx.*` imports) tracking `isAppInForeground: Boolean`, `isServiceInForeground: Boolean`, and `lastFailureReason: String?`.
+   - `needsForegroundServiceHandshake(): Boolean` returns `false` whenever `isAppInForeground || isServiceInForeground`, guaranteeing **0 ms added latency** for all in-app taps and when `PlaybackForegroundService` is already promoted, and returns `true` only when starting/resuming playback from the background while the service is not yet promoted.
+   - Token-scoped `beginHandshake()`, `cancelPendingHandshake()`, and `awaitServicePromotion(timeoutMs = 1_000L, token): ForegroundHandshakeResult` (`READY_IMMEDIATELY`, `PROMOTED`, `FAILED_START_NOT_ALLOWED`, `TIMED_OUT`, `CANCELLED`) ensure rapid `pause()`, `stop()`, or track switches cancel stale waits cleanly with zero leaked coroutines or stuck state.
+2. **Zero-Dependency App Foreground State Tracking ([`BitPerfectApplication.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/BitPerfectApplication.kt)):**
+   - Added `foregroundPlaybackGate` to `AppContainer` and wired a lightweight `Application.ActivityLifecycleCallbacks` counter (`startedActivityCount` incremented in `onActivityStarted`, decremented with `.coerceAtLeast(0)` in `onActivityStopped`) updating `foregroundPlaybackGate.setAppInForeground(startedActivityCount > 0)`.
+3. **Hardened Foreground Service Promotion ([`PlaybackForegroundService.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/PlaybackForegroundService.kt)):**
+   - In `onStartCommand`, `ACTION_START`, `ACTION_NEXT`, `ACTION_PREVIOUS`, and `ACTION_PLAY_PAUSE` (when transitioning to play) invoke `ensurePromotedToForeground()` (`ServiceCompat.startForeground(..., ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)`) **first** and immediately notify `foregroundPlaybackGate.markServicePromoted()`.
+   - Guarded both `ContextCompat.startForegroundService(...)` and `ServiceCompat.startForeground(...)` against `ForegroundServiceStartNotAllowedException` (API 31+) and `SecurityException`, logging a warning and calling `foregroundPlaybackGate.markServiceStartFailed(reason)` instead of crashing.
+   - Called `foregroundPlaybackGate.markServiceStopped()` on `stopForegroundCompat()`, `onDestroy()`, and `Companion.stopService(...)`.
+4. **Hardened Playback Startup & Audio Focus Failure Handling ([`PlaybackController.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/PlaybackController.kt), [`AudioOutputEngine.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/AudioOutputEngine.kt)):**
+   - In `PlaybackController.play()` and `loadActiveTrack(..., autoPlay = true)`, when `foregroundPlaybackGate.needsForegroundServiceHandshake()` is `true`, `PlaybackController` triggers `PlaybackForegroundService.startService(appContext, foregroundPlaybackGate)` and awaits `awaitServicePromotion(token)` on `scope` before calling `engine.play()` or `engine.loadTrack(..., autoPlay = true)`.
+   - If background promotion fails (`FAILED_START_NOT_ALLOWED` or `TIMED_OUT`), `AudioOutputEngine.notifyBackgroundStartBlocked(...)` keeps status cleanly in `PlaybackStatus.PAUSED` (loading the track paused when `loadActiveTrack` was called) with an honest user notice (`ForegroundPlaybackGate.BACKGROUND_START_BLOCKED_NOTICE`).
+   - In `AudioOutputEngine.play()` and `startPlaybackWorkerLocked()`, if `AudioManager.requestAudioFocus(...)` fails (`AUDIOFOCUS_REQUEST_FAILED`), `isPausedFlag` is forced to `true`, `AudioTrack` is explicitly paused (`trackWriter.safePause(track)`), and status reverts to `PlaybackStatus.PAUSED` so `AudioTrack` never writes muted PCM in `PLAYING` state.
+   - All `autoPlay = false` paths (cold-start session restore, paused Queue context switch, empty-queue enqueue) cancel any pending handshake and never trigger `PlaybackForegroundService` startup or audio focus requests.
+
+### Software Verification (`./gradlew clean ktlintCheck detekt testDebugUnitTest lintDebug assembleDebug assembleRelease`)
+- **Kotlin Formatting (`ktlintCheck`):** **PASS — 0 violations** across `main`, `test`, and Kotlin Gradle scripts.
+- **Static Analysis (`detekt`):** **PASS — 0 issues** (0 baseline files).
+- **Automated JVM Unit + Robolectric SQLite Migration + Headless Compose UI Tests (`testDebugUnitTest`):** **190 / 190 passed** across **33 test suites** (`0` failed, `0` errors, `0` skipped, `0` `@Ignore`), including 7/7 unit tests in [`ForegroundPlaybackGateTest.kt`](../app/src/test/java/com/cangkir/bitperfectplayer/audio/ForegroundPlaybackGateTest.kt).
+- **Compiler, KSP, & R8 Warnings:** **0** Kotlin compiler warnings (production + test), **0** KSP warnings, **0** R8 warnings.
+- **Android Lint (`lintDebug` & `lintVitalRelease`):** **0 errors**, **0 warnings across all `/app/src/` Kotlin, manifest, and resource files**.
+- **Debug APK (`assembleDebug`):** `app/build/outputs/apk/debug/app-debug.apk` (`20.16 MB` / `21,142,230 bytes`).
+- **Release APK (`assembleRelease` with R8 optimization):** `app/build/outputs/apk/release/app-release-unsigned.apk` (`2.59 MB` / `2,713,232 bytes`).
+- **Pure-Kotlin Domain Boundary (`ForegroundPlaybackGate.kt`):** **PASS — 0 `android.*` / `androidx.*` imports**.
+- **Strict Offline & Zero-Permission Audit (Source + All 8 Generated Debug, Release, & UnitTest Manifests):** **PASS — 0 `INTERNET`, 0 `RECORD_AUDIO`, 0 `MANAGE_EXTERNAL_STORAGE`**.
+- **Physical Hardware Verification Pending (Not Executed in Cloud):** Real POCO F4 (Android 14 / HyperOS) + KZ EDX Pro 2 USB-C runtime testing and Android 17 (`API 37`) `adb shell cmd audio set-enable-hardening throw` verification remain unverified in this software-only environment.
+
