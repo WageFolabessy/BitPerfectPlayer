@@ -12,6 +12,7 @@ description: "Constraints for Gradle build files, Version Catalog dependencies, 
    - Preserve `libs.plugins.android.application`, `libs.plugins.kotlin.compose`, the `release { optimization { ... } }` block in `app/build.gradle.kts`, `app/src/main/keepRules/rules.keep`, `app/src/main/res/xml/backup_rules.xml`, and `app/src/main/res/xml/data_extraction_rules.xml`.
 2. **Dependency Hygiene & Licensing:**
    - Declare all dependencies and versions cleanly in `gradle/libs.versions.toml` compatible with the project's existing AGP and Kotlin versions.
+   - Keep `ktlint` (`.editorconfig`) and `detekt` (`config/detekt/detekt.yml`) strictly as build-time Gradle plugins (permissive MIT / Apache 2.0 licenses, zero runtime dependencies) and preserve zero violations without adding baseline suppression files.
    - Upgrading existing AndroidX dependency versions in `gradle/libs.versions.toml` (such as `coreKtx` to `1.12.0+` for `ServiceCompat.startForeground`, `lifecycleRuntimeKtx`, and `activityCompose`) is permitted as long as they remain compatible with the project's AGP/Kotlin versions, use permissive licenses, and do not transitively introduce `android.permission.INTERNET`.
    - Only add libraries with permissive licenses (**Apache 2.0, MIT, BSD**). Never introduce FFmpeg, heavy NDK bundles, or strict GPL/LGPL libraries.
    - Never add networking libraries or any dependency that transitively merges `android.permission.INTERNET`.

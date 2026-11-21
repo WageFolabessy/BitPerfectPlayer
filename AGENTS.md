@@ -22,7 +22,7 @@ This repository contains the native Android project **`com.cangkir.bitperfectpla
 - **Never run `adb`, launch emulators, or simulate/fabricate hardware test results** for POCO F4 or KZ EDX Pro 2 USB-C.
 - Strictly separate:
   1. Compilation results (`./gradlew assembleDebug`),
-  2. Automated JVM unit tests & static checks (`./gradlew testDebugUnitTest`, `./gradlew lintDebug`),
+  2. Automated JVM unit tests, formatting, & static checks (`./gradlew ktlintCheck detekt testDebugUnitTest lintDebug`),
   3. Unverified physical hardware behaviors (real HyperOS Android 14 HAL behavior, runtime `MIXER_BEHAVIOR_BIT_PERFECT` negotiation, real USB-C DAC output, audible playback, and physical plug/unplug auto-pause).
 - Never claim bit-perfect output is proven without hardware verification.
 

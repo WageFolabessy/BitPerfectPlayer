@@ -8,7 +8,8 @@ Thank you for your interest in contributing to **BitPerfectPlayer** (`com.cangki
 
 - **JDK:** 25 (configured in `gradle/gradle-daemon-jvm.properties`)
 - **Android SDK:** `compileSdk = 37`, `targetSdk = 37`, `minSdk = 26`
-- **Build System:** Gradle Wrapper (`9.9.1`), Android Gradle Plugin `9.5.1`, Kotlin `2.2.10`
+- **Build System:** Gradle Wrapper (`9.9.1`), Android Gradle Plugin `9.5.1`, Kotlin `2.4.21`, KSP `2.3.14`
+- **Code Quality & Static Analysis (Build-Time Only):** `ktlint` Gradle plugin `14.2.0` (configured via [`.editorconfig`](.editorconfig)) and `detekt` `2.0.0-alpha.6` (configured via [`config/detekt/detekt.yml`](config/detekt/detekt.yml))
 - **Local SDK Config:** Set `ANDROID_HOME` / `ANDROID_SDK_ROOT`, or keep an untracked `local.properties` file pointing to your local Android SDK. Never commit `local.properties` or `.idea/` IDE state.
 
 ---
@@ -43,25 +44,28 @@ Thank you for your interest in contributing to **BitPerfectPlayer** (`com.cangki
 
 ## Local Verification Checklist
 
-Before opening a pull request, run the full software verification suite locally:
+Before opening a pull request, run the full software verification suite locally (use `./gradlew ktlintFormat` to auto-format Kotlin sources first if needed):
 
 ```bash
-# 1. JVM unit tests, Room SQLite migration tests, and Robolectric Compose UI tests
+# 1. Kotlin formatting (ktlint) and static analysis (detekt) — must report 0 issues
+./gradlew ktlintCheck detekt
+
+# 2. JVM unit tests, Room SQLite migration tests, and Robolectric Compose UI tests
 ./gradlew testDebugUnitTest
 
-# 2. Android Lint checks
+# 3. Android Lint checks
 ./gradlew lintDebug
 
-# 3. Debug APK build
+# 4. Debug APK build
 ./gradlew assembleDebug
 
-# 4. Verify zero forbidden permissions in source and merged manifests
+# 5. Verify zero forbidden permissions in source and merged manifests
 grep -Eni "permission\.(INTERNET|MANAGE_EXTERNAL_STORAGE|RECORD_AUDIO)" \
   app/src/main/AndroidManifest.xml \
   $(find app/build/intermediates/merged_manifest* -name 'AndroidManifest.xml' 2>/dev/null)
 ```
 
-(Step 4 must return zero matches.)
+(Step 5 must return zero matches.)
 
 ---
 
@@ -70,4 +74,4 @@ grep -Eni "permission\.(INTERNET|MANAGE_EXTERNAL_STORAGE|RECORD_AUDIO)" \
 - **Commit Format:** Follow Conventional Commits (`feat:`, `fix:`, `refactor:`, `perf:`, `test:`, `docs:`, `chore:`).
 - **Tests:** Include JVM unit tests (or Robolectric UI tests with `@Config(sdk = [34])`) covering normal paths, edge cases, and invalid inputs. Never delete, `@Ignore`, or weaken existing tests.
 - **Documentation & Verification Logs:** Keep [`SPEC.md`](SPEC.md), [`DECISIONS.md`](DECISIONS.md), [`docs/TASKS.md`](docs/TASKS.md), and [`docs/HANDOFF_REPORT.md`](docs/HANDOFF_REPORT.md) synchronized when changing architecture, constraints, or release milestones.
-- **Verification Honesty:** Clearly state in your PR description which checks were run in software (`testDebugUnitTest`, `lintDebug`, `assembleDebug`) vs. verified on physical Android hardware and USB-C DACs. Never fabricate hardware test results.
+- **Verification Honesty:** Clearly state in your PR description which checks were run in software (`ktlintCheck`, `detekt`, `testDebugUnitTest`, `lintDebug`, `assembleDebug`) vs. verified on physical Android hardware and USB-C DACs. Never fabricate hardware test results.

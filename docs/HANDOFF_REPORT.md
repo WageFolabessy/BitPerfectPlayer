@@ -663,3 +663,34 @@ Following physical testing of the signed Release APK on POCO F4 (Android 14 / Hy
 - **Strict Offline & Zero-Permission Audit (Source + All 8 Generated Debug, Release & UnitTest Manifests):** **PASS** — **0 `INTERNET`**, **0 `RECORD_AUDIO`**, **0 `MANAGE_EXTERNAL_STORAGE`**.
 - **Physical Hardware Verification:** No production runtime behavior changed in this checkpoint; prior pending POCO F4 + KZ EDX Pro 2 USB-C verification items from Sections 18–19 remain unchanged.
 
+---
+
+## 22. Late-2026 Toolchain Upgrade (`Kotlin 2.4.21` / `Compose BOM 2026.09.00`) & Build-Time `ktlint` + `detekt` Integration
+
+### Delivered Toolchain, Static Analysis, & Quality Upgrades
+1. **Verified Late-2026 Toolchain Matrix (`gradle/libs.versions.toml`, `build.gradle.kts`, `app/build.gradle.kts`, `DECISIONS.md` `D10.1`):**
+   - Preserved locked baseline: `AGP 9.5.1` (stable), `KSP 2.3.14`, `Gradle 9.9.1`, `JDK 25`, `compileSdk { version = release(37) }`, `targetSdk = 37`, `minSdk = 26`, `JavaVersion.VERSION_11`, `namespace` / `applicationId = "com.cangkir.bitperfectplayer"`, and zero added runtime dependencies.
+   - Upgraded **Kotlin `2.2.10` → `2.4.21`** and **Compose BOM `2026.02.01` → `2026.09.00`** (highest stable late-2026 Compose BOM compatible with `compileSdk = 37`; empirically confirmed `2026.11.01` fails `:app:checkDebugAarMetadata` because Compose `1.13.0` requires `compileSdk >= 37.1`).
+   - Migrated `BitPerfectUiBehaviorTest.kt` from deprecated `androidx.compose.ui.test.junit4.createComposeRule` to `androidx.compose.ui.test.junit4.v2.createComposeRule` (0 deprecation warnings across production + test code).
+2. **Build-Time Formatting (`ktlint`) & Static Analysis (`detekt`) with Zero Baseline Suppression:**
+   - Added **`org.jlleitschuh.gradle.ktlint` `14.2.0`** (MIT) configured via root [`.editorconfig`](../.editorconfig) (`android_studio` style, `max_line_length = 140`, trailing commas enabled, `@Composable` naming exception) and formatted the entire repository cleanly (**0 `ktlintCheck` violations**).
+   - Added **`dev.detekt` `2.0.0-alpha.6`** (Apache 2.0, Kotlin 2.4 + AGP 9 + Gradle 9 + JDK 25 compatible) configured via [`config/detekt/detekt.yml`](../config/detekt/detekt.yml) (`buildUponDefaultConfig = true`, **0 `detekt-baseline.xml`**).
+   - Resolved **all 149 initial Detekt findings directly in code** down to **0 issues**, including fixing a genuine coroutine cancellation bug in `LocalLibraryRepository.kt` (`refreshLibrary` and `toggleFavorite` now explicitly rethrow `CancellationException` and roll back optimistic favorite state before rethrowing), narrowing broad `catch (e: Exception)` blocks across `LocalLibraryRepository`, `MediaCodecAudioDecoder`, and `AudioOutputEngine`, removing redundant `CancellationException` catches in `VinylDiscPlayer`, extracting `LibraryTab.kt`, and cleanly decomposing high-complexity helpers across parsers/codecs/audio engine without touching runtime contracts.
+3. **CI & Documentation Integration:**
+   - Updated [`.github/workflows/android-ci.yml`](../.github/workflows/android-ci.yml) to enforce `./gradlew ktlintCheck detekt testDebugUnitTest lintDebug assembleDebug --stacktrace` alongside the existing manifest permission privacy audit (retaining pinned action SHAs and `permissions: contents: read`).
+   - Updated [`README.md`](../README.md), [`CONTRIBUTING.md`](../CONTRIBUTING.md), [`AGENTS.md`](../AGENTS.md), [`.agents/rules/gradle-and-manifest.md`](../.agents/rules/gradle-and-manifest.md), [`.agents/skills/android-audio-verify/SKILL.md`](../.agents/skills/android-audio-verify/SKILL.md), and [`DECISIONS.md`](../DECISIONS.md) (`D10.1`).
+
+### Software Verification (`./gradlew clean ktlintCheck detekt testDebugUnitTest lintDebug assembleDebug assembleRelease`)
+- **Kotlin Formatting (`ktlintCheck`):** **PASS — 0 violations** across `main`, `test`, and Kotlin Gradle scripts.
+- **Static Analysis (`detekt`):** **PASS — 0 issues** (0 baseline files).
+- **Automated JVM Unit + Robolectric SQLite Migration + Headless Compose UI Tests (`testDebugUnitTest`):** **180 / 180 passed** across **32 test suites** (`0` failed, `0` errors, `0` skipped, `0` `@Ignore`).
+- **Compiler, KSP, & R8 Warnings:** **0** Kotlin compiler warnings (production + test), **0** KSP warnings, **0** R8 warnings.
+- **Android Lint (`lintDebug` & `lintVitalRelease`):** **0 errors**, **0 warnings across all `/app/src/` Kotlin, manifest, and resource files**.
+- **Debug APK (`assembleDebug`):** `app/build/outputs/apk/debug/app-debug.apk` (`20.07 MB` / `21,043,749 bytes`).
+- **Release APK (`assembleRelease` with R8 optimization):** `app/build/outputs/apk/release/app-release-unsigned.apk` (`2.56 MB` / `2,680,304 bytes`).
+- **ART DEX Compactness Check (`AudioOutputEngine`):** Largest method remains **`807` DEX code units (Debug)** / **`756` DEX code units (Release)** (`handleEndOfStreamInLoop`), well under ART's `16,384` instruction JIT/AOT ceiling.
+- **Pure-Kotlin Domain Boundary (`30` domain files):** **PASS — 0 `android.*` / `androidx.*` imports**.
+- **Strict Offline & Zero-Permission Audit (Source + All Generated Debug, Release, & UnitTest Manifests):** **PASS — 0 `INTERNET`, 0 `RECORD_AUDIO`, 0 `MANAGE_EXTERNAL_STORAGE`**.
+- **Physical Hardware Verification Pending (Not Executed in Cloud):** Real POCO F4 (Android 14 / HyperOS) + KZ EDX Pro 2 USB-C runtime testing (including bit-perfect mixer negotiation, audible playback, live Safe-Mode turntable scratch, and physical USB plug/unplug auto-pause) remains unverified in this software-only environment.
+
+

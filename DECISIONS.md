@@ -147,4 +147,20 @@ This file records autonomous architectural, dependency, and environment decision
 - **Rationale:** Keeps every `AudioOutputEngine` method well under ART's JIT/AOT compiler instruction limit (largest method verified at `807` Debug / `756` Release DEX code units, resolving `Method exceeds compiler instruction limit: 20666` fallback to interpreted execution) while eliminating 44,100 Hz scratch underruns (`AudioTrack W restartIfDisabled`).
 - **Rejected Alternatives:** Keeping monolithic `runPlaybackLoop` with capturing local lambdas (forces ART bytecode interpretation on `BitPerfectAudioThread` and increases audio underrun risk).
 
+---
+
+## D10.1 — Late-2026 Kotlin/Compose Toolchain Upgrade & Build-Time `ktlint` + `detekt` Integration
+- **Decision:**
+  1. Upgraded Kotlin from `2.2.10` to **`2.4.21`** while preserving `AGP 9.5.1` (built-in Kotlin), `KSP 2.3.14`, `JDK 25`, `Gradle 9.9.1`, `compileSdk = 37`, `targetSdk = 37`, and `minSdk = 26`.
+  2. Upgraded Jetpack Compose BOM from `2026.02.01` to **`2026.09.00`** (Compose `1.12.1` + Material 3 `1.4.0`), and migrated `BitPerfectUiBehaviorTest` from deprecated `androidx.compose.ui.test.junit4.createComposeRule` to `androidx.compose.ui.test.junit4.v2.createComposeRule`.
+  3. Integrated two strictly build-time-only Gradle plugins (permissive open-source licenses, `0` runtime bytes, `0` permissions):
+     - **`org.jlleitschuh.gradle.ktlint` `14.2.0`** (MIT) with root `.editorconfig` (`ktlint_code_style = android_studio`, `max_line_length = 140`, trailing commas enabled, `@Composable` PascalCase naming exception).
+     - **`dev.detekt` `2.0.0-alpha.6`** (Apache 2.0) with `config/detekt/detekt.yml` (`buildUponDefaultConfig = true`, zero `detekt-baseline.xml`), fixing every genuine finding directly in production and test code (including a real coroutine `CancellationException` swallowing bug in `LocalLibraryRepository.refreshLibrary` / `toggleFavorite`).
+  4. Wired `./gradlew ktlintCheck detekt` directly into `.github/workflows/android-ci.yml`, `CONTRIBUTING.md`, `README.md`, `AGENTS.md`, and `.agents/skills/android-audio-verify/SKILL.md`.
+- **Rationale & Empirical Compatibility Findings:**
+  - **Compose BOM `2026.11.01` vs `2026.09.00`:** Empirically tested `composeBom = "2026.11.01"` (Compose `1.13.0`), which failed `:app:checkDebugAarMetadata` with 6 AAR metadata errors because `androidx.compose.foundation:foundation-android:1.13.0` and `androidx.compose.ui:ui-android:1.13.0` require `compileSdk >= 37.1` (`minCompileSdkExtension`), whereas this repository's locked baseline targets stable `compileSdk { version = release(37) }` (`android-37.0`) and stable `AGP 9.5.1`. `Compose BOM 2026.09.00` is the highest stable late-2026 Compose BOM compatible with `compileSdk = 37` and compiles cleanly with `0` warnings under Kotlin `2.4.21`.
+  - **`dev.detekt` `2.0.0-alpha.6` vs `io.gitlab.arturbosch.detekt` `1.23.8`:** Detekt `1.23.8` does not support Kotlin `2.4` / AGP `9` built-in Kotlin / Gradle `9` Configuration Cache / JDK `25`. `dev.detekt` `2.0.0-alpha.6` is the official Detekt 2.x release built for Kotlin `2.4` + AGP `9` + Gradle `9` + JDK `25`, executes cleanly in ~3–5 s with Configuration Cache reuse, and adds zero runtime code or permissions to the APK.
+- **Rejected Alternatives:** Upgrading to alpha `AGP 9.6.0` or non-baseline `compileSdk = 37.1` to force Compose BOM `2026.11.01` (violates locked `AGP 9.5.1` / `compileSdk = 37` stability guardrail); sticking with legacy Detekt `1.23.8` (incompatible with Kotlin `2.4` + AGP `9` + JDK `25`); hiding complexity or exception-handling findings behind a `detekt-baseline.xml` file (masks genuine bugs like `CancellationException` swallowing).
+
+
 

@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   verify:
-    name: Test, Lint, Build, and Privacy Audit
+    name: Format, Static Analysis, Test, Lint, Build, and Privacy Audit
     runs-on: ubuntu-24.04
     timeout-minutes: 25
 
@@ -67,10 +67,10 @@ jobs:
             ln -s "$SDK_ROOT/platforms/android-37.0" "$SDK_ROOT/platforms/android-37"
           fi
 
-      - name: Run unit tests, Android Lint, and debug build
+      - name: Run ktlint, detekt, unit tests, Android Lint, and debug build
         run: |
           chmod +x gradlew
-          ./gradlew testDebugUnitTest lintDebug assembleDebug --stacktrace
+          ./gradlew ktlintCheck detekt testDebugUnitTest lintDebug assembleDebug --stacktrace
 
       - name: Audit source and merged manifests for forbidden permissions
         shell: bash

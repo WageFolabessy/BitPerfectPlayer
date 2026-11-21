@@ -1,6 +1,6 @@
 ---
 name: android-audio-verify
-description: Runs Gradle JVM unit tests, Android Lint, debug APK builds, source and merged AndroidManifest privacy audits (verifying zero INTERNET, MANAGE_EXTERNAL_STORAGE, or RECORD_AUDIO permissions), and Git cleanliness checks for com.cangkir.bitperfectplayer. Use before checkpointing milestones or completing final handoff.
+description: Runs ktlint formatting checks, detekt static analysis, Gradle JVM unit tests, Android Lint, debug APK builds, source and merged AndroidManifest privacy audits (verifying zero INTERNET, MANAGE_EXTERNAL_STORAGE, or RECORD_AUDIO permissions), and Git cleanliness checks for com.cangkir.bitperfectplayer. Use before checkpointing milestones or completing final handoff.
 ---
 
 # Android Software Verification & Privacy Audit Skill
@@ -9,25 +9,31 @@ Use this workflow to verify software health without touching ADB, emulators, or 
 
 ## Verification Steps
 
-1. **JVM Unit Tests:**
+1. **Kotlin Formatting & Static Analysis (`ktlint` + `detekt`):**
+   ```bash
+   ./gradlew ktlintCheck detekt
+   ```
+   - Confirm exit code `0` with `0` `ktlintCheck` violations and `0` `detekt` issues (no `detekt-baseline.xml`).
+
+2. **JVM Unit Tests:**
    ```bash
    ./gradlew testDebugUnitTest
    ```
    - Confirm exit code `0` and verify no test cases were skipped or `@Ignore`d.
 
-2. **Android Lint (Required for Final Audit & Major Milestones):**
+3. **Android Lint (Required for Final Audit & Major Milestones):**
    ```bash
    ./gradlew lintDebug
    ```
    - Resolve all error-level lint findings (especially API level guards for `API 31+` PCM encodings and `API 34+` mixer/foreground-service calls under `minSdk = 26`).
 
-3. **Debug APK Build:**
+4. **Debug APK Build:**
    ```bash
    ./gradlew assembleDebug
    ```
    - Confirm `app/build/outputs/apk/debug/app-debug.apk` exists and is non-empty.
 
-4. **Strict Offline Privacy Audit (Source + Merged Manifest):**
+5. **Strict Offline Privacy Audit (Source + Merged Manifest):**
    Run this deterministic check (must exit `0` with zero matches):
    ```bash
    set -euo pipefail
@@ -42,6 +48,6 @@ Use this workflow to verify software health without touching ADB, emulators, or 
    - Also verify at least one merged debug `AndroidManifest.xml` was found after `assembleDebug`.
    - If any transitive dependency injects `android.permission.INTERNET`, remove or replace that dependency with an offline-clean alternative; do not leave it unaddressed.
 
-5. **Baseline & Git Hygiene Check:**
+6. **Baseline & Git Hygiene Check:**
    - Verify `app/build.gradle.kts` still preserves `com.cangkir.bitperfectplayer`, `compileSdk { version = release(37) }`, `targetSdk = 37`, `minSdk = 26`, `JavaVersion.VERSION_11`, and the `release { optimization { ... } }` block.
    - Verify via `git status` that `local.properties`, `app/build/`, and `app/release/` artifacts are untracked/ignored and never staged.
