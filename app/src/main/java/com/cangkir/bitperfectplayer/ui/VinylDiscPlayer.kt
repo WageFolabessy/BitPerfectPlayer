@@ -54,13 +54,16 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
 import com.cangkir.bitperfectplayer.audio.VinylScrubMath
 import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
 import com.cangkir.bitperfectplayer.ui.theme.IcePrimary
 import com.cangkir.bitperfectplayer.ui.theme.ObsidianSurfaceVariant
 import com.cangkir.bitperfectplayer.ui.theme.TextPrimary
+import com.cangkir.bitperfectplayer.ui.theme.TextSecondary
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -74,6 +77,9 @@ private val VINYL_ARTWORK_DIAMETER = 158.dp // ~58% of 272.dp
 private val VINYL_LABEL_RING_DIAMETER = 22.dp
 private val VINYL_SPINDLE_DIAMETER = 14.dp
 
+private const val HOLD_WATCHDOG_POLL_MS = 35L
+private const val HOLD_IDLE_THRESHOLD_NS = 65_000_000L
+
 private val VinylBaseInner = Color(0xFF15151A)
 private val VinylBaseMid = Color(0xFF101014)
 private val VinylBaseOuter = Color(0xFF09090C)
@@ -84,6 +90,15 @@ private val VinylSpindleRim = Color(0xFF3A3A45)
 private val VinylScrubPillSurface = Color(0xEB17171D)
 private val VinylScrubPillBorder = Color(0xFF34343E)
 
+/** Non-observable mutable holder for imperative turntable gesture/coroutine handles (zero recompositions). */
+private class VinylTurntableSessionHolder {
+    var isLiveSessionActive: Boolean = false
+    var coastJob: Job? = null
+    var holdWatchdogJob: Job? = null
+    var lastMoveWallNano: Long = 0L
+    var holdEngaged: Boolean = true
+}
+
 /**
  * GPU-accelerated interactive spinning Vinyl Record / Turntable Disc for `NowPlayingScreen`.
  *
@@ -91,45 +106,75 @@ private val VinylScrubPillBorder = Color(0xFF34343E)
  * - Rotational animation updates strictly inside `Modifier.graphicsLayer { rotationZ = ... }` for
  *   **0 recompositions and 0 relayouts** at 60/120 fps.
  * - Stationary studio specular sheen sits outside the rotating `graphicsLayer` for realistic depth.
- * - Velocity-sensitive rotational touch scrubbing + catchable bounded flick inertia (`<= 450 ms`)
- *   commits `onSeekTo(...)` **strictly once** upon release/settle (never per drag frame), preventing
- *   `MediaCodec`/`AudioTrack` seek-flush stutter on 96/192 kHz Hi-Res FLAC.
- * - Live scrub preview milliseconds are pushed into [scrubPreviewMsState] without forcing the parent
- *   `NowPlayingScreen` to recompose; only the compact pill leaf and `NowPlayingSeekSection` observe it.
+ * - **Safe Mode while playing (`isSafeMode && isPlaying`):** engages real-time turntable DSP
+ *   (forward varispeed, hold-to-stop, and reverse scratch) with bounded flick inertia (`<= 450 ms`),
+ *   keeping `scrubPreviewMsState.value = null` so `NowPlayingSeekSection` tracks the live engine
+ *   position seamlessly.
+ * - **Paused OR Bit-Perfect Opt-In mode:** never invokes turntable DSP; preserves silent
+ *   rotational seek-preview and commits `onSeekTo(...)` **strictly once** upon release/settle.
  */
 @Composable
 fun InteractiveVinylDisc(
     track: PlaybackTrack,
     isPlaying: Boolean,
+    isSafeMode: Boolean,
     durationMs: Long,
     playbackPositionMsFlow: StateFlow<Long>,
     scrubPreviewMsState: MutableState<Long?>,
     albumArtworkLoader: AlbumArtworkLoader,
     onSeekTo: (Long) -> Unit,
     modifier: Modifier = Modifier,
+    onBeginTurntableScratch: () -> Boolean = { false },
+    onUpdateTurntableScratchRate: (Float) -> Unit = {},
+    onEndTurntableScratch: (Long?) -> Unit = {},
 ) {
     val haptic = LocalHapticFeedback.current
     val coroutineScope = rememberCoroutineScope()
 
     val latestOnSeekTo by rememberUpdatedState(onSeekTo)
+    val latestOnBeginScratch by rememberUpdatedState(onBeginTurntableScratch)
+    val latestOnUpdateScratchRate by rememberUpdatedState(onUpdateTurntableScratchRate)
+    val latestOnEndScratch by rememberUpdatedState(onEndTurntableScratch)
     val latestPositionFlow by rememberUpdatedState(playbackPositionMsFlow)
+    val latestIsPlaying by rememberUpdatedState(isPlaying)
+    val latestIsSafeMode by rememberUpdatedState(isSafeMode)
 
     // Angle persists across Play/Pause (freezes immediately when paused, never snaps back to 0°).
     val rotationDegrees = remember { mutableFloatStateOf(0f) }
     val scrubAnchorMs = remember { mutableLongStateOf(0L) }
+    // Narrow leaf state for live scratch speed badge (NEVER read in InteractiveVinylDisc body).
+    val liveScratchSpeedState = remember { mutableStateOf<Float?>(null) }
+    val session = remember { VinylTurntableSessionHolder() }
 
     var isUserDragging by remember { mutableStateOf(false) }
     var isCoasting by remember { mutableStateOf(false) }
-    var coastJob by remember { mutableStateOf<Job?>(null) }
 
-    // Cancel any active coast and clear scrub preview cleanly on track switch or screen disposal.
+    fun abortLiveSessionIfActive() {
+        session.holdWatchdogJob?.cancel()
+        session.holdWatchdogJob = null
+        session.coastJob?.cancel()
+        session.coastJob = null
+        isCoasting = false
+        liveScratchSpeedState.value = null
+        if (session.isLiveSessionActive) {
+            session.isLiveSessionActive = false
+            latestOnEndScratch(null)
+        }
+    }
+
+    // Cancel active coast/scratch cleanly on track switch or screen disposal.
     DisposableEffect(track.uriString) {
         onDispose {
-            coastJob?.cancel()
-            coastJob = null
-            isCoasting = false
+            abortLiveSessionIfActive()
             isUserDragging = false
             scrubPreviewMsState.value = null
+        }
+    }
+
+    // Immediately abort any live turntable session if playback pauses, auto-pauses, or switches to Bit-Perfect.
+    LaunchedEffect(isPlaying, isSafeMode) {
+        if ((!isPlaying || !isSafeMode) && session.isLiveSessionActive) {
+            abortLiveSessionIfActive()
         }
     }
 
@@ -169,9 +214,10 @@ fun InteractiveVinylDisc(
                     }
 
                     // Catch active inertia coast seamlessly if the user grabs the spinning disc.
-                    val caughtPreviewMs = if (isCoasting) {
-                        coastJob?.cancel()
-                        coastJob = null
+                    val caughtCoast = isCoasting
+                    val caughtPreviewMs = if (caughtCoast) {
+                        session.coastJob?.cancel()
+                        session.coastJob = null
                         isCoasting = false
                         scrubPreviewMsState.value
                     } else {
@@ -181,10 +227,47 @@ fun InteractiveVinylDisc(
                     down.consume()
                     isUserDragging = true
 
-                    val startPosMs = (caughtPreviewMs ?: latestPositionFlow.value).coerceIn(0L, durationMs)
-                    if (caughtPreviewMs == null) {
-                        scrubAnchorMs.longValue = startPosMs
+                    // Engage Safe-Mode live turntable DSP if actively playing in Safe Mode (or continue caught live coast).
+                    val liveMode = if (caughtCoast && session.isLiveSessionActive && latestIsPlaying && latestIsSafeMode) {
+                        true
+                    } else if (!caughtCoast && latestIsPlaying && latestIsSafeMode) {
+                        val started = latestOnBeginScratch()
+                        session.isLiveSessionActive = started
+                        started
                     } else {
+                        if (session.isLiveSessionActive) {
+                            session.isLiveSessionActive = false
+                            latestOnEndScratch(null)
+                        }
+                        false
+                    }
+
+                    val startPosMs = (caughtPreviewMs ?: latestPositionFlow.value).coerceIn(0L, durationMs)
+                    if (!caughtCoast) {
+                        scrubAnchorMs.longValue = startPosMs
+                    }
+
+                    if (liveMode) {
+                        scrubPreviewMsState.value = null
+                        liveScratchSpeedState.value = 0f
+                        latestOnUpdateScratchRate(0f)
+                        session.lastMoveWallNano = System.nanoTime()
+                        session.holdEngaged = true
+                        session.holdWatchdogJob?.cancel()
+                        session.holdWatchdogJob = coroutineScope.launch {
+                            while (isActive && session.isLiveSessionActive) {
+                                delay(HOLD_WATCHDOG_POLL_MS)
+                                if (!session.isLiveSessionActive) break
+                                if (!session.holdEngaged &&
+                                    (System.nanoTime() - session.lastMoveWallNano) > HOLD_IDLE_THRESHOLD_NS
+                                ) {
+                                    session.holdEngaged = true
+                                    liveScratchSpeedState.value = 0f
+                                    latestOnUpdateScratchRate(0f)
+                                }
+                            }
+                        }
+                    } else if (caughtPreviewMs != null) {
                         scrubPreviewMsState.value = startPosMs
                     }
 
@@ -195,7 +278,7 @@ fun InteractiveVinylDisc(
                     var releaseTimeMs = down.uptimeMillis
                     var smoothedVelocity = 0f
                     var hapticAccumDeg = 0f
-                    var didScrubOrCatchCoast = caughtPreviewMs != null
+                    var didScrubOrCatchCoast = caughtCoast
 
                     val pointerId = down.id
                     try {
@@ -225,41 +308,161 @@ fun InteractiveVinylDisc(
                             prevAngleDeg = currentAngleDeg
                             prevTimeMs = nowMs
 
-                            if (deltaDeg != 0f) {
-                                didScrubOrCatchCoast = true
-                                lastMoveTimeMs = nowMs
-                                val instantVelocity = if (dtMs >= VinylScrubMath.MIN_VALID_DT_MS) {
-                                    deltaDeg / (dtMs / 1000f)
-                                } else {
-                                    smoothedVelocity
-                                }
-                                smoothedVelocity = VinylScrubMath.smoothAngularVelocity(
-                                    previousDegPerSec = smoothedVelocity,
-                                    instantDegPerSec = instantVelocity,
-                                    dtMs = dtMs,
-                                )
+                            if (liveMode) {
+                                // If externally aborted mid-drag (auto-pause / Bit-Perfect switch), stay passive until finger lifts.
+                                if (!session.isLiveSessionActive) continue
+                                if (deltaDeg != 0f) {
+                                    didScrubOrCatchCoast = true
+                                    lastMoveTimeMs = nowMs
+                                    session.lastMoveWallNano = System.nanoTime()
+                                    session.holdEngaged = false
 
-                                rotationDegrees.floatValue = (rotationDegrees.floatValue + deltaDeg) % 360f
-                                val deltaMs = VinylScrubMath.computeIncrementalScrubDeltaMs(deltaDeg, smoothedVelocity)
-                                previewPosDouble = VinylScrubMath.clampScrubPositionMs(
-                                    positionMs = previewPosDouble + deltaMs,
-                                    durationMs = durationMs,
-                                )
-                                scrubPreviewMsState.value = previewPosDouble.roundToLong().coerceIn(0L, durationMs)
+                                    val instantVelocity = if (dtMs >= VinylScrubMath.MIN_VALID_DT_MS) {
+                                        deltaDeg / (dtMs / 1000f)
+                                    } else {
+                                        smoothedVelocity
+                                    }
+                                    smoothedVelocity = VinylScrubMath.smoothAngularVelocity(
+                                        previousDegPerSec = smoothedVelocity,
+                                        instantDegPerSec = instantVelocity,
+                                        dtMs = dtMs,
+                                    )
+                                    rotationDegrees.floatValue = (rotationDegrees.floatValue + deltaDeg) % 360f
 
-                                hapticAccumDeg += abs(deltaDeg)
-                                if (hapticAccumDeg >= VinylScrubMath.HAPTIC_TICK_INTERVAL_DEG) {
-                                    hapticAccumDeg %= VinylScrubMath.HAPTIC_TICK_INTERVAL_DEG
-                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                    val rate = VinylScrubMath.angularVelocityToPlaybackRate(smoothedVelocity)
+                                    liveScratchSpeedState.value = rate
+                                    latestOnUpdateScratchRate(rate)
+
+                                    hapticAccumDeg += abs(deltaDeg)
+                                    if (hapticAccumDeg >= VinylScrubMath.HAPTIC_TICK_INTERVAL_DEG) {
+                                        hapticAccumDeg %= VinylScrubMath.HAPTIC_TICK_INTERVAL_DEG
+                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                    }
+                                } else if (dtMs > VinylScrubMath.MAX_VALID_DT_MS) {
+                                    smoothedVelocity = 0f
+                                    session.holdEngaged = true
+                                    liveScratchSpeedState.value = 0f
+                                    latestOnUpdateScratchRate(0f)
                                 }
-                            } else if (dtMs > VinylScrubMath.MAX_VALID_DT_MS) {
-                                smoothedVelocity = 0f
+                            } else {
+                                // Silent seek-preview mode (Paused or Bit-Perfect Opt-In): untouched zero-DSP path.
+                                if (deltaDeg != 0f) {
+                                    didScrubOrCatchCoast = true
+                                    lastMoveTimeMs = nowMs
+                                    val instantVelocity = if (dtMs >= VinylScrubMath.MIN_VALID_DT_MS) {
+                                        deltaDeg / (dtMs / 1000f)
+                                    } else {
+                                        smoothedVelocity
+                                    }
+                                    smoothedVelocity = VinylScrubMath.smoothAngularVelocity(
+                                        previousDegPerSec = smoothedVelocity,
+                                        instantDegPerSec = instantVelocity,
+                                        dtMs = dtMs,
+                                    )
+
+                                    rotationDegrees.floatValue = (rotationDegrees.floatValue + deltaDeg) % 360f
+                                    val deltaMs = VinylScrubMath.computeIncrementalScrubDeltaMs(deltaDeg, smoothedVelocity)
+                                    previewPosDouble = VinylScrubMath.clampScrubPositionMs(
+                                        positionMs = previewPosDouble + deltaMs,
+                                        durationMs = durationMs,
+                                    )
+                                    scrubPreviewMsState.value = previewPosDouble.roundToLong().coerceIn(0L, durationMs)
+
+                                    hapticAccumDeg += abs(deltaDeg)
+                                    if (hapticAccumDeg >= VinylScrubMath.HAPTIC_TICK_INTERVAL_DEG) {
+                                        hapticAccumDeg %= VinylScrubMath.HAPTIC_TICK_INTERVAL_DEG
+                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                    }
+                                } else if (dtMs > VinylScrubMath.MAX_VALID_DT_MS) {
+                                    smoothedVelocity = 0f
+                                }
                             }
                         }
                     } finally {
+                        session.holdWatchdogJob?.cancel()
+                        session.holdWatchdogJob = null
                         isUserDragging = false
                     }
 
+                    // Live Turntable Release Path
+                    if (liveMode) {
+                        if (!session.isLiveSessionActive) {
+                            liveScratchSpeedState.value = null
+                            return@awaitEachGesture
+                        }
+                        val releaseStalenessMs = (releaseTimeMs - lastMoveTimeMs).coerceAtLeast(0L)
+                        val releaseVelocity = if (session.holdEngaged ||
+                            !didScrubOrCatchCoast ||
+                            releaseStalenessMs > VinylScrubMath.MAX_RELEASE_STALENESS_MS
+                        ) {
+                            0f
+                        } else {
+                            smoothedVelocity
+                        }
+
+                        if (!VinylScrubMath.shouldStartInertiaCoast(releaseVelocity)) {
+                            session.isLiveSessionActive = false
+                            liveScratchSpeedState.value = null
+                            latestOnEndScratch(null)
+                        } else {
+                            isCoasting = true
+                            session.coastJob = coroutineScope.launch {
+                                try {
+                                    var vel = releaseVelocity
+                                    val startNanos = withFrameNanos { it }
+                                    var lastNanos = startNanos
+                                    var coastHapticAccum = 0f
+
+                                    while (isActive && session.isLiveSessionActive) {
+                                        val nowNanos = withFrameNanos { it }
+                                        val elapsedMs = (nowNanos - startNanos) / 1_000_000L
+                                        val dtSec = ((nowNanos - lastNanos) / 1_000_000_000.0)
+                                            .coerceIn(0.0, 0.05)
+                                            .toFloat()
+                                        lastNanos = nowNanos
+
+                                        val frameDeltaDeg = vel * dtSec
+                                        rotationDegrees.floatValue = (rotationDegrees.floatValue + frameDeltaDeg) % 360f
+
+                                        val rate = VinylScrubMath.angularVelocityToPlaybackRate(vel)
+                                        liveScratchSpeedState.value = rate
+                                        latestOnUpdateScratchRate(rate)
+
+                                        coastHapticAccum += abs(frameDeltaDeg)
+                                        if (coastHapticAccum >= VinylScrubMath.HAPTIC_TICK_INTERVAL_DEG) {
+                                            coastHapticAccum %= VinylScrubMath.HAPTIC_TICK_INTERVAL_DEG
+                                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        }
+
+                                        vel = VinylScrubMath.decayInertiaVelocity(vel, dtSec)
+
+                                        val livePos = latestPositionFlow.value
+                                        val hitBoundary = (livePos <= 0L && vel < 0f) ||
+                                            (livePos >= durationMs && vel > 0f)
+                                        if (hitBoundary ||
+                                            elapsedMs >= VinylScrubMath.INERTIA_MAX_DURATION_MS ||
+                                            abs(vel) < VinylScrubMath.INERTIA_STOP_VELOCITY_DEG_PER_SEC
+                                        ) {
+                                            break
+                                        }
+                                    }
+
+                                    isCoasting = false
+                                    session.coastJob = null
+                                    liveScratchSpeedState.value = null
+                                    if (session.isLiveSessionActive) {
+                                        session.isLiveSessionActive = false
+                                        latestOnEndScratch(null)
+                                    }
+                                } catch (ce: CancellationException) {
+                                    throw ce
+                                }
+                            }
+                        }
+                        return@awaitEachGesture
+                    }
+
+                    // Silent Seek-Preview Release Path (Paused or Bit-Perfect Opt-In)
                     // Avoid needless MediaCodec seek flushes on zero-movement taps.
                     if (!didScrubOrCatchCoast) {
                         scrubPreviewMsState.value = null
@@ -281,7 +484,7 @@ fun InteractiveVinylDisc(
                     } else {
                         isCoasting = true
                         val initialCoastPos = previewPosDouble
-                        coastJob = coroutineScope.launch {
+                        session.coastJob = coroutineScope.launch {
                             try {
                                 var vel = releaseVelocity
                                 var posDouble = initialCoastPos
@@ -326,7 +529,7 @@ fun InteractiveVinylDisc(
 
                                 val settledMs = posDouble.roundToLong().coerceIn(0L, durationMs)
                                 isCoasting = false
-                                coastJob = null
+                                session.coastJob = null
                                 scrubPreviewMsState.value = null
                                 latestOnSeekTo(settledMs)
                             } catch (ce: CancellationException) {
@@ -391,7 +594,9 @@ fun InteractiveVinylDisc(
         // Layer 3: Isolated scrub HUD pill (only this narrow leaf recomposes while scrubbing/coasting)
         VinylScrubPillLeaf(
             scrubPreviewMsState = scrubPreviewMsState,
+            liveScratchSpeedState = liveScratchSpeedState,
             scrubAnchorMsState = scrubAnchorMs,
+            playbackPositionMsFlow = playbackPositionMsFlow,
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .padding(top = 10.dp),
@@ -569,17 +774,29 @@ private fun VinylCircularArtwork(
 }
 
 /**
- * Narrow leaf composable rendering the live target timestamp and signed delta pill (`02:14  +00:19`)
- * exclusively while the user is actively scrubbing or coasting the vinyl disc.
+ * Narrow leaf composable rendering the live target timestamp, signed delta, and optional live
+ * turntable speed badge (`02:14  +00:19  2.1×` / `HOLD`) exclusively while actively scrubbing or
+ * coasting the vinyl disc.
  */
 @Composable
 private fun VinylScrubPillLeaf(
     scrubPreviewMsState: State<Long?>,
+    liveScratchSpeedState: State<Float?>,
     scrubAnchorMsState: LongState,
+    playbackPositionMsFlow: StateFlow<Long>,
     modifier: Modifier = Modifier,
 ) {
-    val previewMs = scrubPreviewMsState.value ?: return
-    val deltaMs = previewMs - scrubAnchorMsState.longValue
+    val liveSpeed = liveScratchSpeedState.value
+    val previewMs = scrubPreviewMsState.value
+    if (liveSpeed == null && previewMs == null) return
+
+    val displayMs = if (liveSpeed != null) {
+        val enginePos by playbackPositionMsFlow.collectAsStateWithLifecycle()
+        enginePos
+    } else {
+        previewMs ?: return
+    }
+    val deltaMs = displayMs - scrubAnchorMsState.longValue
 
     Surface(
         modifier = modifier,
@@ -593,7 +810,7 @@ private fun VinylScrubPillLeaf(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = formatDurationMs(previewMs),
+                text = formatDurationMs(displayMs),
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.SemiBold,
                 color = TextPrimary,
@@ -608,6 +825,16 @@ private fun VinylScrubPillLeaf(
                 maxLines = 1,
                 softWrap = false,
             )
+            if (liveSpeed != null) {
+                Text(
+                    text = VinylScrubMath.formatPlaybackRateBadge(liveSpeed),
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = TextSecondary,
+                    maxLines = 1,
+                    softWrap = false,
+                )
+            }
         }
     }
 }

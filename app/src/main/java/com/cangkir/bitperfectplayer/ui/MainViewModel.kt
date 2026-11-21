@@ -252,6 +252,11 @@ class MainViewModel(
     fun next() = container.playbackController.next(userInitiated = true)
     fun previous() = container.playbackController.previous()
     fun seekTo(positionMs: Long) = container.playbackController.seekTo(positionMs)
+    fun beginTurntableScratch(): Boolean = container.playbackController.beginTurntableScratch()
+    fun updateTurntableScratchRate(playbackRate: Float) =
+        container.playbackController.updateTurntableScratchRate(playbackRate)
+    fun endTurntableScratch(fallbackTargetMs: Long? = null) =
+        container.playbackController.endTurntableScratch(fallbackTargetMs)
     fun toggleShuffle() = container.playbackController.toggleShuffle()
     fun cycleRepeatMode() = container.playbackController.cycleRepeatMode()
     fun setGaplessEnabled(enabled: Boolean) = container.playbackController.setGaplessEnabled(enabled)

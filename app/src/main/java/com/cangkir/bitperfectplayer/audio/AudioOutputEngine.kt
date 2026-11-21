@@ -31,9 +31,12 @@ import java.nio.ByteOrder
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
+import kotlin.math.ceil
+import kotlin.math.roundToLong
 
 enum class PlaybackStatus {
     IDLE,
@@ -132,6 +135,15 @@ class AudioOutputEngine(
     private val stopWorkerFlag = AtomicBoolean(false)
     private val releasedFlag = AtomicBoolean(false)
     private val pendingSeekMs = AtomicLong(-1L)
+
+    // Safe-Mode-only real-time turntable scratch state (lock-free UI -> Audio thread signaling).
+    // Ring buffer is NEVER allocated or written in BIT_PERFECT_OPT_IN mode.
+    private val turntableScratchRequested = AtomicBoolean(false)
+    private val turntableTargetRateBits = AtomicInteger(0)
+    private val turntableFallbackSeekMs = AtomicLong(-1L)
+
+    @Volatile
+    private var turntableRingBuffer: TurntablePcmRingBuffer? = null
 
     @Volatile
     private var gaplessEnabled: Boolean = true
@@ -366,6 +378,7 @@ class AudioOutputEngine(
     fun loadTrack(request: EngineTrackRequest) {
         if (releasedFlag.get()) return
         val generation = loadGeneration.incrementAndGet()
+        abortTurntableScratch()
         clearPreloadedNextAsync()
         stopWorkerFlag.set(true)
         isPausedFlag.set(true)
@@ -559,8 +572,53 @@ class AudioOutputEngine(
         pauseInternal(clearFocus = true, notice = null)
     }
 
+    /**
+     * Engages real-time turntable varispeed / hold / reverse scratch DSP strictly in
+     * [AudioOutputMode.SAFE_VOLUME_MODE] during active playback. Strict no-op (`false`) in
+     * [AudioOutputMode.BIT_PERFECT_OPT_IN] or whenever paused/idle.
+     */
+    fun beginTurntableScratch(): Boolean {
+        val eligible = TurntableScratchPolicy.isLiveTurntableEligible(
+            safetyMode = safetyController.state().mode,
+            isPlaying = _state.value.isPlaying && !isPausedFlag.get(),
+            hasActiveTrack = activeAudioTrack != null && !stopWorkerFlag.get() && !releasedFlag.get(),
+        )
+        if (!eligible) return false
+        turntableTargetRateBits.set(0f.toRawBits())
+        turntableFallbackSeekMs.set(-1L)
+        turntableScratchRequested.set(true)
+        return true
+    }
+
+    /**
+     * Lock-free update of the live turntable playback rate (`[-4.0f..+4.0f]`) from the UI touch
+     * or flick-inertia loop. Strict no-op when live turntable scratch is not active.
+     */
+    fun updateTurntableScratchRate(playbackRate: Float) {
+        if (!turntableScratchRequested.get()) return
+        val clamped = TurntableSpeedController.clampPlaybackRate(playbackRate)
+        turntableTargetRateBits.set(clamped.toRawBits())
+    }
+
+    /**
+     * Exits real-time turntable scratch mode cleanly, seamlessly resuming 1.0x playback from the
+     * ring buffer (or seeking once if rewound past `oldestAvailableFrame`).
+     */
+    fun endTurntableScratch(fallbackTargetMs: Long? = null) {
+        if (!turntableScratchRequested.get()) return
+        turntableFallbackSeekMs.set(fallbackTargetMs?.coerceAtLeast(0L) ?: -1L)
+        turntableScratchRequested.set(false)
+    }
+
+    private fun abortTurntableScratch() {
+        turntableScratchRequested.set(false)
+        turntableTargetRateBits.set(0f.toRawBits())
+        turntableFallbackSeekMs.set(-1L)
+    }
+
     fun seekTo(positionMs: Long) {
         if (releasedFlag.get()) return
+        abortTurntableScratch()
         clearPreloadedNextAsync()
         val clamped = positionMs.coerceIn(0L, _state.value.durationMs.coerceAtLeast(0L))
         _playbackPositionMs.value = clamped
@@ -573,6 +631,7 @@ class AudioOutputEngine(
                     val decoder = activeDecoder ?: return@withLock
                     val actual = runCatching { decoder.seekToMs(clamped) }.getOrDefault(clamped)
                     activeAudioTrack?.let { safeFlushTrack(it) }
+                    turntableRingBuffer?.reset(0L)
                     _playbackPositionMs.value = actual
                 }
             }
@@ -581,7 +640,9 @@ class AudioOutputEngine(
 
     fun stop() {
         if (releasedFlag.get()) return
+        abortTurntableScratch()
         if (_state.value.status == PlaybackStatus.IDLE && activeAudioTrack == null && activeDecoder == null) {
+            turntableRingBuffer = null
             clearPreloadedNextAsync()
             return
         }
@@ -595,6 +656,7 @@ class AudioOutputEngine(
             engineLock.withLock {
                 clearPreloadedNextLocked()
                 stopWorkerAndReleaseTrackLocked(clearMixer = true)
+                turntableRingBuffer = null
                 abandonAudioFocusLocked()
                 activeTrackReplayGainMetadata = null
                 recomputeReplayGain()
@@ -640,6 +702,7 @@ class AudioOutputEngine(
 
     fun release() {
         if (!releasedFlag.compareAndSet(false, true)) return
+        abortTurntableScratch()
         loadGeneration.incrementAndGet()
         queuedNextRequest = null
         stopWorkerFlag.set(true)
@@ -651,6 +714,7 @@ class AudioOutputEngine(
                 engineLock.withLock {
                     clearPreloadedNextLocked()
                     stopWorkerAndReleaseTrackLocked(clearMixer = true)
+                    turntableRingBuffer = null
                     abandonAudioFocusLocked()
                 }
             }
@@ -662,6 +726,7 @@ class AudioOutputEngine(
         recomputeReplayGain()
         when (command.type) {
             SafetyEventType.AUTO_PAUSE -> {
+                abortTurntableScratch()
                 resumeAfterTransientFocusLoss = false
                 val notice = when (command.autoPauseReason) {
                     AutoPauseReason.BECOMING_NOISY -> "Auto-paused: audio output disconnected or becoming noisy."
@@ -700,10 +765,13 @@ class AudioOutputEngine(
                 }
             }
             SafetyEventType.MODE_CHANGED_TO_BIT_PERFECT -> {
+                abortTurntableScratch()
                 val shouldResume = _state.value.isPlaying
                 enqueueControlTask {
                     if (releasedFlag.get()) return@enqueueControlTask
                     engineLock.withLock {
+                        // Mandatory Bit-Perfect invariant: release ring buffer memory immediately.
+                        turntableRingBuffer = null
                         reconfigureTrackIfLoadedLocked(
                             autoResume = shouldResume,
                             preserveAutoPauseNotice = false,
@@ -739,6 +807,7 @@ class AudioOutputEngine(
     }
 
     private fun pauseInternal(clearFocus: Boolean, notice: String?) {
+        abortTurntableScratch()
         val wasPaused = isPausedFlag.getAndSet(true)
         activeAudioTrack?.let { safePauseTrack(it) }
         val currentStatus = _state.value.status
@@ -1006,6 +1075,7 @@ class AudioOutputEngine(
         var sampleRate = currentFormat.sampleRateHz.coerceAtLeast(1)
         var durationMs = currentFormat.durationMs.coerceAtLeast(0L)
         var bytesPerFrame = currentFormat.bytesPerFrame.coerceAtLeast(1)
+        var channels = currentFormat.channelCount.coerceIn(1, 8)
 
         var bufferSize = PcmStreamRules.computeAlignedBufferSize(16_384, bytesPerFrame)
         var pcmBuffer = ByteArray(bufferSize)
@@ -1014,9 +1084,39 @@ class AudioOutputEngine(
         var remainder = ByteArray(bytesPerFrame)
         var remainderLen = 0
 
+        fun ensureSafeModeRingBuffer(channelCount: Int): TurntablePcmRingBuffer? {
+            if (safetyController.state().mode != AudioOutputMode.SAFE_VOLUME_MODE) {
+                turntableRingBuffer = null
+                return null
+            }
+            val existing = turntableRingBuffer
+            if (existing != null && existing.channels == channelCount) {
+                return existing
+            }
+            val created = TurntablePcmRingBuffer(channelCount = channelCount)
+            turntableRingBuffer = created
+            return created
+        }
+
+        var activeRingBuffer = ensureSafeModeRingBuffer(channels)?.also { it.reset(0L) }
+        var resampler = if (activeRingBuffer != null) TurntableResampler(sampleRate, channels) else null
+        var scratchChunkFrames = (sampleRate / 66).coerceIn(256, 4096)
+        var teeFloats = if (activeRingBuffer != null) {
+            FloatArray(maxOf(bufferSize / currentFormat.encoding.bytesPerSample.coerceAtLeast(1), 4096))
+        } else {
+            FloatArray(0)
+        }
+        var scratchOutFloats = if (activeRingBuffer != null) FloatArray(scratchChunkFrames * channels) else FloatArray(0)
+        var scratchOutBytes = if (activeRingBuffer != null) ByteArray(scratchChunkFrames * bytesPerFrame) else ByteArray(0)
+
         var seekBaseMs = initialSeekMs.coerceAtLeast(0L)
+        var streamOriginMs = seekBaseMs
         var headBaseFrames = readUnsignedPlaybackHeadFrames(currentTrack)
         var totalFramesWrittenToTrack = headBaseFrames
+        var streamFramesWrittenToTrack = 0L
+        var ringDrainCursorFrame = -1L
+        var exitFadeFramesRemaining = 0
+        var decoderEosDuringScratch = false
         var countHeadFrames = headBaseFrames
         var pendingPlayCountMs = 0L
         var wasPausedInLoop = false
@@ -1051,6 +1151,12 @@ class AudioOutputEngine(
                     remainderLen = 0
                     val actualSeekMs = currentDecoder.seekToMs(requestedSeek)
                     seekBaseMs = actualSeekMs
+                    streamOriginMs = actualSeekMs
+                    activeRingBuffer?.reset(0L)
+                    streamFramesWrittenToTrack = 0L
+                    ringDrainCursorFrame = -1L
+                    exitFadeFramesRemaining = 0
+                    decoderEosDuringScratch = false
                     headBaseFrames = readUnsignedPlaybackHeadFrames(currentTrack)
                     totalFramesWrittenToTrack = headBaseFrames
                     countHeadFrames = headBaseFrames
@@ -1090,7 +1196,354 @@ class AudioOutputEngine(
                     wasPausedInLoop = false
                 }
 
-                val bytesRead = currentDecoder.readPcm(pcmBuffer)
+                // Safe-Mode-only live turntable scratch loop (~35-40 ms latency, zero AudioTrack rebuild).
+                if (turntableScratchRequested.get()) {
+                    val ringBuf = activeRingBuffer
+                    val scratchResampler = resampler
+                    if (safetyController.state().mode != AudioOutputMode.SAFE_VOLUME_MODE ||
+                        ringBuf == null ||
+                        scratchResampler == null
+                    ) {
+                        abortTurntableScratch()
+                    } else {
+                        // 1. Flush and freeze PlayCountTracker so scratching never inflates listening time.
+                        accumulateActivePlayTime(forceFlush = true)
+
+                        // 2. Anchor scratch cursor to the exact hardware playback head currently reaching the speaker.
+                        val hwHeadOnEntry = readUnsignedPlaybackHeadFrames(currentTrack)
+                        val queuedAhead = (totalFramesWrittenToTrack - hwHeadOnEntry).coerceAtLeast(0L)
+                        val currentStreamHead = if (ringDrainCursorFrame >= 0L) {
+                            ringDrainCursorFrame
+                        } else {
+                            streamFramesWrittenToTrack
+                        }
+                        val oldestF = ringBuf.oldestAvailableFrame
+                        val maxReadableF = (ringBuf.writeHeadFrame - 1L).coerceAtLeast(oldestF)
+                        var scratchCursorFrame = (currentStreamHead - queuedAhead)
+                            .coerceIn(oldestF, maxReadableF)
+                            .toDouble()
+
+                        // 3. Flush ~160 ms normal lookahead once so live turntable audio reacts in ~35-40 ms.
+                        safePauseTrack(currentTrack)
+                        safeFlushTrack(currentTrack)
+                        headBaseFrames = readUnsignedPlaybackHeadFrames(currentTrack)
+                        totalFramesWrittenToTrack = headBaseFrames
+                        countHeadFrames = headBaseFrames
+                        safePlayTrack(currentTrack)
+
+                        val initialRate = Float.fromBits(turntableTargetRateBits.get())
+                        scratchResampler.resetForScratchEntry(initialRate)
+                        val minVirtualFrame = -(streamOriginMs.toDouble() * sampleRate.toDouble() / 1000.0)
+                        val maxVirtualFrame = if (durationMs > 0L) {
+                            ((durationMs - streamOriginMs).toDouble() * sampleRate.toDouble() / 1000.0)
+                                .coerceAtLeast(minVirtualFrame)
+                        } else {
+                            Double.MAX_VALUE
+                        }
+                        val maxAheadFrames = (sampleRate / 25).toLong().coerceAtLeast(256L)
+
+                        while (turntableScratchRequested.get() &&
+                            !stopWorkerFlag.get() &&
+                            !releasedFlag.get() &&
+                            !isPausedFlag.get() &&
+                            pendingSeekMs.get() < 0L &&
+                            safetyController.state().mode == AudioOutputMode.SAFE_VOLUME_MODE
+                        ) {
+                            val hwHead = readUnsignedPlaybackHeadFrames(currentTrack)
+                            val ahead = (totalFramesWrittenToTrack - hwHead).coerceAtLeast(0L)
+                            if (ahead > maxAheadFrames) {
+                                try {
+                                    Thread.sleep(4L)
+                                } catch (_: InterruptedException) {
+                                    break
+                                }
+                                continue
+                            }
+
+                            val targetRate = Float.fromBits(turntableTargetRateBits.get())
+
+                            // Forward scratch: decode additional PCM into ring buffer up to +4.0x real-time.
+                            if ((targetRate > 0f || scratchResampler.currentRate > 0f) && !decoderEosDuringScratch) {
+                                val peakForwardRate = maxOf(targetRate, scratchResampler.currentRate, 0f).toDouble()
+                                val neededEndFrame = ceil(
+                                    scratchCursorFrame + peakForwardRate * scratchChunkFrames.toDouble() + 4.0,
+                                ).toLong()
+                                var reads = 0
+                                while (ringBuf.writeHeadFrame <= neededEndFrame &&
+                                    reads < 12 &&
+                                    !decoderEosDuringScratch &&
+                                    !stopWorkerFlag.get() &&
+                                    !releasedFlag.get() &&
+                                    turntableScratchRequested.get()
+                                ) {
+                                    reads++
+                                    val br = currentDecoder.readPcm(pcmBuffer)
+                                    if (currentDecoder.formatVersion != observedFormatVersion) {
+                                        abortTurntableScratch()
+                                        break
+                                    }
+                                    if (br < 0) {
+                                        decoderEosDuringScratch = true
+                                        break
+                                    }
+                                    if (br == 0) break
+
+                                    val comb: ByteArray
+                                    val totLen: Int
+                                    if (remainderLen > 0) {
+                                        totLen = remainderLen + br
+                                        comb = ByteArray(totLen)
+                                        System.arraycopy(remainder, 0, comb, 0, remainderLen)
+                                        System.arraycopy(pcmBuffer, 0, comb, remainderLen, br)
+                                        remainderLen = 0
+                                    } else {
+                                        comb = pcmBuffer
+                                        totLen = br
+                                    }
+                                    val alLen = PcmStreamRules.alignByteCountToFrame(totLen, bytesPerFrame)
+                                    val trLen = totLen - alLen
+                                    if (trLen > 0) {
+                                        System.arraycopy(comb, alLen, remainder, 0, trLen)
+                                        remainderLen = trLen
+                                    }
+                                    if (alLen > 0) {
+                                        val neededFloats = alLen / currentFormat.encoding.bytesPerSample
+                                        if (teeFloats.size < neededFloats) {
+                                            teeFloats = FloatArray(neededFloats)
+                                        }
+                                        val decodedFloats = TurntablePcmCodec.decodePcmBytesToFloats(
+                                            encoding = currentFormat.encoding,
+                                            srcBytes = comb,
+                                            byteOffset = 0,
+                                            byteCount = alLen,
+                                            destFloats = teeFloats,
+                                        )
+                                        val decodedFrames = decodedFloats / channels
+                                        if (decodedFrames > 0) {
+                                            ringBuf.appendInterleavedFloats(teeFloats, decodedFrames)
+                                        }
+                                    }
+                                }
+                            }
+
+                            val effectiveMaxFrame = if (decoderEosDuringScratch && ringBuf.writeHeadFrame > 0L) {
+                                minOf(maxVirtualFrame, (ringBuf.writeHeadFrame - 1L).toDouble())
+                            } else {
+                                maxVirtualFrame
+                            }
+
+                            val rgGain = activeReplayGainResolution.linearGain
+                            val step = scratchResampler.renderChunk(
+                                ringBuffer = ringBuf,
+                                targetRate = targetRate,
+                                startCursorFrame = scratchCursorFrame,
+                                minVirtualFrame = minVirtualFrame,
+                                maxVirtualFrame = effectiveMaxFrame,
+                                outFrames = scratchChunkFrames,
+                                destFloats = scratchOutFloats,
+                                replayGainLinear = rgGain,
+                            )
+                            scratchCursorFrame = step.nextCursorFrame
+
+                            val framesWritten = writeNormalizedFloatsToTrack(
+                                track = currentTrack,
+                                encoding = currentFormat.encoding,
+                                srcFloats = scratchOutFloats,
+                                frameCount = step.framesRendered,
+                                channels = channels,
+                                bytesPerFrame = bytesPerFrame,
+                                scratchBytes = scratchOutBytes,
+                                directBuffer = directBuffer,
+                            )
+                            if (framesWritten > 0) {
+                                totalFramesWrittenToTrack += framesWritten.toLong()
+                            }
+
+                            val liveTrackMs = (streamOriginMs + (scratchCursorFrame * 1000.0) / sampleRate.toDouble())
+                                .roundToLong()
+                                .let { if (durationMs > 0L) it.coerceIn(0L, durationMs) else it.coerceAtLeast(0L) }
+                            _playbackPositionMs.value = liveTrackMs
+                        }
+
+                        // Exit turntable scratch cleanly
+                        val cleanExitToPlay = !stopWorkerFlag.get() &&
+                            !releasedFlag.get() &&
+                            !isPausedFlag.get() &&
+                            pendingSeekMs.get() < 0L &&
+                            safetyController.state().mode == AudioOutputMode.SAFE_VOLUME_MODE
+
+                        if (cleanExitToPlay) {
+                            val fadeOutFrames = scratchResampler.exitFadeDurationFrames().coerceAtMost(scratchChunkFrames)
+                            if (scratchResampler.fadeGain > 0.01f && fadeOutFrames > 0) {
+                                val tailStep = scratchResampler.renderChunk(
+                                    ringBuffer = ringBuf,
+                                    targetRate = scratchResampler.currentRate,
+                                    startCursorFrame = scratchCursorFrame,
+                                    minVirtualFrame = minVirtualFrame,
+                                    maxVirtualFrame = maxVirtualFrame,
+                                    outFrames = fadeOutFrames,
+                                    destFloats = scratchOutFloats,
+                                    replayGainLinear = activeReplayGainResolution.linearGain,
+                                    forceFadeOut = true,
+                                )
+                                scratchCursorFrame = tailStep.nextCursorFrame
+                                val tailWritten = writeNormalizedFloatsToTrack(
+                                    track = currentTrack,
+                                    encoding = currentFormat.encoding,
+                                    srcFloats = scratchOutFloats,
+                                    frameCount = tailStep.framesRendered,
+                                    channels = channels,
+                                    bytesPerFrame = bytesPerFrame,
+                                    scratchBytes = scratchOutBytes,
+                                    directBuffer = directBuffer,
+                                )
+                                if (tailWritten > 0) {
+                                    totalFramesWrittenToTrack += tailWritten.toLong()
+                                }
+                            }
+
+                            val fallbackMs = turntableFallbackSeekMs.getAndSet(-1L)
+                            val targetMs = if (fallbackMs >= 0L) {
+                                fallbackMs.let { if (durationMs > 0L) it.coerceIn(0L, durationMs) else it }
+                            } else {
+                                (streamOriginMs + (scratchCursorFrame * 1000.0) / sampleRate.toDouble())
+                                    .roundToLong()
+                                    .let { if (durationMs > 0L) it.coerceIn(0L, durationMs) else it.coerceAtLeast(0L) }
+                            }
+
+                            val cursorFrameLong = scratchCursorFrame.roundToLong()
+                            val cursorInsideRing = ringBuf.bufferedFrameCount > 0 &&
+                                cursorFrameLong >= ringBuf.oldestAvailableFrame &&
+                                cursorFrameLong <= ringBuf.writeHeadFrame &&
+                                fallbackMs < 0L
+
+                            if (cursorInsideRing) {
+                                // Fast Seamless Path: zero MediaCodec.flush()! Drain ring buffer at 1.0x back to writeHead.
+                                ringDrainCursorFrame = cursorFrameLong
+                                exitFadeFramesRemaining = scratchResampler.exitFadeDurationFrames()
+                                seekBaseMs = targetMs
+                                headBaseFrames = totalFramesWrittenToTrack
+                                countHeadFrames = maxOf(readUnsignedPlaybackHeadFrames(currentTrack), headBaseFrames)
+                                lastUiUpdateNano = 0L
+                                _playbackPositionMs.value = targetMs
+                            } else {
+                                // Deep Rewind Path: rewound past oldestAvailableFrame -> single clean seekToMs.
+                                safePauseTrack(currentTrack)
+                                safeFlushTrack(currentTrack)
+                                remainderLen = 0
+                                ringBuf.reset(0L)
+                                ringDrainCursorFrame = -1L
+                                exitFadeFramesRemaining = 0
+                                decoderEosDuringScratch = false
+                                val actualSeekMs = currentDecoder.seekToMs(targetMs)
+                                streamOriginMs = actualSeekMs
+                                seekBaseMs = actualSeekMs
+                                streamFramesWrittenToTrack = 0L
+                                headBaseFrames = readUnsignedPlaybackHeadFrames(currentTrack)
+                                totalFramesWrittenToTrack = headBaseFrames
+                                countHeadFrames = headBaseFrames
+                                lastUiUpdateNano = 0L
+                                _playbackPositionMs.value = actualSeekMs
+                                safePlayTrack(currentTrack)
+                            }
+                        } else {
+                            turntableFallbackSeekMs.set(-1L)
+                            val finalMs = (streamOriginMs + (scratchCursorFrame * 1000.0) / sampleRate.toDouble())
+                                .roundToLong()
+                                .let { if (durationMs > 0L) it.coerceIn(0L, durationMs) else it.coerceAtLeast(0L) }
+                            _playbackPositionMs.value = finalMs
+                            countHeadFrames = maxOf(readUnsignedPlaybackHeadFrames(currentTrack), headBaseFrames)
+                            if (isPausedFlag.get() && !stopWorkerFlag.get() && !releasedFlag.get() && pendingSeekMs.get() < 0L) {
+                                val cursorLong = scratchCursorFrame.roundToLong()
+                                if (ringBuf.bufferedFrameCount > 0 &&
+                                    cursorLong >= ringBuf.oldestAvailableFrame &&
+                                    cursorLong <= ringBuf.writeHeadFrame
+                                ) {
+                                    ringDrainCursorFrame = cursorLong
+                                    seekBaseMs = finalMs
+                                    headBaseFrames = totalFramesWrittenToTrack
+                                    countHeadFrames = maxOf(readUnsignedPlaybackHeadFrames(currentTrack), headBaseFrames)
+                                } else {
+                                    pendingSeekMs.set(finalMs)
+                                }
+                            }
+                        }
+                        continue
+                    }
+                }
+
+                // Fast seamless post-scratch drain: play remaining buffered 1.0x frames before resuming decoder reads.
+                if (ringDrainCursorFrame >= 0L && activeRingBuffer != null) {
+                    val ringBuf = activeRingBuffer
+                    if (ringDrainCursorFrame < ringBuf.writeHeadFrame) {
+                        val copiedFrames = ringBuf.copyFramesAt1x(
+                            startFrame = ringDrainCursorFrame,
+                            maxFrames = scratchChunkFrames,
+                            destFloats = scratchOutFloats,
+                        )
+                        if (copiedFrames > 0) {
+                            val floatCount = copiedFrames * channels
+                            val effectiveGain =
+                                if (safetyController.state().mode == AudioOutputMode.BIT_PERFECT_OPT_IN) {
+                                    1.0f
+                                } else {
+                                    activeReplayGainResolution.linearGain
+                                }
+                            if (ReplayGainProcessor.needsSampleScaling(effectiveGain)) {
+                                ReplayGainProcessor.applyGainToFloatSamples(scratchOutFloats, floatCount, effectiveGain)
+                            }
+                            if (exitFadeFramesRemaining > 0 && resampler != null) {
+                                exitFadeFramesRemaining = resampler.applyExitFadeIn(
+                                    destFloats = scratchOutFloats,
+                                    frameCount = copiedFrames,
+                                    remainingFadeFrames = exitFadeFramesRemaining,
+                                )
+                            }
+                            val framesWritten = writeNormalizedFloatsToTrack(
+                                track = currentTrack,
+                                encoding = currentFormat.encoding,
+                                srcFloats = scratchOutFloats,
+                                frameCount = copiedFrames,
+                                channels = channels,
+                                bytesPerFrame = bytesPerFrame,
+                                scratchBytes = scratchOutBytes,
+                                directBuffer = directBuffer,
+                            )
+                            if (framesWritten > 0) {
+                                totalFramesWrittenToTrack += framesWritten.toLong()
+                                ringDrainCursorFrame += framesWritten.toLong()
+                                streamFramesWrittenToTrack = ringDrainCursorFrame
+                            }
+                            accumulateActivePlayTime(forceFlush = false)
+                            val nowNano = System.nanoTime()
+                            if (nowNano - lastUiUpdateNano >= 50_000_000L) {
+                                lastUiUpdateNano = nowNano
+                                val headFrames = readUnsignedPlaybackHeadFrames(currentTrack)
+                                val deltaFrames = (headFrames - headBaseFrames).coerceAtLeast(0L)
+                                val computedPos = seekBaseMs + (deltaFrames * 1000L) / sampleRate.toLong()
+                                val clampedPos = if (durationMs > 0L) computedPos.coerceIn(0L, durationMs) else computedPos
+                                _playbackPositionMs.value = clampedPos
+
+                                val nextReq = queuedNextRequest
+                                if (GaplessTransitionPolicy.shouldStartPreload(
+                                        gaplessEnabled = gaplessEnabled,
+                                        hasNextTrack = nextReq != null,
+                                        isAlreadyPreloadingOrReady = isNextPreloadedOrLoading(nextReq?.uri),
+                                        currentPositionMs = clampedPos,
+                                        durationMs = durationMs,
+                                    )
+                                ) {
+                                    triggerPreloadAsync(nextReq, expectedGeneration)
+                                }
+                            }
+                            continue
+                        }
+                    }
+                    streamFramesWrittenToTrack = ringBuf.writeHeadFrame
+                    ringDrainCursorFrame = -1L
+                }
+
+                val bytesRead = if (decoderEosDuringScratch) -1 else currentDecoder.readPcm(pcmBuffer)
                 if (bytesRead < 0) {
                     accumulateActivePlayTime(forceFlush = true)
                     val preloaded = takePreloadedTrackIfReady(expectedGeneration)
@@ -1133,8 +1586,16 @@ class AudioOutputEngine(
                         sampleRate = currentFormat.sampleRateHz.coerceAtLeast(1)
                         durationMs = currentFormat.durationMs.coerceAtLeast(0L)
                         bytesPerFrame = currentFormat.bytesPerFrame.coerceAtLeast(1)
+                        channels = currentFormat.channelCount.coerceIn(1, 8)
+                        activeRingBuffer = ensureSafeModeRingBuffer(channels)?.also { it.reset(0L) }
+                        resampler = if (activeRingBuffer != null) TurntableResampler(sampleRate, channels) else null
                         remainderLen = 0
                         seekBaseMs = 0L
+                        streamOriginMs = 0L
+                        streamFramesWrittenToTrack = 0L
+                        ringDrainCursorFrame = -1L
+                        exitFadeFramesRemaining = 0
+                        decoderEosDuringScratch = false
                         // Track B begins playing at the exact hardware frame count already queued for Track A.
                         headBaseFrames = totalFramesWrittenToTrack
                         countHeadFrames = maxOf(readUnsignedPlaybackHeadFrames(currentTrack), headBaseFrames)
@@ -1212,13 +1673,29 @@ class AudioOutputEngine(
                         sampleRate = currentFormat.sampleRateHz.coerceAtLeast(1)
                         durationMs = currentFormat.durationMs.coerceAtLeast(0L)
                         bytesPerFrame = currentFormat.bytesPerFrame.coerceAtLeast(1)
+                        channels = currentFormat.channelCount.coerceIn(1, 8)
                         bufferSize = PcmStreamRules.computeAlignedBufferSize(16_384, bytesPerFrame)
                         pcmBuffer = ByteArray(bufferSize)
                         directBuffer = ByteBuffer.allocateDirect(bufferSize).order(ByteOrder.LITTLE_ENDIAN)
                         floatBuffer = FloatArray(bufferSize / 4)
                         remainder = ByteArray(bytesPerFrame)
                         remainderLen = 0
+                        activeRingBuffer = ensureSafeModeRingBuffer(channels)?.also { it.reset(0L) }
+                        resampler = if (activeRingBuffer != null) TurntableResampler(sampleRate, channels) else null
+                        scratchChunkFrames = (sampleRate / 66).coerceIn(256, 4096)
+                        teeFloats = if (activeRingBuffer != null) {
+                            FloatArray(maxOf(bufferSize / currentFormat.encoding.bytesPerSample.coerceAtLeast(1), 4096))
+                        } else {
+                            FloatArray(0)
+                        }
+                        scratchOutFloats = if (activeRingBuffer != null) FloatArray(scratchChunkFrames * channels) else FloatArray(0)
+                        scratchOutBytes = if (activeRingBuffer != null) ByteArray(scratchChunkFrames * bytesPerFrame) else ByteArray(0)
                         seekBaseMs = _playbackPositionMs.value
+                        streamOriginMs = seekBaseMs
+                        streamFramesWrittenToTrack = 0L
+                        ringDrainCursorFrame = -1L
+                        exitFadeFramesRemaining = 0
+                        decoderEosDuringScratch = false
                         headBaseFrames = readUnsignedPlaybackHeadFrames(currentTrack)
                         totalFramesWrittenToTrack = headBaseFrames
                         countHeadFrames = headBaseFrames
@@ -1258,6 +1735,25 @@ class AudioOutputEngine(
                 }
 
                 if (alignedLen > 0) {
+                    // Safe-Mode-only pre-ReplayGain ring-buffer tee (zero allocs; NEVER runs in Bit-Perfect mode).
+                    if (safetyController.state().mode == AudioOutputMode.SAFE_VOLUME_MODE && activeRingBuffer != null) {
+                        val neededFloats = alignedLen / currentFormat.encoding.bytesPerSample
+                        if (teeFloats.size < neededFloats) {
+                            teeFloats = FloatArray(neededFloats)
+                        }
+                        val decodedFloats = TurntablePcmCodec.decodePcmBytesToFloats(
+                            encoding = currentFormat.encoding,
+                            srcBytes = combinedBytes,
+                            byteOffset = 0,
+                            byteCount = alignedLen,
+                            destFloats = teeFloats,
+                        )
+                        val decodedFrames = decodedFloats / channels
+                        if (decodedFrames > 0) {
+                            activeRingBuffer.appendInterleavedFloats(teeFloats, decodedFrames)
+                        }
+                    }
+
                     // Mandatory Bit-Perfect Invariant: strictly bypass ReplayGain (gain = 1.0f) in BIT_PERFECT_OPT_IN.
                     val effectiveLinearGain =
                         if (safetyController.state().mode == AudioOutputMode.BIT_PERFECT_OPT_IN) {
@@ -1275,7 +1771,9 @@ class AudioOutputEngine(
                         linearGain = effectiveLinearGain,
                     )
                     if (bytesWritten > 0) {
-                        totalFramesWrittenToTrack += (bytesWritten / bytesPerFrame).toLong()
+                        val writtenFrames = (bytesWritten / bytesPerFrame).toLong()
+                        totalFramesWrittenToTrack += writtenFrames
+                        streamFramesWrittenToTrack += writtenFrames
                     }
                     accumulateActivePlayTime(forceFlush = false)
                 }
@@ -1323,6 +1821,7 @@ class AudioOutputEngine(
                 }
             }
         } finally {
+            abortTurntableScratch()
             runCatching { accumulateActivePlayTime(forceFlush = true) }
         }
     }
@@ -1477,6 +1976,88 @@ class AudioOutputEngine(
             offset += chunkLen
         }
         return totalBytesWritten
+    }
+
+    /**
+     * Encodes and writes [frameCount] normalized interleaved float PCM frames (`-1.0f..1.0f`) to
+     * [track] using its active [encoding] with zero per-chunk heap allocations. Used strictly by
+     * Safe-Mode live turntable scratch rendering and seamless `1.0x` ring-buffer exit draining.
+     * Returns total PCM frames written.
+     */
+    private fun writeNormalizedFloatsToTrack(
+        track: AudioTrack,
+        encoding: PcmEncodingType,
+        srcFloats: FloatArray,
+        frameCount: Int,
+        channels: Int,
+        bytesPerFrame: Int,
+        scratchBytes: ByteArray,
+        directBuffer: ByteBuffer,
+    ): Int {
+        if (frameCount <= 0 || channels <= 0) return 0
+        val totalFloats = frameCount * channels
+
+        if (encoding == PcmEncodingType.PCM_FLOAT || track.audioFormat == AudioFormat.ENCODING_PCM_FLOAT) {
+            var floatOffset = 0
+            while (floatOffset < totalFloats && !stopWorkerFlag.get() && !releasedFlag.get()) {
+                val written = track.write(
+                    srcFloats,
+                    floatOffset,
+                    totalFloats - floatOffset,
+                    AudioTrack.WRITE_BLOCKING,
+                )
+                if (written < 0) {
+                    throw AudioDecodeException.IoError("AudioTrack float scratch write failed with code $written")
+                }
+                if (written == 0) {
+                    if (isPausedFlag.get()) return floatOffset / channels
+                    Thread.sleep(2L)
+                } else {
+                    floatOffset += written
+                }
+            }
+            return floatOffset / channels
+        }
+
+        val totalNeededBytes = frameCount * bytesPerFrame
+        val targetBytes = if (scratchBytes.size >= totalNeededBytes) {
+            scratchBytes
+        } else {
+            ByteArray(totalNeededBytes)
+        }
+        val encodedBytes = TurntablePcmCodec.encodeFloatsToPcmBytes(
+            encoding = encoding,
+            srcFloats = srcFloats,
+            floatCount = totalFloats,
+            destBytes = targetBytes,
+        )
+        var offset = 0
+        var totalBytesWritten = 0
+        while (offset < encodedBytes && !stopWorkerFlag.get() && !releasedFlag.get()) {
+            val chunkLen = minOf(encodedBytes - offset, directBuffer.capacity())
+            directBuffer.clear()
+            directBuffer.put(targetBytes, offset, chunkLen)
+            directBuffer.flip()
+
+            while (directBuffer.hasRemaining() && !stopWorkerFlag.get() && !releasedFlag.get()) {
+                val written = track.write(
+                    directBuffer,
+                    directBuffer.remaining(),
+                    AudioTrack.WRITE_BLOCKING,
+                )
+                if (written < 0) {
+                    throw AudioDecodeException.IoError("AudioTrack scratch write failed with code $written")
+                }
+                if (written == 0) {
+                    if (isPausedFlag.get()) return totalBytesWritten / bytesPerFrame
+                    Thread.sleep(2L)
+                } else {
+                    totalBytesWritten += written
+                }
+            }
+            offset += chunkLen
+        }
+        return totalBytesWritten / bytesPerFrame
     }
 
     private fun isNextPreloadedOrLoading(uri: Uri?): Boolean {
@@ -1702,6 +2283,7 @@ class AudioOutputEngine(
     }
 
     private fun stopWorkerAndReleaseTrackLocked(clearMixer: Boolean) {
+        abortTurntableScratch()
         stopWorkerFlag.set(true)
         isPausedFlag.set(true)
 
@@ -1728,6 +2310,10 @@ class AudioOutputEngine(
         activeDecoder = null
         if (decoder != null) {
             runCatching { decoder.close() }
+        }
+
+        if (safetyController.state().mode == AudioOutputMode.BIT_PERFECT_OPT_IN) {
+            turntableRingBuffer = null
         }
 
         if (clearMixer) {

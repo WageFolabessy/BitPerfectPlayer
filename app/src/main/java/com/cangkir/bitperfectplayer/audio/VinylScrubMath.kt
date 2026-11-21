@@ -183,6 +183,19 @@ object VinylScrubMath {
     }
 
     /**
+     * Maps finger angular velocity (`deg/s`) to a live Safe-Mode turntable audio playback rate
+     * in `[-4.0f, +4.0f]` (`0.0f` inside the `< 6 deg/s` hold deadband).
+     */
+    fun angularVelocityToPlaybackRate(angularVelocityDegPerSec: Float): Float =
+        TurntableSpeedController.mapAngularVelocityToRate(angularVelocityDegPerSec)
+
+    /**
+     * Formats a live turntable playback rate concisely (`"2.1×"`, `"-1.4×"`, `"HOLD"`).
+     */
+    fun formatPlaybackRateBadge(playbackRate: Float): String =
+        TurntableSpeedController.formatSpeedBadge(playbackRate)
+
+    /**
      * Formats a signed millisecond scrub delta concisely for the live turntable HUD badge
      * (e.g., `"+00:12"`, `"-00:07"`, `"00:00"`).
      */

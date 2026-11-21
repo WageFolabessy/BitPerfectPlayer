@@ -352,6 +352,27 @@ class PlaybackController(
         persistCurrentPositionAsync()
     }
 
+    /**
+     * Begins real-time turntable scratch DSP strictly in Safe Mode while playing.
+     * Returns `false` (strict no-op) in Bit-Perfect Opt-In mode or while paused/idle.
+     */
+    fun beginTurntableScratch(): Boolean {
+        val started = engine.beginTurntableScratch()
+        if (started) {
+            playCountTracker.onSeek()
+        }
+        return started
+    }
+
+    fun updateTurntableScratchRate(playbackRate: Float) {
+        engine.updateTurntableScratchRate(playbackRate)
+    }
+
+    fun endTurntableScratch(fallbackTargetMs: Long? = null) {
+        engine.endTurntableScratch(fallbackTargetMs)
+        persistCurrentPositionAsync()
+    }
+
     fun stop() {
         playCountTracker.clearSession()?.let { persistPlayCountFlush(it) }
         persistCurrentPositionAsync()

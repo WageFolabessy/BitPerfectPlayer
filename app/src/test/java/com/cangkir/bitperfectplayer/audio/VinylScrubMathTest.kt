@@ -150,4 +150,20 @@ class VinylScrubMathTest {
         assertEquals("+01:05", VinylScrubMath.formatSignedDeltaMs(65_000L))
         assertEquals("-1:01:01", VinylScrubMath.formatSignedDeltaMs(-3_661_000L))
     }
+
+    @Test
+    fun angularVelocityToPlaybackRate_mapsDeadbandForwardReverseAndCapCleanly() {
+        assertEquals(0.0f, VinylScrubMath.angularVelocityToPlaybackRate(0f), 1e-6f)
+        assertEquals(0.0f, VinylScrubMath.angularVelocityToPlaybackRate(5.5f), 1e-6f)
+        assertEquals(0.0f, VinylScrubMath.angularVelocityToPlaybackRate(-5.5f), 1e-6f)
+
+        assertTrue(VinylScrubMath.angularVelocityToPlaybackRate(20f) in 0.6f..1.0f)
+        assertTrue(VinylScrubMath.angularVelocityToPlaybackRate(90f) in 1.6f..2.0f)
+        assertEquals(4.0f, VinylScrubMath.angularVelocityToPlaybackRate(360f), 1e-6f)
+        assertEquals(-4.0f, VinylScrubMath.angularVelocityToPlaybackRate(-400f), 1e-6f)
+
+        assertEquals("HOLD", VinylScrubMath.formatPlaybackRateBadge(0f))
+        assertEquals("2.1×", VinylScrubMath.formatPlaybackRateBadge(2.1f))
+        assertEquals("-1.4×", VinylScrubMath.formatPlaybackRateBadge(-1.4f))
+    }
 }

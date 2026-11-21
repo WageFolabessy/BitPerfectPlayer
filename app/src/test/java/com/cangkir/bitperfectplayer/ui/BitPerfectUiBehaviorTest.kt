@@ -4,7 +4,9 @@ import android.Manifest
 import android.app.Application
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasScrollToIndexAction
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -16,6 +18,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTouchInput
 import androidx.test.core.app.ApplicationProvider
 import com.cangkir.bitperfectplayer.audio.AudioOutputMode
 import com.cangkir.bitperfectplayer.audio.AudioSafetyState
@@ -617,5 +620,111 @@ class BitPerfectUiBehaviorTest {
         composeRule.onNodeWithText("Square Cover").assertIsDisplayed().performClick()
 
         assertEquals(listOf(NowPlayingArtworkStyle.SQUARE_COVER), selections)
+    }
+
+    @Test
+    fun interactiveVinylDisc_inSafeModePlaying_engagesLiveTurntableScratchAndShowsHoldBadge() {
+        composeRule.mainClock.autoAdvance = false
+        val positionFlow = MutableStateFlow(60_000L)
+        var beginCalls = 0
+        val streamedRates = mutableListOf<Float>()
+        val endCalls = mutableListOf<Long?>()
+        val silentSeeks = mutableListOf<Long>()
+
+        composeRule.setContent {
+            BitPerfectPlayerTheme {
+                val previewMs = remember { mutableStateOf<Long?>(null) }
+                InteractiveVinylDisc(
+                    track = hiResFlacTrack,
+                    isPlaying = true,
+                    isSafeMode = true,
+                    durationMs = hiResFlacTrack.durationMs,
+                    playbackPositionMsFlow = positionFlow,
+                    scrubPreviewMsState = previewMs,
+                    albumArtworkLoader = artworkLoader,
+                    onSeekTo = { silentSeeks.add(it) },
+                    onBeginTurntableScratch = {
+                        beginCalls++
+                        true
+                    },
+                    onUpdateTurntableScratchRate = { streamedRates.add(it) },
+                    onEndTurntableScratch = { endCalls.add(it) },
+                )
+            }
+        }
+        composeRule.mainClock.advanceTimeBy(32L)
+
+        val vinylDesc = "Vinyl disc turntable for Peacemaker. Drag circularly to seek."
+        // Touch down on outer scrub ring (3 o'clock) -> immediately enters live HOLD state.
+        composeRule.onNodeWithContentDescription(vinylDesc).performTouchInput {
+            down(Offset(width * 0.85f, height * 0.50f))
+        }
+        composeRule.mainClock.advanceTimeBy(32L)
+        assertEquals(1, beginCalls)
+        assertTrue(streamedRates.isNotEmpty())
+        assertEquals(0f, streamedRates.last(), 0.001f)
+        composeRule.onNodeWithText("HOLD").assertIsDisplayed()
+
+        // Drag clockwise to 6 o'clock (+90° in 40 ms), hold still to cancel inertia, then lift.
+        composeRule.onNodeWithContentDescription(vinylDesc).performTouchInput {
+            advanceEventTime(40L)
+            moveTo(Offset(width * 0.50f, height * 0.85f))
+            advanceEventTime(100L)
+            up()
+        }
+        composeRule.mainClock.advanceTimeBy(32L)
+
+        assertTrue("Expected positive forward varispeed rate during clockwise drag", streamedRates.any { it > 0.5f })
+        assertEquals(1, endCalls.size)
+        assertTrue("Live scratch must not invoke silent onSeekTo", silentSeeks.isEmpty())
+    }
+
+    @Test
+    fun interactiveVinylDisc_inBitPerfectMode_neverEngagesLiveScratchAndUsesSilentSeek() {
+        composeRule.mainClock.autoAdvance = false
+        val positionFlow = MutableStateFlow(60_000L)
+        var beginCalls = 0
+        val streamedRates = mutableListOf<Float>()
+        val endCalls = mutableListOf<Long?>()
+        val silentSeeks = mutableListOf<Long>()
+
+        composeRule.setContent {
+            BitPerfectPlayerTheme {
+                val previewMs = remember { mutableStateOf<Long?>(null) }
+                InteractiveVinylDisc(
+                    track = hiResFlacTrack,
+                    isPlaying = true,
+                    isSafeMode = false, // BIT_PERFECT_OPT_IN
+                    durationMs = hiResFlacTrack.durationMs,
+                    playbackPositionMsFlow = positionFlow,
+                    scrubPreviewMsState = previewMs,
+                    albumArtworkLoader = artworkLoader,
+                    onSeekTo = { silentSeeks.add(it) },
+                    onBeginTurntableScratch = {
+                        beginCalls++
+                        true
+                    },
+                    onUpdateTurntableScratchRate = { streamedRates.add(it) },
+                    onEndTurntableScratch = { endCalls.add(it) },
+                )
+            }
+        }
+        composeRule.mainClock.advanceTimeBy(32L)
+
+        val vinylDesc = "Vinyl disc turntable for Peacemaker. Drag circularly to seek."
+        composeRule.onNodeWithContentDescription(vinylDesc).performTouchInput {
+            down(Offset(width * 0.85f, height * 0.50f))
+            advanceEventTime(40L)
+            moveTo(Offset(width * 0.50f, height * 0.85f))
+            advanceEventTime(100L)
+            up()
+        }
+        composeRule.mainClock.advanceTimeBy(32L)
+
+        assertEquals(0, beginCalls)
+        assertTrue(streamedRates.isEmpty())
+        assertTrue(endCalls.isEmpty())
+        assertEquals(1, silentSeeks.size)
+        assertTrue("Clockwise silent scrub should seek forward past 60,000 ms", silentSeeks.single() > 60_000L)
     }
 }

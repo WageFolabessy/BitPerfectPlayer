@@ -122,6 +122,9 @@ fun NowPlayingScreen(
     onPrevious: () -> Unit,
     onNext: () -> Unit,
     onSeekTo: (Long) -> Unit,
+    onBeginTurntableScratch: () -> Boolean = { false },
+    onUpdateTurntableScratchRate: (Float) -> Unit = {},
+    onEndTurntableScratch: (Long?) -> Unit = {},
     onToggleShuffle: () -> Unit,
     onCycleRepeatMode: () -> Unit,
     onRequestBitPerfectMode: () -> Unit,
@@ -387,11 +390,15 @@ fun NowPlayingScreen(
                     InteractiveVinylDisc(
                         track = track,
                         isPlaying = playbackState.isPlaying,
+                        isSafeMode = isSafe,
                         durationMs = durationMs,
                         playbackPositionMsFlow = playbackPositionMsFlow,
                         scrubPreviewMsState = vinylScrubPreviewMs,
                         albumArtworkLoader = albumArtworkLoader,
                         onSeekTo = onSeekTo,
+                        onBeginTurntableScratch = onBeginTurntableScratch,
+                        onUpdateTurntableScratchRate = onUpdateTurntableScratchRate,
+                        onEndTurntableScratch = onEndTurntableScratch,
                     )
                 }
                 NowPlayingArtworkStyle.SQUARE_COVER -> {

@@ -511,5 +511,36 @@ Following physical testing of the signed Release APK on POCO F4 (Android 14 / Hy
 - **Pure-Kotlin Domain Boundary (`VinylScrubMath.kt`):** **PASS** — **0 `android.*` / `androidx.*` imports**.
 - **Physical Hardware Verification Pending (Not Executed in Cloud):** On POCO F4 (Android 14 / HyperOS, 120 Hz OLED) + KZ EDX Pro 2 USB-C, confirm tactile feel of slow/medium/fast rotational scrubbing, catchable flick inertia, zero scroll conflict with `verticalScroll`, haptic detent subtlety, zero audio stutter on 96/192 kHz FLAC seek commit, and stationary sheen visual depth.
 
+---
+
+## 16. Option A: Safe-Mode Real-Time Turntable Audio (Varispeed, Hold-to-Stop, & Reverse Scratch)
+
+### Delivered Architecture & UX
+1. **Pure-Kotlin Turntable DSP & Fixed-Cap Ring Buffer (`TurntableAudioDsp.kt`, `VinylScrubMath.kt`):**
+   - Implemented `TurntablePcmRingBuffer` capped strictly at **8 MB** (`MAX_RING_FLOATS = 2_097_152`, rounded down to a whole multiple of `channelCount`) storing normalized interleaved float PCM (`-1.0f..1.0f`) with absolute monotonic frame indices (`oldestAvailableFrame`..`writeHeadFrame`), O(1) append, O(1) linear fractional-frame interpolation (`readInterpolatedFrame`), and zero-allocation `1.0x` draining (`copyFramesAt1x`).
+   - Implemented `TurntablePcmCodec` for zero-allocation little-endian decode/encode across `PCM_FLOAT`, `PCM_16BIT`, `PCM_24BIT_PACKED`, and `PCM_32BIT` with strict saturation clamping (`[-1.0f, 1.0f]`).
+   - Implemented `TurntableSpeedController` mapping signed angular velocity (`deg/s`) continuously and odd-symmetrically to playback rate (`[-4.0f..+4.0f]`: deadband `< 6 deg/s -> 0.0f` HOLD, `20 deg/s -> 0.85x`, `90 deg/s -> 1.80x`, `>= 360 deg/s -> 4.0x`, plus compact HUD formatting `2.1×`, `-1.4×`, `HOLD`) and `TurntableScratchPolicy` enforcing strict `SAFE_VOLUME_MODE && isPlaying && hasActiveTrack` eligibility.
+   - Implemented `TurntableResampler` with per-sample ~12 ms exponential rate slew smoothing and 4 ms linear click-free gain envelopes on entry, hold, reverse boundary, and exit.
+2. **Real-Time Turntable Scratch Loop in `AudioOutputEngine.kt`:**
+   - **Strict Bit-Perfect Isolation:** Zero ring-buffer allocation or PCM teeing in `BIT_PERFECT_OPT_IN` mode; `turntableRingBuffer` is immediately released on `stop()`, `release()`, or switching into `BIT_PERFECT_OPT_IN`, and `beginTurntableScratch()` returns `false`.
+   - **Pre-ReplayGain Tee:** During normal `SAFE_VOLUME_MODE` playback, unmodified unity-gain PCM frames are teed into the 8 MB ring buffer *before* `writeAlignedPcmFully(...)` applies ReplayGain (preventing double-attenuation during scratch or exit draining), and reset cleanly on track load, seek, gapless transition, or mid-stream format change.
+   - **Low-Latency Scratch Loop (0 `AudioTrack` Rebuilds):** Anchors the cursor to the exact hardware playback head, flushes ~160 ms lookahead once on entry, freezes `PlayCountTracker` accumulation so scratching never inflates listening stats, throttles writes to ~40 ms lookahead (`sampleRate / 25`) in ~15 ms chunks, decodes forward ahead up to `+4.0x`, brakes cleanly to silence on `0.0x` hold, plays backwards cleanly through the ring buffer (and smoothly fades to silence while advancing the virtual cursor down to `00:00` on deep rewinds), applies Safe-Mode ReplayGain, and publishes live `_playbackPositionMs` every ~15 ms.
+   - **Dual Exit Paths:** Cursors still inside the ring buffer use the **Fast Seamless Path** (drain remaining buffered frames at `1.0x` with 4 ms fade-in and zero `MediaCodec.flush()`, plus gapless preload trigger when near EOS), while deep rewinds past `oldestAvailableFrame` use the **Deep Rewind Path** (flush `AudioTrack`, reset ring buffer, single clean `currentDecoder.seekToMs(targetMs)`, resume `1.0x`). Cleanly aborts on `pause()`, `stop()`, `loadTrack()`, `seekTo()`, `release()`, or any hearing-safety auto-pause event.
+3. **Controller, ViewModel, Navigation & `InteractiveVinylDisc` Integration (`PlaybackController.kt`, `MainViewModel.kt`, `BitPerfectAppNav.kt`, `NowPlayingScreen.kt`, `VinylDiscPlayer.kt`):**
+   - Wired `beginTurntableScratch()`, `updateTurntableScratchRate(rate)`, and `endTurntableScratch(fallbackTargetMs)` cleanly into `InteractiveVinylDisc`.
+   - In `SAFE_VOLUME_MODE && isPlaying`: touch down enters live HOLD (`0.0f`), drag streams live angular velocity playback rates, a 65 ms idle hold watchdog detects frozen fingers and brakes smoothly to `HOLD`, bounded catchable flick inertia (`<= 450 ms`) streams decaying playback rates until settled, and `VinylScrubPillLeaf` displays live time + signed delta + speed badge (`2.1×`, `-1.4×`, `HOLD`) strictly inside the narrow HUD leaf without recomposing `NowPlayingScreen`.
+   - When paused OR in `BIT_PERFECT_OPT_IN`: preserves the exact silent seek-preview + single `onSeekTo` commit path with zero turntable DSP involvement.
+
+### Software Verification (`./gradlew clean testDebugUnitTest lintDebug assembleDebug assembleRelease`)
+- **Automated JVM Unit + Robolectric SQLite Migration + Headless Compose UI Tests:** **165 / 165 passed** across **31 test suites** (`0` failed, `0` errors, `0` skipped, `0` `@Ignore`), adding `TurntableAudioDspTest` (7/7), extending `VinylScrubMathTest` (8/8), and extending `BitPerfectUiBehaviorTest` (13/13, verifying Safe-Mode live touch `HOLD`/varispeed callbacks and strict Bit-Perfect zero-DSP silent-seek isolation).
+- **Compiler & R8 Warnings:** `0` Kotlin compiler warnings (production + test), `0` KSP warnings, `0` R8 warnings.
+- **Android Lint (`lintDebug` & `lintVitalRelease`):** **0 errors**, **0 warnings across all `/app/src/` Kotlin, manifest, and resource files**.
+- **Debug APK (`assembleDebug`):** `app/build/outputs/apk/debug/app-debug.apk` (`20.63 MB` / `21,633,581 bytes`).
+- **Release APK (`assembleRelease` with R8 optimization):** `app/build/outputs/apk/release/app-release-unsigned.apk` (`2.45 MB` / `2,567,346 bytes`).
+- **Strict Offline Privacy Audit (Source + All 9 Generated Debug, Release & UnitTest Manifests):** **PASS** — **0 `android.permission.INTERNET`**, **0 `android.permission.MANAGE_EXTERNAL_STORAGE`**.
+- **Pure-Kotlin Domain Boundary (`TurntableAudioDsp.kt`, `VinylScrubMath.kt`):** **PASS** — **0 `android.*` / `androidx.*` imports**.
+- **Physical Hardware Verification Pending (Not Executed in Cloud):** On POCO F4 (Android 14 / HyperOS) + KZ EDX Pro 2 USB-C, confirm audible quality and responsiveness of live Safe-Mode forward varispeed, finger-hold braking (`HOLD`), reverse scratch within the 8 MB window and deep-rewind fallback past `oldestAvailableFrame`, pop/click-free entry & 1.0x exit resume across 16/24-bit 44,100–192,000 Hz FLAC/WAV/MP3/M4A/OGG, Play Count stability after scratching, immediate auto-pause safety on USB unplug mid-scratch, and strict Bit-Perfect Opt-In silent-seek fallback with zero DSP modification.
+
+
 
 

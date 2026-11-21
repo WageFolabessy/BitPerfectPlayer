@@ -172,3 +172,7 @@ Having graduated from the verified MVP baseline, the Full APK roadmap authorizes
    - On-demand detailed inspection of local container, codec, exact sample rate (`Hz`), bit depth, channels, file size, path/URI, and SHA-256 content fingerprint.
 7. **Local Backup & Restore (SAF):**
    - 100% offline export/import of playlists, favorites, lyrics, and listening statistics to a user-selected local file via SAF.
+8. **Interactive Spinning Vinyl Disc & Safe-Mode Live Turntable Scratch DSP:**
+   - Optional GPU-accelerated spinning vinyl turntable mode in `NowPlayingScreen` with velocity-sensitive rotational finger scrubbing and catchable bounded flick inertia (`<= 450 ms`).
+   - Exclusively in `SAFE_VOLUME_MODE` while actively playing, touching/dragging the vinyl disc engages a real-time pure-Kotlin varispeed resampler backed by a hard-capped `8 MB` rolling PCM float ring buffer (forward varispeed up to `+4.0x`, finger-hold braking to `0.0x` silence, and real-time reverse scratch down to `-4.0x`) with zero `AudioTrack` rebuilds and frozen play-count accumulation.
+   - Strictly bypassed in `BIT_PERFECT_OPT_IN` mode (zero ring-buffer allocation or PCM interception; falls back transparently to silent seek-preview + single `seekTo` on release).
