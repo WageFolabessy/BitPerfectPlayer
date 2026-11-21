@@ -76,23 +76,6 @@ data class QueueContext(
         QueueSourceType.CUSTOM -> sourceLabel.trim().ifEmpty { "Queue" }
     }
 
-    /**
-     * One-tap banner text shown in `QueueScreen` when the user opened Queue from a different
-     * viewed Album/Artist/Folder/Playlist than the currently playing queue.
-     */
-    fun formatViewingBannerText(trackCount: Int): String {
-        val countPart = "$trackCount ${if (trackCount == 1) "track" else "tracks"}"
-        val cleanLabel = sourceLabel.trim().ifEmpty { sourceType.displayPrefix }
-        return when (sourceType) {
-            QueueSourceType.ALBUM,
-            QueueSourceType.ARTIST,
-            QueueSourceType.FOLDER,
-            QueueSourceType.PLAYLIST,
-            -> "Viewing ${sourceType.displayPrefix}: $cleanLabel ($countPart)"
-            else -> "Viewing $cleanLabel ($countPart)"
-        }
-    }
-
     fun matches(other: QueueContext): Boolean {
         if (sourceType != other.sourceType) return false
         val k1 = (sourceKey ?: sourceLabel).trim().lowercase()
@@ -160,8 +143,9 @@ data class QueueContext(
 }
 
 /**
- * Snapshot of the Album, Artist, Folder, or Playlist currently being viewed when the user opens
- * `QueueScreen`, allowing idle auto-preparation or a non-intrusive one-tap "Load Queue" banner.
+ * Snapshot of the Album, Artist, Folder, Playlist, Recent, Favorites, or Most Played view currently
+ * open when the user navigates to `QueueScreen`, allowing real-time context-aware queue switching
+ * (loaded paused for hearing safety).
  */
 data class BrowsingQueueContext(
     val context: QueueContext,
@@ -178,12 +162,30 @@ data class RestoredQueueSelection(
 )
 
 /**
- * Pure-Kotlin session restoration resolver ensuring app relaunch restores ONLY the exact saved
- * Album, Artist, Folder, Playlist, Recent, or Favorites track list (in its proper sorted order),
- * falling back cleanly to `All Songs` only if the saved context was deleted or no longer holds
- * the last active track.
+ * Pure-Kotlin queue context policy & session restoration resolver ensuring:
+ * 1. Opening `QueueScreen` from a scoped view (Album, Artist, Folder, Playlist, Recent, Favorites,
+ *    or Most Played) immediately aligns the active queue with that view (loaded paused) whenever
+ *    it differs from the active queue context, while preserving active playback when opened from
+ *    `NowPlayingScreen`, `All Songs`, or the same already-active view.
+ * 2. App relaunch restores ONLY the exact saved Album, Artist, Folder, Playlist, Recent, or
+ *    Favorites track list (in its proper sorted order), falling back cleanly to `All Songs` only
+ *    if the saved context was deleted or no longer holds the last active track.
  */
 object QueueContextResolver {
+
+    /**
+     * Returns `true` when opening `QueueScreen` from [browsingContext] should immediately replace
+     * the active queue (loaded paused, never auto-playing) with [browsingContext]'s ordered tracks.
+     */
+    fun shouldSwitchToBrowsingContext(
+        activeContext: QueueContext,
+        isActiveQueueEmpty: Boolean,
+        browsingContext: BrowsingQueueContext?,
+    ): Boolean {
+        if (browsingContext == null || browsingContext.tracks.isEmpty()) return false
+        if (browsingContext.context.sourceType == QueueSourceType.ALL_SONGS) return false
+        return isActiveQueueEmpty || !activeContext.matches(browsingContext.context)
+    }
 
     fun resolveSessionRestore(
         lastTrackUri: String,

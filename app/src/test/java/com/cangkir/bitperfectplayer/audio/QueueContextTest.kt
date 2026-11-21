@@ -25,12 +25,78 @@ class QueueContextTest {
         val albumCtx = QueueContext.album("21st Century Breakdown")
         assertEquals("Album · 21st Century Breakdown · 18 tracks", albumCtx.formatQueueSubtitle(18))
         assertEquals("Album · 21st Century Breakdown", albumCtx.formatCompactLabel())
-        assertEquals("Viewing Album: 21st Century Breakdown (18 tracks)", albumCtx.formatViewingBannerText(18))
 
         assertTrue(albumCtx.matches(QueueContext.album("21st century breakdown")))
         assertFalse(albumCtx.matches(QueueContext.folder("21st Century Breakdown")))
         assertEquals("All Songs · 268 tracks", QueueContext.allSongs().formatQueueSubtitle(268))
         assertEquals("Playlist · Late Night · 1 track", QueueContext.playlist(7L, "Late Night").formatQueueSubtitle(1))
+    }
+
+    @Test
+    fun shouldSwitchToBrowsingContext_switchesForDifferentScopedContextAndPreservesSameOrNull() {
+        val albumATracks = listOf(track(1, "A1", album = "Album A"), track(2, "A2", album = "Album A"))
+        val albumBTracks = listOf(track(3, "B1", album = "Album B"), track(4, "B2", album = "Album B"))
+
+        // Opening Queue while viewing Album B while Album A is active -> switch immediately
+        assertTrue(
+            QueueContextResolver.shouldSwitchToBrowsingContext(
+                activeContext = QueueContext.album("Album A"),
+                isActiveQueueEmpty = false,
+                browsingContext = BrowsingQueueContext(QueueContext.album("Album B"), albumBTracks),
+            ),
+        )
+
+        // Opening Queue while viewing Album A while All Songs is active -> switch immediately
+        assertTrue(
+            QueueContextResolver.shouldSwitchToBrowsingContext(
+                activeContext = QueueContext.allSongs(),
+                isActiveQueueEmpty = false,
+                browsingContext = BrowsingQueueContext(QueueContext.album("Album A"), albumATracks),
+            ),
+        )
+
+        // Opening Queue while viewing the SAME active Album (case-insensitive) -> preserve active playback
+        assertFalse(
+            QueueContextResolver.shouldSwitchToBrowsingContext(
+                activeContext = QueueContext.album("Album A"),
+                isActiveQueueEmpty = false,
+                browsingContext = BrowsingQueueContext(QueueContext.album("album a"), albumATracks),
+            ),
+        )
+
+        // Opening Queue from NowPlaying or All Songs (null browsingContext) -> preserve active playback
+        assertFalse(
+            QueueContextResolver.shouldSwitchToBrowsingContext(
+                activeContext = QueueContext.album("Album A"),
+                isActiveQueueEmpty = false,
+                browsingContext = null,
+            ),
+        )
+
+        // Never auto-switch for ALL_SONGS or empty browsing track lists
+        assertFalse(
+            QueueContextResolver.shouldSwitchToBrowsingContext(
+                activeContext = QueueContext.album("Album A"),
+                isActiveQueueEmpty = false,
+                browsingContext = BrowsingQueueContext(QueueContext.allSongs(), albumBTracks),
+            ),
+        )
+        assertFalse(
+            QueueContextResolver.shouldSwitchToBrowsingContext(
+                activeContext = QueueContext.album("Album A"),
+                isActiveQueueEmpty = false,
+                browsingContext = BrowsingQueueContext(QueueContext.album("Album B"), emptyList()),
+            ),
+        )
+
+        // If active queue was emptied, opening Queue from the same album repopulates it paused
+        assertTrue(
+            QueueContextResolver.shouldSwitchToBrowsingContext(
+                activeContext = QueueContext.album("Album A"),
+                isActiveQueueEmpty = true,
+                browsingContext = BrowsingQueueContext(QueueContext.album("Album A"), albumATracks),
+            ),
+        )
     }
 
     @Test

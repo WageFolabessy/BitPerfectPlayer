@@ -105,4 +105,31 @@ object GaplessTransitionPolicy {
         val estimatedAudioMs = (remainingBufferedFrames * 1000L) / sampleRateHz.toLong()
         return (estimatedAudioMs + 250L).coerceIn(MIN_DRAIN_WAIT_MS, MAX_DRAIN_WAIT_MS)
     }
+
+    /**
+     * Determines what `PlaybackController` must do immediately after `AudioOutputEngine` reports
+     * a seamless same-format gapless transition, ensuring an End-of-Track sleep timer race always
+     * pauses playback and clears any preloaded successor cleanly.
+     */
+    fun resolvePostTransitionDirective(
+        hasNextTrack: Boolean,
+        nextTrackMatchesTransitioned: Boolean,
+        pauseAfterTransition: Boolean,
+    ): PostGaplessTransitionDirective = when {
+        !hasNextTrack -> PostGaplessTransitionDirective.STOP_END_OF_QUEUE
+        !nextTrackMatchesTransitioned -> PostGaplessTransitionDirective.RESYNC_VIA_RELOAD
+        pauseAfterTransition -> PostGaplessTransitionDirective.PAUSE_AND_PERSIST
+        else -> PostGaplessTransitionDirective.CONTINUE_AND_SYNC_NEXT
+    }
+}
+
+/**
+ * Post-transition control directive executed by `PlaybackController` after a seamless gapless
+ * decoder handoff.
+ */
+enum class PostGaplessTransitionDirective {
+    CONTINUE_AND_SYNC_NEXT,
+    PAUSE_AND_PERSIST,
+    RESYNC_VIA_RELOAD,
+    STOP_END_OF_QUEUE,
 }

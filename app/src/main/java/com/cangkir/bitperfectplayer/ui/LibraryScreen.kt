@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -66,6 +67,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -426,6 +428,7 @@ fun LibraryScreen(
                     group = openedGroup,
                     groupContext = openedGroupContext,
                     sortLabel = sortPrefs.specFor(openedGroupSortScope).compactLabel,
+                    scrollResetKey = Pair(openedGroupSortScope, sortPrefs.specFor(openedGroupSortScope)),
                     showTrackNumber = selectedTab == LibraryTab.ALBUMS,
                     activeTrackUri = playbackState.activeTrack?.uriString,
                     favoriteTrackUris = favoriteTrackUris,
@@ -470,6 +473,7 @@ fun LibraryScreen(
                         )
                         TrackListView(
                             tracks = filtered,
+                            scrollResetKey = Pair(sortPrefs.allSongs, searchQuery.trim()),
                             albumArtworkLoader = albumArtworkLoader,
                             emptyTitle = if (searchQuery.isNotBlank()) "No matching tracks" else "No local audio tracks",
                             emptySubtitle = if (searchQuery.isNotBlank()) {
@@ -493,6 +497,7 @@ fun LibraryScreen(
                     }
                     LibraryTab.FOLDERS -> GroupListView(
                         groups = libraryState.folders,
+                        scrollResetKey = sortPrefs.foldersList,
                         singularUnit = "folder",
                         pluralUnit = "folders",
                         sortLabel = sortPrefs.foldersList.compactLabel,
@@ -508,6 +513,7 @@ fun LibraryScreen(
                     )
                     LibraryTab.ARTISTS -> GroupListView(
                         groups = libraryState.artists,
+                        scrollResetKey = sortPrefs.artistsList,
                         singularUnit = "artist",
                         pluralUnit = "artists",
                         sortLabel = sortPrefs.artistsList.compactLabel,
@@ -523,6 +529,7 @@ fun LibraryScreen(
                     )
                     LibraryTab.ALBUMS -> GroupListView(
                         groups = libraryState.albums,
+                        scrollResetKey = sortPrefs.albumsList,
                         singularUnit = "album",
                         pluralUnit = "albums",
                         sortLabel = sortPrefs.albumsList.compactLabel,
@@ -546,6 +553,7 @@ fun LibraryScreen(
                         }
                         TrackListView(
                             tracks = libraryState.recentlyPlayed,
+                            scrollResetKey = sortPrefs.recent,
                             albumArtworkLoader = albumArtworkLoader,
                             emptyTitle = "No recently played tracks",
                             emptySubtitle = "Tracks you play appear here locally.",
@@ -573,6 +581,7 @@ fun LibraryScreen(
                         }
                         TrackListView(
                             tracks = libraryState.favorites,
+                            scrollResetKey = sortPrefs.favorites,
                             albumArtworkLoader = albumArtworkLoader,
                             emptyTitle = "No favorite tracks yet",
                             emptySubtitle = "Tap the heart icon on any track to save it locally.",
@@ -812,6 +821,7 @@ private fun CompactSearchBarRow(
 @Composable
 private fun GroupListView(
     groups: List<LibraryGroup>,
+    scrollResetKey: Any,
     singularUnit: String,
     pluralUnit: String,
     sortLabel: String,
@@ -839,6 +849,15 @@ private fun GroupListView(
         return
     }
 
+    val listState = rememberLazyListState()
+    var previousResetKey by remember { mutableStateOf(scrollResetKey) }
+    LaunchedEffect(scrollResetKey) {
+        if (previousResetKey != scrollResetKey) {
+            previousResetKey = scrollResetKey
+            listState.scrollToItem(0)
+        }
+    }
+
     Column(modifier = Modifier.fillMaxSize()) {
         SubtleListSortHeaderRow(
             countLabel = "${groups.size} ${if (groups.size == 1) singularUnit else pluralUnit}",
@@ -846,6 +865,7 @@ private fun GroupListView(
             onOpenSort = onOpenSort,
         )
         LazyColumn(
+            state = listState,
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(vertical = 4.dp),
         ) {
@@ -918,7 +938,10 @@ private fun GroupListView(
                 HorizontalDivider(
                     thickness = 0.5.dp,
                     color = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f),
-                    modifier = Modifier.padding(start = 76.dp, end = 16.dp),
+                    modifier = Modifier.padding(
+                        start = if (showArtworkThumbnail) 76.dp else 72.dp,
+                        end = 16.dp,
+                    ),
                 )
             }
         }
@@ -930,6 +953,7 @@ private fun GroupDetailTrackList(
     group: LibraryGroup,
     groupContext: QueueContext,
     sortLabel: String,
+    scrollResetKey: Any,
     showTrackNumber: Boolean,
     activeTrackUri: String?,
     favoriteTrackUris: Set<String>,
@@ -1027,6 +1051,7 @@ private fun GroupDetailTrackList(
         )
         TrackListView(
             tracks = group.tracks,
+            scrollResetKey = scrollResetKey,
             albumArtworkLoader = albumArtworkLoader,
             emptyTitle = "Empty group",
             emptySubtitle = "",
@@ -1048,6 +1073,7 @@ private fun GroupDetailTrackList(
 @Composable
 private fun TrackListView(
     tracks: List<PlaybackTrack>,
+    scrollResetKey: Any,
     albumArtworkLoader: AlbumArtworkLoader,
     emptyTitle: String,
     emptySubtitle: String,
@@ -1108,7 +1134,17 @@ private fun TrackListView(
         return
     }
 
+    val listState = rememberLazyListState()
+    var previousResetKey by remember { mutableStateOf(scrollResetKey) }
+    LaunchedEffect(scrollResetKey) {
+        if (previousResetKey != scrollResetKey) {
+            previousResetKey = scrollResetKey
+            listState.scrollToItem(0)
+        }
+    }
+
     LazyColumn(
+        state = listState,
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(bottom = 12.dp),
     ) {
@@ -1137,7 +1173,10 @@ private fun TrackListView(
             HorizontalDivider(
                 thickness = 0.5.dp,
                 color = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f),
-                modifier = Modifier.padding(start = 76.dp, end = 16.dp),
+                modifier = Modifier.padding(
+                    start = if (showTrackNumber) 110.dp else 76.dp,
+                    end = 16.dp,
+                ),
             )
         }
     }

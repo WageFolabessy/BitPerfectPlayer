@@ -162,25 +162,6 @@ class PlaybackController(
     }
 
     /**
-     * Prepares a viewed Album/Folder/Artist/Playlist queue **paused** when playback is currently
-     * `IDLE` and the queue is empty — never auto-blasting audio.
-     */
-    fun prepareContextQueueIfIdle(
-        tracks: List<PlaybackTrack>,
-        context: QueueContext,
-    ) {
-        if (tracks.isEmpty()) return
-        if (!queueManager.isEmpty() || engine.state.value.status != PlaybackStatus.IDLE) return
-        playQueue(
-            tracks = tracks,
-            startIndex = 0,
-            startPositionMs = 0L,
-            autoPlay = false,
-            context = context,
-        )
-    }
-
-    /**
      * Switches the active queue immediately to [context]'s ordered tracks (prepared paused at index
      * 0 by default for hearing safety unless [autoPlay] is requested).
      */
@@ -584,34 +565,57 @@ class PlaybackController(
         val pauseAfterTransition = sleepTimerController.consumeEndOfTrackTrigger()
         val nextTrack = queueManager.next(userInitiated = false)
         val snapshot = queueManager.snapshot()
+        val directive = GaplessTransitionPolicy.resolvePostTransitionDirective(
+            hasNextTrack = nextTrack != null,
+            nextTrackMatchesTransitioned = nextTrack?.uriString == transitionedRequest.uri.toString(),
+            pauseAfterTransition = pauseAfterTransition,
+        )
 
-        if (nextTrack == null) {
-            _state.update { it.copy(queue = snapshot) }
-            engine.setNextTrack(null)
-            engine.pause()
-            persistCurrentPositionAsync()
-            return
+        when (directive) {
+            PostGaplessTransitionDirective.STOP_END_OF_QUEUE -> {
+                _state.update { it.copy(queue = snapshot) }
+                engine.setNextTrack(null)
+                engine.pause()
+                persistCurrentPositionAsync()
+            }
+            PostGaplessTransitionDirective.RESYNC_VIA_RELOAD -> {
+                val target = nextTrack ?: return
+                _state.update { it.copy(queue = snapshot, activeTrack = target) }
+                loadActiveTrack(target, startPositionMs = 0L, autoPlay = !pauseAfterTransition)
+            }
+            PostGaplessTransitionDirective.PAUSE_AND_PERSIST -> {
+                val target = nextTrack ?: return
+                hasRecordedHistoryForActiveTrack = false
+                trackedTracksByUri[target.uriString] = target
+                playCountTracker.startSession(target.uriString, target.durationMs)?.let { persistPlayCountFlush(it) }
+                _state.update {
+                    it.copy(
+                        queue = snapshot,
+                        activeTrack = target,
+                        activeFingerprint = target.contentFingerprint,
+                    )
+                }
+                engine.setNextTrack(null)
+                engine.pause()
+                persistCurrentPositionAsync()
+                resolveFingerprintAndRecordHistory(target, recordHistory = false)
+            }
+            PostGaplessTransitionDirective.CONTINUE_AND_SYNC_NEXT -> {
+                val target = nextTrack ?: return
+                hasRecordedHistoryForActiveTrack = true
+                trackedTracksByUri[target.uriString] = target
+                playCountTracker.startSession(target.uriString, target.durationMs)?.let { persistPlayCountFlush(it) }
+                _state.update {
+                    it.copy(
+                        queue = snapshot,
+                        activeTrack = target,
+                        activeFingerprint = target.contentFingerprint,
+                    )
+                }
+                syncNextTrackToEngine()
+                resolveFingerprintAndRecordHistory(target, recordHistory = true)
+            }
         }
-
-        // If the queue mutated right as the transition fired, resync cleanly via standard load.
-        if (nextTrack.uriString != transitionedRequest.uri.toString()) {
-            _state.update { it.copy(queue = snapshot, activeTrack = nextTrack) }
-            loadActiveTrack(nextTrack, startPositionMs = 0L, autoPlay = !pauseAfterTransition)
-            return
-        }
-
-        hasRecordedHistoryForActiveTrack = !pauseAfterTransition
-        trackedTracksByUri[nextTrack.uriString] = nextTrack
-        playCountTracker.startSession(nextTrack.uriString, nextTrack.durationMs)?.let { persistPlayCountFlush(it) }
-        _state.update {
-            it.copy(
-                queue = snapshot,
-                activeTrack = nextTrack,
-                activeFingerprint = nextTrack.contentFingerprint,
-            )
-        }
-        syncNextTrackToEngine()
-        resolveFingerprintAndRecordHistory(nextTrack, recordHistory = !pauseAfterTransition)
     }
 
     private fun syncNextTrackToEngine() {

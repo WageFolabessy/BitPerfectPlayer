@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -61,6 +62,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -389,6 +391,7 @@ fun PlaylistsScreen(
                     PlaylistDetailView(
                         playlist = openedPlaylist,
                         sortLabel = playlistsState.playlistDetailSort.compactLabel,
+                        scrollResetKey = playlistsState.playlistDetailSort,
                         canReorderManually = canReorderManually,
                         activeTrackUri = activeTrackUri,
                         albumArtworkLoader = albumArtworkLoader,
@@ -538,7 +541,7 @@ private fun PlaylistsOverviewList(
                 HorizontalDivider(
                     thickness = 0.5.dp,
                     color = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f),
-                    modifier = Modifier.padding(start = 72.dp, end = 16.dp),
+                    modifier = Modifier.padding(start = 90.dp, end = 16.dp),
                 )
             }
 
@@ -830,7 +833,7 @@ private fun MostPlayedDetailView(
                 HorizontalDivider(
                     thickness = 0.5.dp,
                     color = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f),
-                    modifier = Modifier.padding(start = 72.dp, end = 16.dp),
+                    modifier = Modifier.padding(start = 90.dp, end = 16.dp),
                 )
             }
         }
@@ -945,6 +948,7 @@ private fun PlaylistSummaryRow(
 private fun PlaylistDetailView(
     playlist: ResolvedPlaylist,
     sortLabel: String,
+    scrollResetKey: Any,
     canReorderManually: Boolean,
     activeTrackUri: String?,
     albumArtworkLoader: AlbumArtworkLoader,
@@ -1083,7 +1087,17 @@ private fun PlaylistDetailView(
             return
         }
 
+        val listState = rememberLazyListState()
+        var previousResetKey by remember { mutableStateOf(scrollResetKey) }
+        LaunchedEffect(scrollResetKey) {
+            if (previousResetKey != scrollResetKey) {
+                previousResetKey = scrollResetKey
+                listState.scrollToItem(0)
+            }
+        }
+
         LazyColumn(
+            state = listState,
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(bottom = 16.dp),
         ) {

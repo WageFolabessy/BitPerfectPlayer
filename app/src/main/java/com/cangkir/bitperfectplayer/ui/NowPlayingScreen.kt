@@ -47,7 +47,6 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -116,7 +115,6 @@ fun NowPlayingScreen(
     onShowTrackInfo: (PlaybackTrack) -> Unit,
     onSelectSleepTimerPreset: (SleepTimerPreset) -> Unit,
     onTogglePlayPause: () -> Unit,
-    onQuickPause: () -> Unit,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
     onSeekTo: (Long) -> Unit,
@@ -219,28 +217,6 @@ fun NowPlayingScreen(
                     }
                 },
                 actions = {
-                    // Always keep a one-tap quick Pause accessible during playback for IEM hearing safety.
-                    if (playbackState.isPlaying) {
-                        FilledTonalButton(
-                            onClick = onQuickPause,
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                            modifier = Modifier
-                                .padding(end = 4.dp)
-                                .sizeIn(minHeight = 48.dp),
-                            colors = ButtonDefaults.filledTonalButtonColors(
-                                containerColor = CoralWarningContainer,
-                                contentColor = OnCoralWarningContainer,
-                            ),
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.Pause,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp),
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Pause", maxLines = 1, softWrap = false)
-                        }
-                    }
                     // Isolated 1-second tick leaf: only this button recomposes while sleep timer counts down.
                     SleepTimerTopBarButton(
                         sleepTimerStateFlow = sleepTimerStateFlow,

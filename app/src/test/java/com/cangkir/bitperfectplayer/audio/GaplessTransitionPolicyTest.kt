@@ -164,4 +164,44 @@ class GaplessTransitionPolicyTest {
             GaplessTransitionPolicy.computeDrainTimeoutMs(500_000L, 44_100),
         )
     }
+
+    @Test
+    fun resolvePostTransitionDirective_pausesAndPersistsWhenEndOfTrackSleepTimerTriggers() {
+        // Normal gapless handoff when End-of-Track sleep timer triggered right at boundary -> MUST pause & persist
+        assertEquals(
+            PostGaplessTransitionDirective.PAUSE_AND_PERSIST,
+            GaplessTransitionPolicy.resolvePostTransitionDirective(
+                hasNextTrack = true,
+                nextTrackMatchesTransitioned = true,
+                pauseAfterTransition = true,
+            ),
+        )
+        // Normal gapless handoff without End-of-Track trigger -> continue & sync subsequent track
+        assertEquals(
+            PostGaplessTransitionDirective.CONTINUE_AND_SYNC_NEXT,
+            GaplessTransitionPolicy.resolvePostTransitionDirective(
+                hasNextTrack = true,
+                nextTrackMatchesTransitioned = true,
+                pauseAfterTransition = false,
+            ),
+        )
+        // Queue mutated during transition -> reload actual next track
+        assertEquals(
+            PostGaplessTransitionDirective.RESYNC_VIA_RELOAD,
+            GaplessTransitionPolicy.resolvePostTransitionDirective(
+                hasNextTrack = true,
+                nextTrackMatchesTransitioned = false,
+                pauseAfterTransition = true,
+            ),
+        )
+        // No next track -> stop cleanly at end of queue
+        assertEquals(
+            PostGaplessTransitionDirective.STOP_END_OF_QUEUE,
+            GaplessTransitionPolicy.resolvePostTransitionDirective(
+                hasNextTrack = false,
+                nextTrackMatchesTransitioned = false,
+                pauseAfterTransition = false,
+            ),
+        )
+    }
 }

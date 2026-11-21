@@ -34,7 +34,6 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -58,7 +57,6 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.cangkir.bitperfectplayer.audio.BrowsingQueueContext
 import com.cangkir.bitperfectplayer.audio.PlaybackControllerState
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
 import com.cangkir.bitperfectplayer.audio.QueueSourceType
@@ -72,12 +70,10 @@ import com.cangkir.bitperfectplayer.ui.theme.TextMuted
 fun QueueScreen(
     playbackState: PlaybackControllerState,
     libraryTracks: List<PlaybackTrack>,
-    browsingContext: BrowsingQueueContext?,
     activeContextTracks: List<PlaybackTrack>,
     albumArtworkLoader: AlbumArtworkLoader,
     onBack: () -> Unit,
     onSelectQueueIndex: (Int) -> Unit,
-    onLoadBrowsingContext: (BrowsingQueueContext) -> Unit,
     onAddTrackToQueue: (PlaybackTrack) -> Unit,
     onRemoveQueueItem: (Int) -> Unit,
     onMoveQueueItem: (Int, Int) -> Unit,
@@ -88,33 +84,15 @@ fun QueueScreen(
     val activeContext = playbackState.queueContext
     var showAddDialog by remember { mutableStateOf(false) }
 
-    val viewingBannerContext = browsingContext?.takeIf {
-        it.tracks.isNotEmpty() &&
-            it.context.sourceType != QueueSourceType.ALL_SONGS &&
-            !activeContext.matches(it.context)
-    }
-
-    val dialogContextTracks = remember(browsingContext, activeContextTracks, activeContext) {
-        when {
-            browsingContext != null &&
-                browsingContext.context.sourceType != QueueSourceType.ALL_SONGS &&
-                browsingContext.tracks.isNotEmpty() -> browsingContext.tracks
-            activeContext.sourceType != QueueSourceType.ALL_SONGS &&
-                activeContextTracks.isNotEmpty() -> activeContextTracks
-            else -> emptyList()
-        }
-    }
-    val dialogContextLabel = remember(browsingContext, activeContext, dialogContextTracks) {
-        if (dialogContextTracks.isEmpty()) {
-            null
-        } else if (browsingContext != null &&
-            browsingContext.context.sourceType != QueueSourceType.ALL_SONGS &&
-            browsingContext.tracks.isNotEmpty()
-        ) {
-            browsingContext.context.sourceLabel
+    val dialogContextTracks = remember(activeContextTracks, activeContext) {
+        if (activeContext.sourceType != QueueSourceType.ALL_SONGS && activeContextTracks.isNotEmpty()) {
+            activeContextTracks
         } else {
-            activeContext.sourceLabel
+            emptyList()
         }
+    }
+    val dialogContextLabel = remember(activeContext, dialogContextTracks) {
+        if (dialogContextTracks.isEmpty()) null else activeContext.sourceLabel
     }
 
     if (showAddDialog) {
@@ -204,46 +182,6 @@ fun QueueScreen(
                 .fillMaxSize()
                 .padding(innerPadding),
         ) {
-            if (viewingBannerContext != null) {
-                Surface(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                    shape = RoundedCornerShape(10.dp),
-                    color = MaterialTheme.colorScheme.surface,
-                    border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.7f)),
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(start = 14.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = viewingBannerContext.context.formatViewingBannerText(viewingBannerContext.tracks.size),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f),
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        FilledTonalButton(
-                            onClick = { onLoadBrowsingContext(viewingBannerContext) },
-                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
-                            modifier = Modifier.sizeIn(minHeight = 48.dp),
-                        ) {
-                            Text(
-                                text = "Load Queue",
-                                style = MaterialTheme.typography.labelLarge,
-                                maxLines = 1,
-                                softWrap = false,
-                            )
-                        }
-                    }
-                }
-            }
-
             if (queue.isEmpty) {
                 Box(
                     modifier = Modifier

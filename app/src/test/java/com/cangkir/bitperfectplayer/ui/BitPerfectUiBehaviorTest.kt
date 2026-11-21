@@ -6,26 +6,34 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasScrollToIndexAction
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performTextInput
 import androidx.test.core.app.ApplicationProvider
 import com.cangkir.bitperfectplayer.audio.AudioOutputMode
 import com.cangkir.bitperfectplayer.audio.AudioSafetyState
 import com.cangkir.bitperfectplayer.audio.EnginePlaybackState
 import com.cangkir.bitperfectplayer.audio.PlaybackControllerState
+import com.cangkir.bitperfectplayer.audio.PlaybackStatus
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
 import com.cangkir.bitperfectplayer.audio.QueueContext
+import com.cangkir.bitperfectplayer.audio.QueueSnapshot
 import com.cangkir.bitperfectplayer.audio.ReplayGainMetadata
 import com.cangkir.bitperfectplayer.audio.SleepTimerPreset
 import com.cangkir.bitperfectplayer.audio.SleepTimerState
 import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
 import com.cangkir.bitperfectplayer.library.LibrarySnapshot
+import com.cangkir.bitperfectplayer.library.LibrarySortPreferences
 import com.cangkir.bitperfectplayer.library.PlaylistsUiSnapshot
+import com.cangkir.bitperfectplayer.library.SortDirection
+import com.cangkir.bitperfectplayer.library.TrackSortOption
+import com.cangkir.bitperfectplayer.library.TrackSortSpec
 import com.cangkir.bitperfectplayer.library.TrackTechnicalInfo
 import com.cangkir.bitperfectplayer.ui.theme.BitPerfectPlayerTheme
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -44,8 +52,9 @@ import org.robolectric.annotation.Config
  *
  * Verifies real user interaction flows (Hearing Safety gate, instant favorite toggle propagation,
  * exact `Hz` formatting without `kHz` or duplicated container/codec labels, Playlist creation,
- * Track Info sheet technical fields, and Sleep Timer preset selection) without requiring an
- * emulator or KVM.
+ * Track Info sheet technical fields, Sleep Timer preset selection, clean NowPlaying TopAppBar,
+ * auto-scroll-to-top on sort changes, and banner-free context-aware QueueScreen) without requiring
+ * an emulator or KVM.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], application = Application::class)
@@ -117,7 +126,6 @@ class BitPerfectUiBehaviorTest {
                     onShowTrackInfo = {},
                     onSelectSleepTimerPreset = {},
                     onTogglePlayPause = {},
-                    onQuickPause = {},
                     onPrevious = {},
                     onNext = {},
                     onSeekTo = {},
@@ -142,6 +150,60 @@ class BitPerfectUiBehaviorTest {
 
         composeRule.onNodeWithText("Enable Bit-Perfect").assertIsDisplayed().performClick()
         assertEquals(1, confirmBitPerfectClicks)
+    }
+
+    @Test
+    fun nowPlayingScreen_hasNoDuplicateTopBarPauseButtonWhilePrimaryTransportPauseWorks() {
+        var playPauseClicks = 0
+
+        val playingState = PlaybackControllerState(
+            activeTrack = hiResFlacTrack,
+            queueContext = QueueContext.album("21st Century Breakdown"),
+            engineState = EnginePlaybackState(
+                status = PlaybackStatus.PLAYING,
+                durationMs = hiResFlacTrack.durationMs,
+            ),
+        )
+
+        composeRule.setContent {
+            BitPerfectPlayerTheme {
+                NowPlayingScreen(
+                    playbackState = playingState,
+                    playbackPositionMsFlow = MutableStateFlow(30_000L),
+                    sleepTimerStateFlow = MutableStateFlow(SleepTimerState()),
+                    albumArtworkLoader = artworkLoader,
+                    isFavorite = false,
+                    onBack = {},
+                    onToggleFavorite = {},
+                    onAddToPlaylist = {},
+                    onShowTrackInfo = {},
+                    onSelectSleepTimerPreset = {},
+                    onTogglePlayPause = { playPauseClicks++ },
+                    onPrevious = {},
+                    onNext = {},
+                    onSeekTo = {},
+                    onToggleShuffle = {},
+                    onCycleRepeatMode = {},
+                    onRequestBitPerfectMode = {},
+                    onConfirmBitPerfectWarning = {},
+                    onDismissSafetyWarning = {},
+                    onSwitchToSafeMode = {},
+                    onClearAutoPauseNotice = {},
+                    onOpenQueue = {},
+                    onOpenLyrics = {},
+                    onOpenDiagnostics = {},
+                )
+            }
+        }
+
+        // Redundant TopAppBar "Pause" text pill must not exist
+        assertEquals(0, composeRule.onAllNodesWithText("Pause").fetchSemanticsNodes().size)
+        // Primary circular transport Pause button remains accessible and functional
+        composeRule.onNodeWithContentDescription("Pause playback")
+            .performScrollTo()
+            .assertIsDisplayed()
+            .performClick()
+        assertEquals(1, playPauseClicks)
     }
 
     @Test
@@ -228,6 +290,107 @@ class BitPerfectUiBehaviorTest {
         // Strict unit & deduplication invariants: never kHz, never "FLAC (FLAC)"
         assertEquals(0, composeRule.onAllNodesWithText("kHz", substring = true, ignoreCase = true).fetchSemanticsNodes().size)
         assertEquals(0, composeRule.onAllNodesWithText("FLAC (FLAC)", substring = true).fetchSemanticsNodes().size)
+    }
+
+    @Test
+    fun libraryScreen_autoScrollsToTopWhenSortOrderChanges() {
+        val tracksAsc = (1..30).map { idx ->
+            hiResFlacTrack.copy(
+                uriString = "content://test/audio/song_$idx.flac",
+                title = "Track %02d".format(idx),
+                fileName = "%02d.flac".format(idx),
+                trackNumber = idx,
+            )
+        }
+        val tracksDesc = tracksAsc.reversed()
+
+        var snapshot by mutableStateOf(
+            LibrarySnapshot(
+                allSongs = tracksAsc,
+                sortPreferences = LibrarySortPreferences(
+                    allSongs = TrackSortSpec(TrackSortOption.TITLE, SortDirection.ASC),
+                ),
+            ),
+        )
+
+        composeRule.setContent {
+            BitPerfectPlayerTheme {
+                LibraryScreen(
+                    libraryState = snapshot,
+                    favoriteTrackUris = emptySet(),
+                    playbackState = PlaybackControllerState(),
+                    albumArtworkLoader = artworkLoader,
+                    onRefreshLibrary = {},
+                    onImportFolder = {},
+                    onPlayTracks = { _, _, _ -> },
+                    onEnqueueTrack = {},
+                    onEnqueueNext = {},
+                    onEnqueueTracks = { _, _ -> },
+                    onEnqueueTracksNext = { _, _ -> },
+                    onSetTrackSort = { _, _ -> },
+                    onSetGroupSort = { _, _ -> },
+                    onAddToPlaylist = {},
+                    onShowTrackInfo = {},
+                    onToggleFavorite = {},
+                    onOpenQueue = {},
+                    onOpenDiagnostics = {},
+                )
+            }
+        }
+
+        // Initial top item is Track 01; scroll deep into the list (index 18 -> Track 19)
+        composeRule.onNodeWithText("Track 01").assertIsDisplayed()
+        composeRule.onNode(hasScrollToIndexAction()).performScrollToIndex(18)
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("Track 19").assertIsDisplayed()
+
+        // Reverse sort order (Title Z-A): list must snap back to index 0 so Track 30 is displayed immediately
+        snapshot = LibrarySnapshot(
+            allSongs = tracksDesc,
+            sortPreferences = LibrarySortPreferences(
+                allSongs = TrackSortSpec(TrackSortOption.TITLE, SortDirection.DESC),
+            ),
+        )
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("Track 30").assertIsDisplayed()
+    }
+
+    @Test
+    fun queueScreen_displaysActiveContextSubtitleWithoutViewingBanner() {
+        val trackTwo = hiResFlacTrack.copy(
+            uriString = "content://test/audio/restless.flac",
+            title = "Restless Heart Syndrome",
+            trackNumber = 13,
+        )
+        val queueState = PlaybackControllerState(
+            queue = QueueSnapshot(items = listOf(hiResFlacTrack, trackTwo), currentIndex = 0),
+            queueContext = QueueContext.album("21st Century Breakdown"),
+            activeTrack = hiResFlacTrack,
+        )
+
+        composeRule.setContent {
+            BitPerfectPlayerTheme {
+                QueueScreen(
+                    playbackState = queueState,
+                    libraryTracks = listOf(hiResFlacTrack, trackTwo),
+                    activeContextTracks = listOf(hiResFlacTrack, trackTwo),
+                    albumArtworkLoader = artworkLoader,
+                    onBack = {},
+                    onSelectQueueIndex = {},
+                    onAddTrackToQueue = {},
+                    onRemoveQueueItem = {},
+                    onMoveQueueItem = { _, _ -> },
+                    onToggleShuffle = {},
+                    onCycleRepeatMode = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("Playback Queue").assertIsDisplayed()
+        composeRule.onNodeWithText("Album · 21st Century Breakdown · 2 tracks").assertIsDisplayed()
+        composeRule.onNodeWithText("Peacemaker").assertIsDisplayed()
+        composeRule.onNodeWithText("Restless Heart Syndrome").assertIsDisplayed()
+        assertEquals(0, composeRule.onAllNodesWithText("Load Queue").fetchSemanticsNodes().size)
     }
 
     @Test

@@ -455,3 +455,35 @@ Implemented metadata disc/track extraction (zero scan regression), scoped contex
 - **Strict Offline Privacy Audit (Source + All 5 Merged Debug, Release & UnitTest Manifests):** **PASS** — **0 `android.permission.INTERNET`**, **0 `android.permission.MANAGE_EXTERNAL_STORAGE`**.
 - **Pure-Kotlin Domain Boundary:** **PASS** — **0 `android.*`, `androidx.*`, or `org.json.*` imports** across all **28** pure-Kotlin domain modules.
 
+---
+
+## 14. Post-Release UX Polish & Remaining Minor Code-Audit Fixes
+
+Following physical testing of the signed Release APK on POCO F4 (Android 14 / HyperOS) confirming smooth, safe playback, the following UX polish items and remaining minor code-audit fixes were implemented and verified:
+
+### Delivered Changes
+1. **Auto-Scroll to Top on Sort & Search Changes (`LibraryScreen.kt`, `PlaylistsScreen.kt`):**
+   - Added explicit `scrollResetKey: Any` parameters to `TrackListView`, `GroupListView`, `GroupDetailTrackList`, and `PlaylistDetailView` (keyed by active sort spec across every tab/detail and `Pair(sortPrefs.allSongs, searchQuery.trim())` on `All Songs`).
+   - Added `val listState = rememberLazyListState()` paired with a remembered `previousResetKey` guard inside `LaunchedEffect(scrollResetKey)` so initial composition / returning from `NowPlayingScreen` preserves the user's scroll offset, while changing sort order or search query immediately calls `listState.scrollToItem(0)`.
+2. **Removed Redundant `Pause` Button From `NowPlayingScreen` TopAppBar (`NowPlayingScreen.kt`, `BitPerfectAppNav.kt`, `MainViewModel.kt`):**
+   - Removed the duplicate `"Pause"` `FilledTonalButton` from `NowPlayingScreen`'s `TopAppBar` actions along with the unused `onQuickPause` parameter, `FilledTonalButton` import, and `MainViewModel.pause()`.
+   - `NowPlayingScreen`'s `TopAppBar` now cleanly holds only Back navigation, `Now Playing` (+ active queue context subtitle), `SleepTimerTopBarButton`, Favorite toggle, and the `MoreVert` overflow menu, while the primary `64.dp` central Play/Pause transport button remains prominent and accessible.
+3. **Real-Time Context-Aware Playback Queue Switching (`QueueContext.kt`, `MainViewModel.kt`, `PlaybackController.kt`, `QueueScreen.kt`, `BitPerfectAppNav.kt`):**
+   - Removed the `"Viewing ... Load Queue"` banner from `QueueScreen` along with dead `viewingBannerContext`, `onLoadBrowsingContext`, `browsingContext`, `_browsingQueueContext`, `loadBrowsingContextQueue`, `prepareContextQueueIfIdle`, and `QueueContext.formatViewingBannerText`.
+   - Added pure-Kotlin `QueueContextResolver.shouldSwitchToBrowsingContext(...)` and updated `MainViewModel.prepareQueueScreenContext(browsingContext)` so opening `QueueScreen` from a different non-empty scoped view (Album, Artist, Folder, Playlist, Recent, Favorites, or Most Played — never `All Songs`) immediately replaces the active queue via `loadContextQueue(..., autoPlay = false)` (safely pausing prior playback and releasing audio focus cleanly without auto-blasting audio).
+   - Opening `QueueScreen` from `NowPlayingScreen`, `All Songs`, or the same already-active context preserves active playback untouched. `QueueScreen`'s TopAppBar continues displaying `activeContext.formatQueueSubtitle(queue.size)`.
+4. **Remaining Minor Code-Audit Fixes & Hairline Divider Alignment Polish (`PlaybackController.kt`, `GaplessTransitionPolicy.kt`, `AudioOutputEngine.kt`, `LibraryScreen.kt`, `PlaylistsScreen.kt`):**
+   - **End-of-Track Sleep Timer Pause on Seamless Gapless Transition:** Added pure-Kotlin `PostGaplessTransitionDirective` / `GaplessTransitionPolicy.resolvePostTransitionDirective(...)` and updated `PlaybackController.handleGaplessTransition()` so when `pauseAfterTransition == true` on the normal transition path, it explicitly calls `engine.setNextTrack(null)`, `engine.pause()`, and `persistCurrentPositionAsync()`.
+   - **Strict `SAFE_VOLUME_MODE` Guard on All `AudioTrack.setVolume(...)` Calls:** Guarded `AudioTrack.setVolume(...)` in `AudioOutputEngine.play()`, `AUDIOFOCUS_GAIN`, and `setSafeModeOutputVolume(...)` strictly with `safetyController.state().mode == AudioOutputMode.SAFE_VOLUME_MODE` so `BIT_PERFECT_OPT_IN` mode never invokes software `AudioTrack.setVolume(...)`. Also released audio focus cleanly when loading a track with `autoPlay = false`.
+   - **Pixel-Exact Hairline Divider Alignment:** Aligned `TrackListView` row dividers to `start = if (showTrackNumber) 110.dp else 76.dp`, `GroupListView` row dividers to `start = if (showArtworkThumbnail) 76.dp else 72.dp`, and `MostPlayedTrackRow` dividers (`PlaylistsOverviewList` and `MostPlayedDetailView`) to `start = 90.dp`.
+
+### Software Verification (`./gradlew clean testDebugUnitTest lintDebug assembleDebug assembleRelease`)
+- **Automated JVM Unit + Robolectric SQLite Migration + Headless Compose UI Tests:** **146 / 146 passed** across **29 test suites** (`0` failed, `0` errors, `0` skipped, `0` `@Ignore`), adding tests in `QueueContextTest` (`shouldSwitchToBrowsingContext_switchesForDifferentScopedContextAndPreservesSameOrNull`), `GaplessTransitionPolicyTest` (`resolvePostTransitionDirective_pausesAndPersistsWhenEndOfTrackSleepTimerTriggers`), and `BitPerfectUiBehaviorTest` (`nowPlayingScreen_hasNoDuplicateTopBarPauseButtonWhilePrimaryTransportPauseWorks`, `libraryScreen_autoScrollsToTopWhenSortOrderChanges`, `queueScreen_displaysActiveContextSubtitleWithoutViewingBanner`).
+- **Compiler & R8 Warnings:** `0` Kotlin compiler warnings (production + test), `0` KSP warnings, `0` R8 warnings.
+- **Android Lint (`lintDebug` & `lintVitalRelease`):** **0 errors**, **0 warnings across all `/app/src/` Kotlin, manifest, and resource files**.
+- **Debug APK (`assembleDebug`):** `app/build/outputs/apk/debug/app-debug.apk` (`20.03 MB` / `20,998,736 bytes`).
+- **Release APK (`assembleRelease` with R8 optimization):** `app/build/outputs/apk/release/app-release-unsigned.apk` (`2.40 MB` / `2,518,182 bytes`).
+- **Strict Offline Privacy Audit (Source + All 8 Generated Debug, Release & UnitTest Manifests):** **PASS** — **0 `android.permission.INTERNET`**, **0 `android.permission.MANAGE_EXTERNAL_STORAGE`**.
+- **Physical Hardware Verification Pending (Not Executed in Cloud):** On POCO F4 (Android 14 / HyperOS) + KZ EDX Pro 2 USB-C, confirm on-device: (1) auto-scroll-to-top on sort/search changes while preserving scroll position when navigating back from `NowPlayingScreen`, (2) immediate paused queue switching when opening Queue from a different Album/Artist/Folder/Playlist vs. uninterrupted playback from the same Album or `NowPlayingScreen`, (3) clean TopAppBar on `NowPlayingScreen` and aligned dividers in Album Detail / Most Played, and (4) End-of-Track Sleep Timer pause across same-format gapless tracks and real USB-C DAC playback behavior.
+
+

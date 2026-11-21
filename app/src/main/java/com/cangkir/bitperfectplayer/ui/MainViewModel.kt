@@ -9,6 +9,7 @@ import com.cangkir.bitperfectplayer.audio.BrowsingQueueContext
 import com.cangkir.bitperfectplayer.audio.PlaybackControllerState
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
 import com.cangkir.bitperfectplayer.audio.QueueContext
+import com.cangkir.bitperfectplayer.audio.QueueContextResolver
 import com.cangkir.bitperfectplayer.audio.ReplayGainMode
 import com.cangkir.bitperfectplayer.audio.SleepTimerPreset
 import com.cangkir.bitperfectplayer.audio.SleepTimerState
@@ -74,9 +75,6 @@ class MainViewModel(
     private val _trackInfoState = MutableStateFlow<TrackTechnicalInfo?>(null)
     val trackInfoState: StateFlow<TrackTechnicalInfo?> = _trackInfoState.asStateFlow()
     private var trackInfoJob: Job? = null
-
-    private val _browsingQueueContext = MutableStateFlow<BrowsingQueueContext?>(null)
-    val browsingQueueContext: StateFlow<BrowsingQueueContext?> = _browsingQueueContext.asStateFlow()
 
     private val _uiMessage = MutableStateFlow<String?>(null)
     val uiMessage: StateFlow<String?> = _uiMessage.asStateFlow()
@@ -164,27 +162,29 @@ class MainViewModel(
     }
 
     /**
-     * Records the viewed Album/Artist/Folder/Playlist context when opening `QueueScreen` and, if
-     * playback is currently `IDLE` with an empty queue, prepares that context paused automatically.
+     * Synchronizes the active playback queue in real time with the Album/Artist/Folder/Playlist/
+     * Recent/Favorites/Most Played view currently open when navigating to `QueueScreen`:
+     * - When viewing a different non-empty scoped context (never `All Songs`), immediately replaces
+     *   the active queue paused (`autoPlay = false`, safely halting prior audio without auto-blast).
+     * - When opened from `NowPlayingScreen`, `All Songs`, or the same already-active context,
+     *   preserves the active queue and active playback untouched.
      */
     fun prepareQueueScreenContext(browsingContext: BrowsingQueueContext?) {
-        _browsingQueueContext.value = browsingContext
-        if (browsingContext != null && browsingContext.tracks.isNotEmpty()) {
-            container.playbackController.prepareContextQueueIfIdle(
+        val currentState = playbackState.value
+        if (
+            browsingContext != null &&
+            QueueContextResolver.shouldSwitchToBrowsingContext(
+                activeContext = currentState.queueContext,
+                isActiveQueueEmpty = currentState.queue.isEmpty,
+                browsingContext = browsingContext,
+            )
+        ) {
+            container.playbackController.loadContextQueue(
                 tracks = browsingContext.tracks,
                 context = browsingContext.context,
+                autoPlay = false,
             )
         }
-    }
-
-    fun loadBrowsingContextQueue(browsingContext: BrowsingQueueContext) {
-        if (browsingContext.tracks.isEmpty()) return
-        container.playbackController.loadContextQueue(
-            tracks = browsingContext.tracks,
-            context = browsingContext.context,
-            autoPlay = false,
-        )
-        _uiMessage.value = "Loaded ${browsingContext.context.formatCompactLabel()} (${browsingContext.tracks.size} ${if (browsingContext.tracks.size == 1) "track" else "tracks"})"
     }
 
     fun playTrackAtQueueIndex(index: Int) {
@@ -234,7 +234,6 @@ class MainViewModel(
     }
 
     fun togglePlayPause() = container.playbackController.togglePlayPause()
-    fun pause() = container.playbackController.pause()
     fun next() = container.playbackController.next(userInitiated = true)
     fun previous() = container.playbackController.previous()
     fun seekTo(positionMs: Long) = container.playbackController.seekTo(positionMs)

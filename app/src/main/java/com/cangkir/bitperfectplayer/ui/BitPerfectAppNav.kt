@@ -86,7 +86,6 @@ fun BitPerfectAppRoot(
     val playlistsState by viewModel.playlistsState.collectAsStateWithLifecycle()
     val favoriteTrackUris by viewModel.favoriteTrackUris.collectAsStateWithLifecycle()
     val playbackState by viewModel.playbackState.collectAsStateWithLifecycle()
-    val browsingQueueContext by viewModel.browsingQueueContext.collectAsStateWithLifecycle()
     val lyricsUiState by viewModel.lyricsUiState.collectAsStateWithLifecycle()
     val trackInfoState by viewModel.trackInfoState.collectAsStateWithLifecycle()
     val uiMessage by viewModel.uiMessage.collectAsStateWithLifecycle()
@@ -283,7 +282,6 @@ fun BitPerfectAppRoot(
                     onShowTrackInfo = viewModel::openTrackInfo,
                     onSelectSleepTimerPreset = viewModel::setSleepTimerPreset,
                     onTogglePlayPause = viewModel::togglePlayPause,
-                    onQuickPause = viewModel::pause,
                     onPrevious = viewModel::previous,
                     onNext = viewModel::next,
                     onSeekTo = viewModel::seekTo,
@@ -324,12 +322,10 @@ fun BitPerfectAppRoot(
                 QueueScreen(
                     playbackState = playbackState,
                     libraryTracks = libraryState.allSongs,
-                    browsingContext = browsingQueueContext,
                     activeContextTracks = activeContextTracks,
                     albumArtworkLoader = viewModel.albumArtworkLoader,
                     onBack = { navController.popBackStack() },
                     onSelectQueueIndex = viewModel::playTrackAtQueueIndex,
-                    onLoadBrowsingContext = viewModel::loadBrowsingContextQueue,
                     onAddTrackToQueue = viewModel::enqueueTrack,
                     onRemoveQueueItem = viewModel::removeQueueItem,
                     onMoveQueueItem = viewModel::moveQueueItem,
