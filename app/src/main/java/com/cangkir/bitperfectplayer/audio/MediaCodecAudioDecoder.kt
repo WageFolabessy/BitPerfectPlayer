@@ -403,7 +403,7 @@ class MediaCodecAudioDecoder private constructor(
             uri: Uri,
             fileName: String?,
             classifiedFormat: SupportedAudioFormat?,
-        ): MediaCodecAudioDecoder {
+        ): PcmAudioDecoder {
             // Inspect FLAC header directly if applicable so source bit depth (16 vs 24) is verified.
             val flacInfo = if (classifiedFormat == SupportedAudioFormat.FLAC) {
                 readFlacHeaderSafely(context, uri)
@@ -415,42 +415,33 @@ class MediaCodecAudioDecoder private constructor(
             var codec: MediaCodec? = null
             try {
                 extractor.setDataSource(context, uri, null)
-                var audioTrackIndex = -1
-                var trackFormat: MediaFormat? = null
-                for (i in 0 until extractor.trackCount) {
-                    val fmt = extractor.getTrackFormat(i)
-                    val mime = fmt.getString(MediaFormat.KEY_MIME).orEmpty()
-                    if (mime.startsWith("audio/")) {
-                        audioTrackIndex = i
-                        trackFormat = fmt
-                        break
-                    }
-                }
-                if (audioTrackIndex < 0 || trackFormat == null) {
-                    throw AudioDecodeException.UnsupportedFormat(
-                        "No supported audio track found in ${fileName ?: uri}",
-                    )
-                }
-
-                val mime = trackFormat.getString(MediaFormat.KEY_MIME)
-                    ?: throw AudioDecodeException.UnsupportedFormat("Audio track has missing MIME type")
-                validateAllowedMime(mime, fileName)
-
-                extractor.selectTrack(audioTrackIndex)
+                val (trackFormat, mime) = selectFirstAudioTrack(extractor, fileName, uri)
 
                 val sourceSampleRate = flacInfo?.sampleRateHz
                     ?: trackFormat.getIntegerOrDefault(MediaFormat.KEY_SAMPLE_RATE, 44_100)
                 val sourceChannels = flacInfo?.channelCount
                     ?: trackFormat.getIntegerOrDefault(MediaFormat.KEY_CHANNEL_COUNT, 2)
-                val durationMs = when {
-                    trackFormat.containsKey(MediaFormat.KEY_DURATION) ->
-                        (trackFormat.getLong(MediaFormat.KEY_DURATION) / 1000L).coerceAtLeast(0L)
-                    flacInfo != null && flacInfo.durationMs > 0L -> flacInfo.durationMs
-                    else -> 0L
+                val durationMs = resolveTrackDurationMs(trackFormat, flacInfo)
+
+                // When MediaExtractor exposes audio/raw directly (e.g., Android 16 / Custom ROM
+                // FlacExtractor decoding FLAC internally), NEVER force KEY_PCM_ENCODING=PCM_FLOAT
+                // or route through c2.android.raw.decoder (which emits integer bytes tagged as
+                // float32 -> white noise). Read raw PCM directly with verified source encoding.
+                if (mime.equals(MediaFormat.MIMETYPE_AUDIO_RAW, ignoreCase = true)) {
+                    return RawExtractorPcmDecoder.open(
+                        extractor = extractor,
+                        trackFormat = trackFormat,
+                        sourceSampleRate = sourceSampleRate,
+                        sourceChannels = sourceChannels,
+                        durationMs = durationMs,
+                        classifiedFormat = classifiedFormat,
+                        flacInfo = flacInfo,
+                    )
                 }
+
                 val sourceBitDepth = flacInfo?.bitsPerSample ?: detectSourceBitDepthFromFormat(trackFormat)
 
-                // Request ENCODING_PCM_FLOAT for >16-bit sources (preserves full 24-bit mantissa precision
+                // Request ENCODING_PCM_FLOAT for >16-bit compressed sources (preserves full 24-bit mantissa precision
                 // losslessly and is natively supported by c2.android.flac.decoder and AudioFlinger).
                 // For 16-bit sources (MP3, AAC, OGG, 16-bit FLAC), omit KEY_PCM_ENCODING so Android codecs
                 // use their native 16-bit PCM default without vendor configure() rejections.
@@ -515,6 +506,37 @@ class MediaCodecAudioDecoder private constructor(
             } catch (e: SecurityException) {
                 failDecoderInit(codec, extractor, e)
             }
+        }
+
+        private fun selectFirstAudioTrack(extractor: MediaExtractor, fileName: String?, uri: Uri): Pair<MediaFormat, String> {
+            var audioTrackIndex = -1
+            var trackFormat: MediaFormat? = null
+            for (i in 0 until extractor.trackCount) {
+                val fmt = extractor.getTrackFormat(i)
+                val mime = fmt.getString(MediaFormat.KEY_MIME).orEmpty()
+                if (mime.startsWith("audio/")) {
+                    audioTrackIndex = i
+                    trackFormat = fmt
+                    break
+                }
+            }
+            if (audioTrackIndex < 0 || trackFormat == null) {
+                throw AudioDecodeException.UnsupportedFormat(
+                    "No supported audio track found in ${fileName ?: uri}",
+                )
+            }
+            val mime = trackFormat.getString(MediaFormat.KEY_MIME)
+                ?: throw AudioDecodeException.UnsupportedFormat("Audio track has missing MIME type")
+            validateAllowedMime(mime, fileName)
+            extractor.selectTrack(audioTrackIndex)
+            return trackFormat to mime
+        }
+
+        private fun resolveTrackDurationMs(trackFormat: MediaFormat, flacInfo: FlacStreamInfo?): Long = when {
+            trackFormat.containsKey(MediaFormat.KEY_DURATION) ->
+                (trackFormat.getLong(MediaFormat.KEY_DURATION) / 1000L).coerceAtLeast(0L)
+            flacInfo != null && flacInfo.durationMs > 0L -> flacInfo.durationMs
+            else -> 0L
         }
 
         private fun failDecoderInit(codec: MediaCodec?, extractor: MediaExtractor, cause: Throwable): Nothing {

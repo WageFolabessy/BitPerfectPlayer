@@ -196,4 +196,185 @@ class PcmStreamRulesTest {
         assertEquals("Miles Davis · Kind of Blue", track.artistAlbumLine)
         assertEquals("FLAC · 24-bit · 96,000 Hz", track.formatBadge)
     }
+
+    @Test
+    fun resolveRawExtractorSourceEncoding_handlesAllPcmEncodingsAndBitsPerSampleFallbacks() {
+        // Explicit KEY_PCM_ENCODING resolves every Android raw PCM encoding cleanly
+        assertEquals(
+            RawSourcePcmEncoding.PCM_8BIT,
+            PcmStreamRules.resolveRawExtractorSourceEncoding(true, PcmStreamRules.ANDROID_ENCODING_PCM_8BIT, null),
+        )
+        assertEquals(
+            RawSourcePcmEncoding.PCM_16BIT,
+            PcmStreamRules.resolveRawExtractorSourceEncoding(true, PcmStreamRules.ANDROID_ENCODING_PCM_16BIT, 24),
+        )
+        assertEquals(
+            RawSourcePcmEncoding.PCM_24BIT_PACKED,
+            PcmStreamRules.resolveRawExtractorSourceEncoding(true, PcmStreamRules.ANDROID_ENCODING_PCM_24BIT_PACKED, null),
+        )
+        assertEquals(
+            RawSourcePcmEncoding.PCM_32BIT,
+            PcmStreamRules.resolveRawExtractorSourceEncoding(true, PcmStreamRules.ANDROID_ENCODING_PCM_32BIT, 24),
+        )
+        assertEquals(
+            RawSourcePcmEncoding.PCM_FLOAT,
+            PcmStreamRules.resolveRawExtractorSourceEncoding(true, PcmStreamRules.ANDROID_ENCODING_PCM_FLOAT, 24),
+        )
+
+        // Missing KEY_PCM_ENCODING falls back cleanly to bits-per-sample / bit-depth
+        assertEquals(
+            RawSourcePcmEncoding.PCM_8BIT,
+            PcmStreamRules.resolveRawExtractorSourceEncoding(false, null, 8),
+        )
+        assertEquals(
+            RawSourcePcmEncoding.PCM_16BIT,
+            PcmStreamRules.resolveRawExtractorSourceEncoding(false, null, 16),
+        )
+        assertEquals(
+            RawSourcePcmEncoding.PCM_24BIT_PACKED,
+            PcmStreamRules.resolveRawExtractorSourceEncoding(false, null, 24),
+        )
+        assertEquals(
+            RawSourcePcmEncoding.PCM_32BIT,
+            PcmStreamRules.resolveRawExtractorSourceEncoding(false, null, 32),
+        )
+
+        // Both absent or unrecognized defaults safely to PCM_16BIT
+        assertEquals(
+            RawSourcePcmEncoding.PCM_16BIT,
+            PcmStreamRules.resolveRawExtractorSourceEncoding(false, null, null),
+        )
+        assertEquals(
+            RawSourcePcmEncoding.PCM_16BIT,
+            PcmStreamRules.resolveRawExtractorSourceEncoding(true, 999, null),
+        )
+    }
+
+    @Test
+    fun selectRawOutputEncoding_usesNativePassthroughWhenSupportedAndLosslessConversionOtherwise() {
+        assertEquals(
+            PcmEncodingType.PCM_24BIT_PACKED,
+            PcmStreamRules.selectRawOutputEncoding(RawSourcePcmEncoding.PCM_24BIT_PACKED, supportsNative24And32 = true),
+        )
+        assertEquals(
+            PcmEncodingType.PCM_FLOAT,
+            PcmStreamRules.selectRawOutputEncoding(RawSourcePcmEncoding.PCM_24BIT_PACKED, supportsNative24And32 = false),
+        )
+        assertEquals(
+            PcmEncodingType.PCM_32BIT,
+            PcmStreamRules.selectRawOutputEncoding(RawSourcePcmEncoding.PCM_32BIT, supportsNative24And32 = true),
+        )
+        assertEquals(
+            PcmEncodingType.PCM_FLOAT,
+            PcmStreamRules.selectRawOutputEncoding(RawSourcePcmEncoding.PCM_32BIT, supportsNative24And32 = false),
+        )
+        assertEquals(
+            PcmEncodingType.PCM_16BIT,
+            PcmStreamRules.selectRawOutputEncoding(RawSourcePcmEncoding.PCM_8BIT, supportsNative24And32 = true),
+        )
+        assertEquals(
+            PcmEncodingType.PCM_16BIT,
+            PcmStreamRules.selectRawOutputEncoding(RawSourcePcmEncoding.PCM_16BIT, supportsNative24And32 = false),
+        )
+        assertEquals(
+            PcmEncodingType.PCM_FLOAT,
+            PcmStreamRules.selectRawOutputEncoding(RawSourcePcmEncoding.PCM_FLOAT, supportsNative24And32 = false),
+        )
+
+        assertEquals(
+            false,
+            PcmStreamRules.requiresRawPcmConversion(RawSourcePcmEncoding.PCM_24BIT_PACKED, PcmEncodingType.PCM_24BIT_PACKED),
+        )
+        assertEquals(
+            true,
+            PcmStreamRules.requiresRawPcmConversion(RawSourcePcmEncoding.PCM_24BIT_PACKED, PcmEncodingType.PCM_FLOAT),
+        )
+        assertEquals(
+            "MediaExtractor Direct PCM (PCM 24-bit Packed)",
+            PcmStreamRules.buildRawExtractorDecoderLabel(RawSourcePcmEncoding.PCM_24BIT_PACKED, PcmEncodingType.PCM_24BIT_PACKED),
+        )
+        assertEquals(
+            "MediaExtractor Direct PCM (PCM 24-bit Packed -> PCM_FLOAT (32-bit IEEE))",
+            PcmStreamRules.buildRawExtractorDecoderLabel(RawSourcePcmEncoding.PCM_24BIT_PACKED, PcmEncodingType.PCM_FLOAT),
+        )
+    }
+
+    @Test
+    fun convertPcm24LeToFloat32Bytes_producesExactFiniteNormalizedFloatsWithZeroNoise() {
+        val samples24 = intArrayOf(-8_388_608, -4_194_304, -1, 0, 1, 4_194_304, 8_388_607)
+        val src = ByteArray(2 + samples24.size * 3) // Include non-zero srcOffset = 2
+        for (i in samples24.indices) {
+            val v = samples24[i]
+            val idx = 2 + i * 3
+            src[idx] = (v and 0xFF).toByte()
+            src[idx + 1] = ((v ushr 8) and 0xFF).toByte()
+            src[idx + 2] = ((v ushr 16) and 0xFF).toByte()
+        }
+
+        val dest = ByteArray(4 + samples24.size * 4) // Include non-zero destOffset = 4
+        val written = PcmStreamRules.convertPcm24LeToFloat32Bytes(
+            srcBytes = src,
+            srcOffset = 2,
+            srcByteCount = samples24.size * 3,
+            destBytes = dest,
+            destOffset = 4,
+        )
+        assertEquals(samples24.size * 4, written)
+
+        val outFloats = FloatArray(samples24.size)
+        assertEquals(
+            samples24.size,
+            PcmStreamRules.convertLittleEndianBytesToFloats(dest, 4, written, outFloats),
+        )
+        val expected = floatArrayOf(
+            -1.0f,
+            -0.5f,
+            -1.0f / 8_388_608.0f,
+            0.0f,
+            1.0f / 8_388_608.0f,
+            0.5f,
+            8_388_607.0f / 8_388_608.0f,
+        )
+        for (i in expected.indices) {
+            assertEquals(true, outFloats[i].isFinite())
+            assertEquals(expected[i], outFloats[i], 0.0f)
+        }
+    }
+
+    @Test
+    fun convertPcm32LeToFloat32Bytes_producesExactFiniteFloatsWithoutOverflow() {
+        val samples32 = intArrayOf(Int.MIN_VALUE, -1_073_741_824, 0, 1_073_741_824, Int.MAX_VALUE)
+        val src = ByteArray(samples32.size * 4)
+        val bb = ByteBuffer.wrap(src).order(ByteOrder.LITTLE_ENDIAN)
+        samples32.forEach { bb.putInt(it) }
+
+        val dest = ByteArray(samples32.size * 4)
+        val written = PcmStreamRules.convertPcm32LeToFloat32Bytes(src, 0, src.size, dest, 0)
+        assertEquals(samples32.size * 4, written)
+
+        val outFloats = FloatArray(samples32.size)
+        assertEquals(
+            samples32.size,
+            PcmStreamRules.convertLittleEndianBytesToFloats(dest, 0, written, outFloats),
+        )
+        val expected = floatArrayOf(-1.0f, -0.5f, 0.0f, 0.5f, 1.0f)
+        for (i in expected.indices) {
+            assertEquals(true, outFloats[i].isFinite())
+            assertEquals(expected[i], outFloats[i], 1e-6f)
+        }
+    }
+
+    @Test
+    fun convertPcm8UnsignedToPcm16LeBytes_promotesLosslesslyAroundCenter128() {
+        val src = byteArrayOf(0, 64, 128.toByte(), 192.toByte(), 255.toByte())
+        val dest = ByteArray(src.size * 2)
+        val written = PcmStreamRules.convertPcm8UnsignedToPcm16LeBytes(src, 0, src.size, dest, 0)
+        assertEquals(src.size * 2, written)
+
+        val bb = ByteBuffer.wrap(dest).order(ByteOrder.LITTLE_ENDIAN)
+        val expected = shortArrayOf(-32_768, -16_384, 0, 16_384, 32_512)
+        for (i in expected.indices) {
+            assertEquals(expected[i], bb.short)
+        }
+    }
 }
