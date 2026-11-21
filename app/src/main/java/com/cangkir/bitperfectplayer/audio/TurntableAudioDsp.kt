@@ -78,6 +78,67 @@ object TurntableScratchPolicy {
     ): Boolean = bufferedFrameCount > 0 &&
         fallbackSeekMs < 0L &&
         cursorFrameLong in oldestAvailableFrame..writeHeadFrame
+
+    /**
+     * Computes the live scratch fill-throttle ceiling in PCM frames so `AudioTrack` is guaranteed
+     * to receive strictly more frames than its active `startThresholdInFrames` (avoiding circular
+     * silence deadlocks where AudioFlinger waits for `startThresholdInFrames` while the scratch
+     * loop waits for `playbackHeadPosition` to advance).
+     */
+    fun computeEffectiveScratchMaxAheadFrames(sampleRateHz: Int, trackStartThresholdFrames: Int, chunkFrames: Int): Long {
+        val baseHeadroom = (sampleRateHz.coerceAtLeast(8_000) / 15).toLong().coerceAtLeast(512L)
+        val startFloor = if (trackStartThresholdFrames > 0) {
+            trackStartThresholdFrames.toLong() + chunkFrames.coerceAtLeast(256).toLong()
+        } else {
+            0L
+        }
+        return maxOf(baseHeadroom, startFloor)
+    }
+}
+
+/**
+ * Pure-Kotlin hardware playback-head tracker for post-`AudioTrack.flush()` live turntable
+ * rendering (zero `android.*` imports).
+ *
+ * Android's `AudioTrack.flush()` resets `playbackHeadPosition` to `0` asynchronously on
+ * AudioFlinger in some Android versions/HALs: reading the head immediately after `flush()` can
+ * return a stale pre-flush frame count, and once `play()` resumes, the head suddenly drops to `0`.
+ * Rebasing [headOrigin] whenever the observed head drops backwards works identically across
+ * immediate-reset, async-delayed-reset, and monotonic HALs, making post-flush fill-throttle
+ * deadlocks mathematically impossible.
+ */
+class TurntableFlushHeadTracker(initialObservedHead: Long, private val maxAheadFrames: Long) {
+    var headOrigin: Long = initialObservedHead.coerceAtLeast(0L)
+        private set
+
+    var lastObservedHead: Long = headOrigin
+        private set
+
+    var framesWrittenSinceOrigin: Long = 0L
+        private set
+
+    fun computeAheadFrames(hwHead: Long): Long {
+        val safeHead = hwHead.coerceAtLeast(0L)
+        if (safeHead < headOrigin || safeHead < lastObservedHead) {
+            headOrigin = safeHead
+            framesWrittenSinceOrigin = if (safeHead == 0L) {
+                0L
+            } else {
+                minOf(framesWrittenSinceOrigin, maxAheadFrames.coerceAtLeast(0L))
+            }
+        }
+        lastObservedHead = safeHead
+        val consumedSinceOrigin = (safeHead - headOrigin).coerceAtLeast(0L)
+        return (framesWrittenSinceOrigin - consumedSinceOrigin).coerceAtLeast(0L)
+    }
+
+    fun onFramesWritten(frameCount: Int) {
+        if (frameCount > 0) {
+            framesWrittenSinceOrigin += frameCount.toLong()
+        }
+    }
+
+    fun currentTrackWrittenFrame(): Long = headOrigin + framesWrittenSinceOrigin
 }
 
 /**

@@ -172,6 +172,16 @@ class AudioOutputEngine(
                     return@withLock
                 }
                 val track = activeAudioTrack ?: return@withLock
+                if (playbackThread?.isAlive != true) {
+                    routeAndMixerManager.resumeAfterTransientFocusLoss = false
+                    if (safetyController.state().mode == AudioOutputMode.SAFE_VOLUME_MODE) {
+                        runCatching { track.setVolume(1.0f) }
+                    }
+                    if (startPlaybackWorkerLocked(_playbackPositionMs.value, loadGeneration.get())) {
+                        _state.update { it.copy(status = PlaybackStatus.PLAYING, errorMessage = null, lastAutoPauseNotice = null) }
+                    }
+                    return@withLock
+                }
                 if (!routeAndMixerManager.requestAudioFocusLocked()) {
                     isPausedFlag.set(true)
                     trackWriter.safePause(track)
@@ -179,15 +189,13 @@ class AudioOutputEngine(
                     return@withLock
                 }
                 routeAndMixerManager.resumeAfterTransientFocusLoss = false
+                stopWorkerFlag.set(false)
                 isPausedFlag.set(false)
                 if (safetyController.state().mode == AudioOutputMode.SAFE_VOLUME_MODE) {
                     runCatching { track.setVolume(1.0f) }
                 }
                 trackWriter.safePlay(track)
                 _state.update { it.copy(status = PlaybackStatus.PLAYING, errorMessage = null, lastAutoPauseNotice = null) }
-                if (playbackThread?.isAlive != true) {
-                    startPlaybackWorkerLocked(_playbackPositionMs.value, loadGeneration.get())
-                }
             }
         }
     }
@@ -397,23 +405,27 @@ class AudioOutputEngine(
         activeDecoder = decoder
         activeAudioTrack = audioTrack
         _playbackPositionMs.value = decoder.currentPositionMs
-        _state.update { current ->
-            current.copy(
-                status = if (request.autoPlay) PlaybackStatus.PLAYING else PlaybackStatus.PAUSED,
-                activeTrackUri = request.uri,
-                durationMs = decoder.format.durationMs,
-                errorMessage = null,
-                lastAutoPauseNotice = if (preserveAutoPauseNotice) current.lastAutoPauseNotice else null,
-            )
-        }
-        publishDiagnostics()
-        if (request.autoPlay) {
+        val startedPlaying = if (request.autoPlay) {
+            if (safetyController.state().mode == AudioOutputMode.SAFE_VOLUME_MODE) {
+                runCatching { audioTrack.setVolume(1.0f) }
+            }
             startPlaybackWorkerLocked(decoder.currentPositionMs, generation)
         } else {
             isPausedFlag.set(true)
             routeAndMixerManager.resumeAfterTransientFocusLoss = false
             routeAndMixerManager.abandonAudioFocusLocked()
+            false
         }
+        _state.update { current ->
+            current.copy(
+                status = if (startedPlaying) PlaybackStatus.PLAYING else PlaybackStatus.PAUSED,
+                activeTrackUri = request.uri,
+                durationMs = decoder.format.durationMs,
+                errorMessage = if (request.autoPlay && !startedPlaying) "Audio focus denied" else null,
+                lastAutoPauseNotice = if (preserveAutoPauseNotice) current.lastAutoPauseNotice else null,
+            )
+        }
+        publishDiagnostics()
     }
 
     private fun handleSafetyCommand(command: SafetyCommand) {
@@ -509,14 +521,14 @@ class AudioOutputEngine(
         return configured.track
     }
 
-    private fun startPlaybackWorkerLocked(initialSeekMs: Long, expectedGeneration: Long) {
-        val decoder = activeDecoder ?: return
-        val track = activeAudioTrack ?: return
+    private fun startPlaybackWorkerLocked(initialSeekMs: Long, expectedGeneration: Long): Boolean {
+        val decoder = activeDecoder ?: return false
+        val track = activeAudioTrack ?: return false
         if (!routeAndMixerManager.requestAudioFocusLocked()) {
             isPausedFlag.set(true)
             trackWriter.safePause(track)
             _state.update { it.copy(status = PlaybackStatus.PAUSED, errorMessage = "Audio focus denied") }
-            return
+            return false
         }
         stopWorkerFlag.set(false)
         isPausedFlag.set(false)
@@ -532,6 +544,7 @@ class AudioOutputEngine(
         )
         playbackThread = worker
         worker.start()
+        return true
     }
 
     @Suppress("TooGenericExceptionCaught") // Top-level audio worker thread must surface OEM HAL errors safely instead of crashing

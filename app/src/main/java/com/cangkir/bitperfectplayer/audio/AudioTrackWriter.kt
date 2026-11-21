@@ -231,6 +231,37 @@ internal class AudioTrackWriter(
     }
 
     /**
+     * Lowers `AudioTrack.startThresholdInFrames` on API 31+ right before live turntable scratch so
+     * AudioFlinger begins rendering audibly within `~65 ms` after `flush()`, and returns the
+     * actual active start threshold in frames (falling back to `bufferSizeInFrames` on API 26–30).
+     */
+    fun configureScratchStartThreshold(track: AudioTrack, desiredHeadroomFrames: Int): Int = runCatching {
+        if (track.state != AudioTrack.STATE_INITIALIZED) return@runCatching 0
+        val capacity = track.bufferCapacityInFrames.coerceAtLeast(1)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val target = desiredHeadroomFrames.coerceIn(256.coerceAtMost(capacity), capacity)
+            track.startThresholdInFrames = target
+            track.startThresholdInFrames
+        } else {
+            track.bufferSizeInFrames
+        }
+    }.getOrDefault(0)
+
+    /**
+     * Restores the default full-buffer `startThresholdInFrames` on API 31+ when exiting live
+     * turntable scratch back to normal streaming playback.
+     */
+    fun restoreDefaultStartThreshold(track: AudioTrack) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+        runCatching {
+            if (track.state == AudioTrack.STATE_INITIALIZED) {
+                val capacity = track.bufferCapacityInFrames.coerceAtLeast(1)
+                track.startThresholdInFrames = track.bufferSizeInFrames.coerceIn(1, capacity)
+            }
+        }
+    }
+
+    /**
      * Cleanly idempotent AudioTrack teardown: avoids duplicate `stop()` / `pause()` calls when the
      * track is already paused, flushed, or stopped.
      */

@@ -369,4 +369,173 @@ class TurntableAudioDspTest {
             ),
         )
     }
+
+    @Test
+    fun computeEffectiveScratchMaxAheadFrames_alwaysExceedsTrackStartThreshold() {
+        // When AudioTrack startThresholdInFrames is larger than sampleRate / 15 (e.g., 160 ms buffer
+        // on 48 kHz = 7,680 frames vs 3,200 base headroom), maxAhead MUST exceed startThreshold!
+        val effective = TurntableScratchPolicy.computeEffectiveScratchMaxAheadFrames(
+            sampleRateHz = 48_000,
+            trackStartThresholdFrames = 7_680,
+            chunkFrames = 727,
+        )
+        assertTrue(effective > 7_680L)
+        assertEquals(7_680L + 727L, effective)
+
+        // When startThreshold is lowered to ~65 ms on API 31+, base headroom + chunk floor applies cleanly
+        val lowLatency = TurntableScratchPolicy.computeEffectiveScratchMaxAheadFrames(
+            sampleRateHz = 48_000,
+            trackStartThresholdFrames = 2_000,
+            chunkFrames = 727,
+        )
+        assertEquals(3_200L, lowLatency)
+    }
+
+    @Test
+    fun flushHeadTracker_handlesImmediateResetAsyncStaleFlushResetAndMonotonicHalWithoutDeadlock() {
+        val maxAhead = 3_200L
+
+        // Case 1: Stale pre-flush head (192,000) observed right after flush(), then AudioFlinger resets hwHead -> 0
+        val asyncTracker = TurntableFlushHeadTracker(initialObservedHead = 192_000L, maxAheadFrames = maxAhead)
+        assertEquals(0L, asyncTracker.computeAheadFrames(192_000L))
+        asyncTracker.onFramesWritten(727)
+        // Suddenly AudioFlinger commits the async flush and drops playbackHeadPosition to 0:
+        // Previously ahead became (192,727 - 0) >> 3,200 (permanent silence deadlock); now it rebases cleanly!
+        val aheadAfterDrop = asyncTracker.computeAheadFrames(0L)
+        assertTrue("Expected non-deadlocking ahead <= maxAhead after async flush reset, got $aheadAfterDrop", aheadAfterDrop <= maxAhead)
+        assertEquals(0L, asyncTracker.headOrigin)
+        asyncTracker.onFramesWritten(727)
+        assertEquals(727L, asyncTracker.computeAheadFrames(0L))
+        assertEquals(227L, asyncTracker.computeAheadFrames(500L))
+
+        // Case 2: Immediate flush reset (head already 0)
+        val zeroTracker = TurntableFlushHeadTracker(initialObservedHead = 0L, maxAheadFrames = maxAhead)
+        zeroTracker.onFramesWritten(1_454)
+        assertEquals(1_454L, zeroTracker.computeAheadFrames(0L))
+        assertEquals(454L, zeroTracker.computeAheadFrames(1_000L))
+
+        // Case 3: Monotonic HAL that does not reset head to 0 on flush()
+        val monoTracker = TurntableFlushHeadTracker(initialObservedHead = 50_000L, maxAheadFrames = maxAhead)
+        monoTracker.onFramesWritten(1_500)
+        assertEquals(1_500L, monoTracker.computeAheadFrames(50_000L))
+        assertEquals(500L, monoTracker.computeAheadFrames(51_000L))
+        assertEquals(51_500L, monoTracker.currentTrackWrittenFrame())
+    }
+
+    @Test
+    fun loadPausedThenPlay_shortPcmFeedThenImmediateForwardHoldAndReverseScratchProducesAudiblePcmWithoutSeek() {
+        // Simulate loadTrack(startPositionMs = 30_000, autoPlay = false) -> play() -> brief PCM feed
+        // (~500 ms = 24,000 frames @ 48 kHz) -> immediate vinyl touch without any prior seekTo().
+        val sampleRate = 48_000
+        val channels = 2
+        val streamOriginMs = 30_000L
+        val durationMs = 180_000L
+        val chunkFrames = sampleRate / 66 // 727 frames (~15 ms)
+
+        val ring = TurntablePcmRingBuffer(channelCount = channels)
+        ring.reset(0L)
+
+        // Short PCM feed after play(): 24,000 frames of 440 Hz stereo sine (plus forward decode-ahead source)
+        val totalSourceFrames = 96_000
+        val sourceTone = FloatArray(totalSourceFrames * channels) { idx ->
+            val frame = idx / channels
+            kotlin.math.sin(2.0 * kotlin.math.PI * 440.0 * frame / sampleRate).toFloat() * 0.75f
+        }
+        var decodedIntoRingFrames = 24_000
+        ring.appendInterleavedFloats(sourceTone, frameCount = decodedIntoRingFrames, srcFloatOffset = 0)
+
+        // Anchor entry cursor at hardware head (~16,000 played, 8,000 queued in AudioTrack)
+        var cursor = TurntableScratchPolicy.computeScratchEntryCursorFrame(
+            currentStreamHeadFrame = decodedIntoRingFrames.toLong(),
+            totalFramesWrittenToTrack = 24_000L,
+            hwPlaybackHeadFrames = 16_000L,
+            oldestAvailableFrame = ring.oldestAvailableFrame,
+            writeHeadFrame = ring.writeHeadFrame,
+        )
+        assertEquals(16_000.0, cursor, 1e-6)
+
+        // Simulate post-flush stale head (16,000) dropping to 0 on play() + AudioTrack startThreshold
+        val maxAhead = TurntableScratchPolicy.computeEffectiveScratchMaxAheadFrames(sampleRate, 3_200, chunkFrames)
+        val tracker = TurntableFlushHeadTracker(initialObservedHead = 16_000L, maxAheadFrames = maxAhead)
+        val (minVirtual, maxVirtual) = TurntableScratchPolicy.computeVirtualFrameBounds(streamOriginMs, sampleRate, durationMs)
+        val resampler = TurntableResampler(sampleRateHz = sampleRate, channelCount = channels)
+        resampler.resetForScratchEntry(initialRate = 0.0f)
+        val outBuf = FloatArray(chunkFrames * channels)
+
+        // 1. Immediate forward varispeed (2.0x then 4.0x) with decode-ahead + async flush drop to 0
+        var simulatedHwHead = 0L
+        var forwardPeak = 0.0f
+        val cursorBeforeForward = cursor
+        for (i in 0 until 12) {
+            val rate = if (i < 6) 2.0f else 4.0f
+            val ahead = tracker.computeAheadFrames(simulatedHwHead)
+            assertTrue("Scratch loop must not deadlock after flush drop", ahead <= maxAhead)
+
+            val neededEnd = (cursor + rate * chunkFrames + 4.0).toLong()
+            while (ring.writeHeadFrame <= neededEnd && decodedIntoRingFrames < totalSourceFrames) {
+                val add = minOf(4_096, totalSourceFrames - decodedIntoRingFrames)
+                ring.appendInterleavedFloats(sourceTone, frameCount = add, srcFloatOffset = decodedIntoRingFrames * channels)
+                decodedIntoRingFrames += add
+            }
+
+            val step = resampler.renderChunk(
+                ringBuffer = ring,
+                targetRate = rate,
+                startCursorFrame = cursor,
+                minVirtualFrame = minVirtual,
+                maxVirtualFrame = maxVirtual,
+                outFrames = chunkFrames,
+                destFloats = outBuf,
+            )
+            cursor = step.nextCursorFrame
+            tracker.onFramesWritten(step.framesRendered)
+            simulatedHwHead += step.framesRendered.toLong()
+            for (sample in outBuf) {
+                if (abs(sample) > forwardPeak) forwardPeak = abs(sample)
+            }
+        }
+        assertTrue("Forward scratch must advance cursor significantly", cursor > cursorBeforeForward + 15_000.0)
+        assertTrue("Forward scratch must emit non-zero audible PCM", forwardPeak > 0.5f)
+        val posAfterForwardMs = TurntableScratchPolicy.computeClampedScratchPositionMs(streamOriginMs, cursor, sampleRate, durationMs)
+        assertTrue("Forward scratch position must advance beyond 30,000 ms", posAfterForwardMs > streamOriginMs + 300L)
+
+        // 2. Hold at 0.0x: brakes smoothly to silence
+        val cursorBeforeHold = cursor
+        for (i in 0 until 8) {
+            val step = resampler.renderChunk(
+                ringBuffer = ring,
+                targetRate = 0.0f,
+                startCursorFrame = cursor,
+                minVirtualFrame = minVirtual,
+                maxVirtualFrame = maxVirtual,
+                outFrames = chunkFrames,
+                destFloats = outBuf,
+            )
+            cursor = step.nextCursorFrame
+        }
+        assertEquals(0.0f, resampler.currentRate, 1e-6f)
+        assertEquals(0.0f, outBuf[outBuf.lastIndex], 1e-6f)
+        assertTrue("Cursor should remain near hold point", abs(cursor - cursorBeforeHold) < 2_500.0)
+
+        // 3. Immediate reverse scratch (-2.0x): emits non-zero audible PCM and rewinds cursor cleanly
+        val cursorBeforeReverse = cursor
+        var reversePeak = 0.0f
+        for (i in 0 until 10) {
+            val step = resampler.renderChunk(
+                ringBuffer = ring,
+                targetRate = -2.0f,
+                startCursorFrame = cursor,
+                minVirtualFrame = minVirtual,
+                maxVirtualFrame = maxVirtual,
+                outFrames = chunkFrames,
+                destFloats = outBuf,
+            )
+            cursor = step.nextCursorFrame
+            for (sample in outBuf) {
+                if (abs(sample) > reversePeak) reversePeak = abs(sample)
+            }
+        }
+        assertTrue("Reverse scratch must rewind cursor", cursor < cursorBeforeReverse - 8_000.0)
+        assertTrue("Reverse scratch must emit non-zero audible PCM", reversePeak > 0.5f)
+    }
 }
