@@ -64,6 +64,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -87,6 +88,7 @@ import com.cangkir.bitperfectplayer.audio.PlaybackTrack
 import com.cangkir.bitperfectplayer.audio.RepeatMode
 import com.cangkir.bitperfectplayer.audio.SleepTimerPreset
 import com.cangkir.bitperfectplayer.audio.SleepTimerState
+import com.cangkir.bitperfectplayer.data.NowPlayingArtworkStyle
 import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
 import com.cangkir.bitperfectplayer.ui.theme.AmberIndicated
 import com.cangkir.bitperfectplayer.ui.theme.AmberIndicatedContainer
@@ -109,6 +111,8 @@ fun NowPlayingScreen(
     sleepTimerStateFlow: StateFlow<SleepTimerState>,
     albumArtworkLoader: AlbumArtworkLoader,
     isFavorite: Boolean,
+    artworkStyle: NowPlayingArtworkStyle = NowPlayingArtworkStyle.VINYL_DISC,
+    onSetArtworkStyle: (NowPlayingArtworkStyle) -> Unit = {},
     onBack: () -> Unit,
     onToggleFavorite: (PlaybackTrack) -> Unit,
     onAddToPlaylist: (PlaybackTrack) -> Unit,
@@ -270,6 +274,27 @@ fun NowPlayingScreen(
                                             showSleepTimerSheet = true
                                         },
                                     )
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                if (artworkStyle == NowPlayingArtworkStyle.VINYL_DISC) {
+                                                    "Switch to Square Cover"
+                                                } else {
+                                                    "Switch to Vinyl Disc"
+                                                },
+                                            )
+                                        },
+                                        onClick = {
+                                            overflowMenuExpanded = false
+                                            onSetArtworkStyle(
+                                                if (artworkStyle == NowPlayingArtworkStyle.VINYL_DISC) {
+                                                    NowPlayingArtworkStyle.SQUARE_COVER
+                                                } else {
+                                                    NowPlayingArtworkStyle.VINYL_DISC
+                                                },
+                                            )
+                                        },
+                                    )
                                 }
                             }
                         }
@@ -327,8 +352,9 @@ fun NowPlayingScreen(
                 ?: track.formatBadge
         }
 
-        val swipeThresholdPx = with(LocalDensity.current) { 76.dp.toPx() }
-        var artworkDragOffsetPx by remember(track.uriString) { mutableFloatStateOf(0f) }
+        // Decoupled scrub preview state holder: NEVER read `.value` inside NowPlayingScreen root
+        // so rotational vinyl scrubbing/coasting updates ONLY the pill leaf and NowPlayingSeekSection.
+        val vinylScrubPreviewMs = remember(track.uriString) { mutableStateOf<Long?>(null) }
 
         Column(
             modifier = Modifier
@@ -355,39 +381,27 @@ fun NowPlayingScreen(
                 Spacer(modifier = Modifier.height(12.dp))
             }
 
-            // Hero Album Cover Art Centerpiece with horizontal swipe-to-skip gesture (100% offline)
-            Box(
-                modifier = Modifier
-                    .pointerInput(track.uriString, swipeThresholdPx) {
-                        detectHorizontalDragGestures(
-                            onDragEnd = {
-                                val finalDrag = artworkDragOffsetPx
-                                artworkDragOffsetPx = 0f
-                                when {
-                                    finalDrag <= -swipeThresholdPx -> onNext()
-                                    finalDrag >= swipeThresholdPx -> onPrevious()
-                                }
-                            },
-                            onDragCancel = {
-                                artworkDragOffsetPx = 0f
-                            },
-                            onHorizontalDrag = { _, dragAmount ->
-                                artworkDragOffsetPx = (artworkDragOffsetPx + dragAmount)
-                                    .coerceIn(-swipeThresholdPx * 1.6f, swipeThresholdPx * 1.6f)
-                            },
-                        )
-                    }
-                    .graphicsLayer {
-                        translationX = artworkDragOffsetPx * 0.32f
-                    },
-            ) {
-                TrackArtworkThumbnail(
-                    track = track,
-                    artworkLoader = albumArtworkLoader,
-                    size = 272.dp,
-                    cornerRadius = 16.dp,
-                    targetSizePx = AlbumArtworkLoader.HERO_SIZE_PX,
-                )
+            // Hero Artwork Centerpiece: Interactive Spinning Vinyl Disc (default) or Swipeable Square Cover
+            when (artworkStyle) {
+                NowPlayingArtworkStyle.VINYL_DISC -> {
+                    InteractiveVinylDisc(
+                        track = track,
+                        isPlaying = playbackState.isPlaying,
+                        durationMs = durationMs,
+                        playbackPositionMsFlow = playbackPositionMsFlow,
+                        scrubPreviewMsState = vinylScrubPreviewMs,
+                        albumArtworkLoader = albumArtworkLoader,
+                        onSeekTo = onSeekTo,
+                    )
+                }
+                NowPlayingArtworkStyle.SQUARE_COVER -> {
+                    SwipeableSquareArtwork(
+                        track = track,
+                        albumArtworkLoader = albumArtworkLoader,
+                        onPrevious = onPrevious,
+                        onNext = onNext,
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(24.dp))
@@ -430,6 +444,7 @@ fun NowPlayingScreen(
             NowPlayingSeekSection(
                 durationMs = durationMs,
                 playbackPositionMsFlow = playbackPositionMsFlow,
+                externalScrubPreviewMsState = vinylScrubPreviewMs,
                 onSeekTo = onSeekTo,
             )
 
@@ -635,23 +650,76 @@ fun NowPlayingScreen(
     }
 }
 
+@Composable
+private fun SwipeableSquareArtwork(
+    track: PlaybackTrack,
+    albumArtworkLoader: AlbumArtworkLoader,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
+) {
+    val swipeThresholdPx = with(LocalDensity.current) { 76.dp.toPx() }
+    var artworkDragOffsetPx by remember(track.uriString) { mutableFloatStateOf(0f) }
+
+    Box(
+        modifier = Modifier
+            .pointerInput(track.uriString, swipeThresholdPx) {
+                detectHorizontalDragGestures(
+                    onDragEnd = {
+                        val finalDrag = artworkDragOffsetPx
+                        artworkDragOffsetPx = 0f
+                        when {
+                            finalDrag <= -swipeThresholdPx -> onNext()
+                            finalDrag >= swipeThresholdPx -> onPrevious()
+                        }
+                    },
+                    onDragCancel = {
+                        artworkDragOffsetPx = 0f
+                    },
+                    onHorizontalDrag = { _, dragAmount ->
+                        artworkDragOffsetPx = (artworkDragOffsetPx + dragAmount)
+                            .coerceIn(-swipeThresholdPx * 1.6f, swipeThresholdPx * 1.6f)
+                    },
+                )
+            }
+            .graphicsLayer {
+                translationX = artworkDragOffsetPx * 0.32f
+            },
+    ) {
+        TrackArtworkThumbnail(
+            track = track,
+            artworkLoader = albumArtworkLoader,
+            size = 272.dp,
+            cornerRadius = 16.dp,
+            targetSizePx = AlbumArtworkLoader.HERO_SIZE_PX,
+        )
+    }
+}
+
 /**
- * Narrow leaf composable collecting 20 Hz playback position so Now Playing's hero artwork,
- * metadata, transport controls, and audio-mode strip never recompose during playback.
+ * Narrow leaf composable collecting 20 Hz playback position and optional live vinyl scrub preview
+ * so Now Playing's hero artwork, metadata, transport controls, and audio-mode strip never recompose
+ * during playback or rotational scrubbing.
  */
 @Composable
 private fun NowPlayingSeekSection(
     durationMs: Long,
     playbackPositionMsFlow: StateFlow<Long>,
+    externalScrubPreviewMsState: State<Long?>,
     onSeekTo: (Long) -> Unit,
 ) {
     val livePositionMs by playbackPositionMsFlow.collectAsStateWithLifecycle()
-    val currentPosMs = livePositionMs.coerceIn(0L, durationMs.coerceAtLeast(1L))
+    val maxPos = durationMs.coerceAtLeast(1L)
+    val currentPosMs = livePositionMs.coerceIn(0L, maxPos)
+    val externalPreviewMs = externalScrubPreviewMsState.value
     var isScrubbing by remember { mutableStateOf(false) }
     var scrubPositionMs by remember { mutableFloatStateOf(0f) }
 
-    val displayedPosMs = if (isScrubbing) scrubPositionMs.toLong() else currentPosMs
-    val sliderMax = durationMs.coerceAtLeast(1L).toFloat()
+    val displayedPosMs = when {
+        isScrubbing -> scrubPositionMs.toLong().coerceIn(0L, maxPos)
+        externalPreviewMs != null -> externalPreviewMs.coerceIn(0L, maxPos)
+        else -> currentPosMs
+    }
+    val sliderMax = maxPos.toFloat()
     val durationLabel = remember(durationMs) { formatDurationMs(durationMs) }
 
     Slider(
@@ -680,7 +748,7 @@ private fun NowPlayingSeekSection(
         Text(
             text = formatDurationMs(displayedPosMs),
             style = MaterialTheme.typography.labelSmall,
-            color = TextMuted,
+            color = if (externalPreviewMs != null) IcePrimary else TextMuted,
             maxLines = 1,
             softWrap = false,
         )

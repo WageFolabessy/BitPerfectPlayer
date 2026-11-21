@@ -73,6 +73,7 @@ import com.cangkir.bitperfectplayer.audio.ReplayGainProcessor
 import com.cangkir.bitperfectplayer.audio.SleepTimerPreset
 import com.cangkir.bitperfectplayer.audio.SleepTimerState
 import com.cangkir.bitperfectplayer.data.LocalBackupRepository
+import com.cangkir.bitperfectplayer.data.NowPlayingArtworkStyle
 import com.cangkir.bitperfectplayer.library.LibrarySnapshot
 import com.cangkir.bitperfectplayer.ui.theme.AmberIndicated
 import com.cangkir.bitperfectplayer.ui.theme.EmeraldSafe
@@ -89,6 +90,8 @@ fun SettingsScreen(
     libraryState: LibrarySnapshot,
     playbackState: PlaybackControllerState,
     sleepTimerStateFlow: StateFlow<SleepTimerState>,
+    artworkStyle: NowPlayingArtworkStyle = NowPlayingArtworkStyle.VINYL_DISC,
+    onSetArtworkStyle: (NowPlayingArtworkStyle) -> Unit = {},
     onImportFolder: (Uri) -> Unit,
     onRemoveSafFolder: (String) -> Unit,
     onRefreshLibrary: () -> Unit,
@@ -464,7 +467,79 @@ fun SettingsScreen(
             }
 
             // =================================================================
-            // 2. LIBRARY & STORAGE (100% OFFLINE)
+            // 2. NOW PLAYING DISPLAY
+            // =================================================================
+            item(key = "section_display", contentType = "settings_group") {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SettingsSectionHeader("DISPLAY")
+                    SettingsGroupCard {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                        ) {
+                            Text(
+                                text = "Now Playing Artwork",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                            Spacer(modifier = Modifier.height(3.dp))
+                            Text(
+                                text = "Choose spinning turntable disc with rotational scrub seeking, or static square cover with swipe-to-skip.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            Surface(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(10.dp),
+                                color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                                border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.65f)),
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(3.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                ) {
+                                    NowPlayingArtworkStyle.entries.forEach { option ->
+                                        val selected = artworkStyle == option
+                                        Button(
+                                            onClick = { onSetArtworkStyle(option) },
+                                            shape = RoundedCornerShape(8.dp),
+                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .sizeIn(minHeight = 48.dp),
+                                            colors = if (selected) {
+                                                ButtonDefaults.buttonColors(
+                                                    containerColor = IcePrimaryContainer,
+                                                    contentColor = OnIcePrimaryContainer,
+                                                )
+                                            } else {
+                                                ButtonDefaults.textButtonColors(
+                                                    contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                )
+                                            },
+                                        ) {
+                                            Text(
+                                                text = option.displayName,
+                                                maxLines = 1,
+                                                softWrap = false,
+                                                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // =================================================================
+            // 3. LIBRARY & STORAGE (100% OFFLINE)
             // =================================================================
             item(key = "section_library_storage", contentType = "settings_group") {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {

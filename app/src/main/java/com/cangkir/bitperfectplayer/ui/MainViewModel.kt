@@ -13,6 +13,7 @@ import com.cangkir.bitperfectplayer.audio.QueueContextResolver
 import com.cangkir.bitperfectplayer.audio.ReplayGainMode
 import com.cangkir.bitperfectplayer.audio.SleepTimerPreset
 import com.cangkir.bitperfectplayer.audio.SleepTimerState
+import com.cangkir.bitperfectplayer.data.NowPlayingArtworkStyle
 import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
 import com.cangkir.bitperfectplayer.library.GroupSortScope
 import com.cangkir.bitperfectplayer.library.GroupSortSpec
@@ -29,6 +30,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -67,6 +69,19 @@ class MainViewModel(
             scope = viewModelScope,
             started = SharingStarted.Eagerly,
             initialValue = libraryState.value.favoriteUris,
+        )
+
+    /**
+     * Persisted `NowPlayingScreen` artwork presentation mode (`Vinyl Disc` default vs `Square Cover`),
+     * deduplicated with `distinctUntilChanged()` so unrelated preference writes never recompose UI.
+     */
+    val nowPlayingArtworkStyle: StateFlow<NowPlayingArtworkStyle> = container.preferencesRepository.preferencesFlow
+        .map { it.nowPlayingArtworkStyle }
+        .distinctUntilChanged()
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.Eagerly,
+            initialValue = NowPlayingArtworkStyle.VINYL_DISC,
         )
 
     private val _lyricsUiState = MutableStateFlow(LyricsUiState())
@@ -244,6 +259,12 @@ class MainViewModel(
     fun setReplayGainPreampDb(preampDb: Float) = container.playbackController.setReplayGainPreampDb(preampDb)
     fun setReplayGainPreventClipping(preventClipping: Boolean) =
         container.playbackController.setReplayGainPreventClipping(preventClipping)
+
+    fun setNowPlayingArtworkStyle(style: NowPlayingArtworkStyle) {
+        viewModelScope.launch {
+            container.preferencesRepository.setNowPlayingArtworkStyle(style)
+        }
+    }
 
     fun setSleepTimerPreset(preset: SleepTimerPreset) {
         container.playbackController.setSleepTimerPreset(preset)

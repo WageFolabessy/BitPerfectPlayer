@@ -8,6 +8,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasScrollToIndexAction
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -27,6 +28,7 @@ import com.cangkir.bitperfectplayer.audio.QueueSnapshot
 import com.cangkir.bitperfectplayer.audio.ReplayGainMetadata
 import com.cangkir.bitperfectplayer.audio.SleepTimerPreset
 import com.cangkir.bitperfectplayer.audio.SleepTimerState
+import com.cangkir.bitperfectplayer.data.NowPlayingArtworkStyle
 import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
 import com.cangkir.bitperfectplayer.library.LibrarySnapshot
 import com.cangkir.bitperfectplayer.library.LibrarySortPreferences
@@ -153,19 +155,22 @@ class BitPerfectUiBehaviorTest {
     }
 
     @Test
+    @Config(qualifiers = "w411dp-h915dp")
     fun nowPlayingScreen_hasNoDuplicateTopBarPauseButtonWhilePrimaryTransportPauseWorks() {
         var playPauseClicks = 0
+        var status by mutableStateOf(PlaybackStatus.PLAYING)
 
-        val playingState = PlaybackControllerState(
-            activeTrack = hiResFlacTrack,
-            queueContext = QueueContext.album("21st Century Breakdown"),
-            engineState = EnginePlaybackState(
-                status = PlaybackStatus.PLAYING,
-                durationMs = hiResFlacTrack.durationMs,
-            ),
-        )
-
+        // Manual frame clock lets us deterministically step active vinyl rotation frames without hanging Espresso idle.
+        composeRule.mainClock.autoAdvance = false
         composeRule.setContent {
+            val playingState = PlaybackControllerState(
+                activeTrack = hiResFlacTrack,
+                queueContext = QueueContext.album("21st Century Breakdown"),
+                engineState = EnginePlaybackState(
+                    status = status,
+                    durationMs = hiResFlacTrack.durationMs,
+                ),
+            )
             BitPerfectPlayerTheme {
                 NowPlayingScreen(
                     playbackState = playingState,
@@ -178,7 +183,10 @@ class BitPerfectUiBehaviorTest {
                     onAddToPlaylist = {},
                     onShowTrackInfo = {},
                     onSelectSleepTimerPreset = {},
-                    onTogglePlayPause = { playPauseClicks++ },
+                    onTogglePlayPause = {
+                        playPauseClicks++
+                        status = if (status == PlaybackStatus.PLAYING) PlaybackStatus.PAUSED else PlaybackStatus.PLAYING
+                    },
                     onPrevious = {},
                     onNext = {},
                     onSeekTo = {},
@@ -195,15 +203,22 @@ class BitPerfectUiBehaviorTest {
                 )
             }
         }
+        // Advance 500 ms of live vinyl rotation frames smoothly
+        composeRule.mainClock.advanceTimeBy(500L)
 
+        // Spinning Vinyl Disc is displayed by default during playback
+        composeRule.onNodeWithContentDescription(
+            "Vinyl disc turntable for Peacemaker. Drag circularly to seek.",
+        ).assertIsDisplayed()
         // Redundant TopAppBar "Pause" text pill must not exist
         assertEquals(0, composeRule.onAllNodesWithText("Pause").fetchSemanticsNodes().size)
-        // Primary circular transport Pause button remains accessible and functional
+        // Primary circular transport Pause button remains accessible and pauses cleanly
         composeRule.onNodeWithContentDescription("Pause playback")
-            .performScrollTo()
             .assertIsDisplayed()
             .performClick()
+        composeRule.mainClock.advanceTimeByFrame()
         assertEquals(1, playPauseClicks)
+        assertEquals(PlaybackStatus.PAUSED, status)
     }
 
     @Test
@@ -491,5 +506,116 @@ class BitPerfectUiBehaviorTest {
 
         assertEquals(listOf(SleepTimerPreset.MIN_30), selectedPresets)
         assertTrue(dismissed)
+    }
+
+    @Test
+    fun nowPlayingScreen_rendersVinylDiscByDefaultAndTogglesToSquareCoverViaOverflowMenu() {
+        var currentStyle by mutableStateOf(NowPlayingArtworkStyle.VINYL_DISC)
+        val styleChanges = mutableListOf<NowPlayingArtworkStyle>()
+
+        val pausedState = PlaybackControllerState(
+            activeTrack = hiResFlacTrack,
+            queueContext = QueueContext.album("21st Century Breakdown"),
+            engineState = EnginePlaybackState(
+                status = PlaybackStatus.PAUSED,
+                durationMs = hiResFlacTrack.durationMs,
+            ),
+        )
+
+        composeRule.setContent {
+            BitPerfectPlayerTheme {
+                NowPlayingScreen(
+                    playbackState = pausedState,
+                    playbackPositionMsFlow = MutableStateFlow(45_000L),
+                    sleepTimerStateFlow = MutableStateFlow(SleepTimerState()),
+                    albumArtworkLoader = artworkLoader,
+                    isFavorite = false,
+                    artworkStyle = currentStyle,
+                    onSetArtworkStyle = { nextStyle ->
+                        styleChanges.add(nextStyle)
+                        currentStyle = nextStyle
+                    },
+                    onBack = {},
+                    onToggleFavorite = {},
+                    onAddToPlaylist = {},
+                    onShowTrackInfo = {},
+                    onSelectSleepTimerPreset = {},
+                    onTogglePlayPause = {},
+                    onPrevious = {},
+                    onNext = {},
+                    onSeekTo = {},
+                    onToggleShuffle = {},
+                    onCycleRepeatMode = {},
+                    onRequestBitPerfectMode = {},
+                    onConfirmBitPerfectWarning = {},
+                    onDismissSafetyWarning = {},
+                    onSwitchToSafeMode = {},
+                    onClearAutoPauseNotice = {},
+                    onOpenQueue = {},
+                    onOpenLyrics = {},
+                    onOpenDiagnostics = {},
+                )
+            }
+        }
+
+        // Default style renders the interactive Vinyl Disc turntable
+        val vinylDesc = "Vinyl disc turntable for Peacemaker. Drag circularly to seek."
+        composeRule.onNodeWithContentDescription(vinylDesc).assertIsDisplayed()
+
+        // Toggle to Square Cover via MoreVert overflow menu
+        composeRule.onNodeWithContentDescription("More track actions").assertIsDisplayed().performClick()
+        composeRule.onNodeWithText("Switch to Square Cover").assertIsDisplayed().performClick()
+
+        assertEquals(listOf(NowPlayingArtworkStyle.SQUARE_COVER), styleChanges)
+        assertEquals(0, composeRule.onAllNodesWithContentDescription(vinylDesc).fetchSemanticsNodes().size)
+
+        // Toggle back to Vinyl Disc via overflow menu
+        composeRule.onNodeWithContentDescription("More track actions").assertIsDisplayed().performClick()
+        composeRule.onNodeWithText("Switch to Vinyl Disc").assertIsDisplayed().performClick()
+
+        assertEquals(
+            listOf(NowPlayingArtworkStyle.SQUARE_COVER, NowPlayingArtworkStyle.VINYL_DISC),
+            styleChanges,
+        )
+        composeRule.onNodeWithContentDescription(vinylDesc).assertIsDisplayed()
+    }
+
+    @Test
+    fun settingsScreen_artworkStyleToggleUpdatesPreference() {
+        var style by mutableStateOf(NowPlayingArtworkStyle.VINYL_DISC)
+        val selections = mutableListOf<NowPlayingArtworkStyle>()
+
+        composeRule.setContent {
+            BitPerfectPlayerTheme {
+                SettingsScreen(
+                    libraryState = LibrarySnapshot(),
+                    playbackState = PlaybackControllerState(),
+                    sleepTimerStateFlow = MutableStateFlow(SleepTimerState()),
+                    artworkStyle = style,
+                    onSetArtworkStyle = { next ->
+                        selections.add(next)
+                        style = next
+                    },
+                    onImportFolder = {},
+                    onRemoveSafFolder = {},
+                    onRefreshLibrary = {},
+                    onSetGaplessEnabled = {},
+                    onSetReplayGainMode = {},
+                    onSetReplayGainPreampDb = {},
+                    onSetReplayGainPreventClipping = {},
+                    onSelectSleepTimerPreset = {},
+                    onExportLocalBackup = {},
+                    onImportLocalBackup = {},
+                    onOpenDiagnostics = {},
+                )
+            }
+        }
+
+        composeRule.onNode(hasScrollToIndexAction()).performScrollToIndex(1)
+        composeRule.onNodeWithText("Now Playing Artwork").assertIsDisplayed()
+        composeRule.onNodeWithText("Vinyl Disc").assertIsDisplayed()
+        composeRule.onNodeWithText("Square Cover").assertIsDisplayed().performClick()
+
+        assertEquals(listOf(NowPlayingArtworkStyle.SQUARE_COVER), selections)
     }
 }

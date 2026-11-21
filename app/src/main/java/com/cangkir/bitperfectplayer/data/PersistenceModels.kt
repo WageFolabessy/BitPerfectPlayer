@@ -147,6 +147,22 @@ enum class ReplayGainModePreference {
 }
 
 /**
+ * Persisted artwork presentation mode on `NowPlayingScreen` (defaults to [VINYL_DISC]).
+ */
+enum class NowPlayingArtworkStyle(
+    val displayName: String,
+) {
+    VINYL_DISC("Vinyl Disc"),
+    SQUARE_COVER("Square Cover"),
+    ;
+
+    companion object {
+        fun fromStoredName(raw: String?): NowPlayingArtworkStyle =
+            entries.firstOrNull { it.name.equals(raw?.trim(), ignoreCase = true) } ?: VINYL_DISC
+    }
+}
+
+/**
  * Snapshot of the last active track, playback position, and queue origin context for scoped
  * restoration on app relaunch.
  */
@@ -176,6 +192,7 @@ data class UserPreferences(
     val replayGainMode: ReplayGainModePreference = ReplayGainModePreference.OFF,
     val replayGainPreampDb: Float = 0.0f,
     val replayGainPreventClipping: Boolean = true,
+    val nowPlayingArtworkStyle: NowPlayingArtworkStyle = NowPlayingArtworkStyle.VINYL_DISC,
     val persistedSafTreeUris: Set<String> = emptySet(),
     val persistedSafFileUris: Set<String> = emptySet(),
     val lastPlaybackState: LastPlaybackState = LastPlaybackState(),

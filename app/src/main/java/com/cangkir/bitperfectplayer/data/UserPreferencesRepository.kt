@@ -43,6 +43,7 @@ class UserPreferencesRepository(
         val REPLAYGAIN_MODE = stringPreferencesKey("replaygain_mode")
         val REPLAYGAIN_PREAMP_DB = floatPreferencesKey("replaygain_preamp_db")
         val REPLAYGAIN_PREVENT_CLIPPING = booleanPreferencesKey("replaygain_prevent_clipping")
+        val NOW_PLAYING_ARTWORK_STYLE = stringPreferencesKey("now_playing_artwork_style")
         val PERSISTED_SAF_TREE_URIS = stringSetPreferencesKey("persisted_saf_tree_uris")
         val PERSISTED_SAF_FILE_URIS = stringSetPreferencesKey("persisted_saf_file_uris")
         val LAST_TRACK_URI = stringPreferencesKey("last_track_uri")
@@ -107,6 +108,12 @@ class UserPreferencesRepository(
     suspend fun setReplayGainPreventClipping(preventClipping: Boolean) {
         dataStore.edit { prefs ->
             prefs[Keys.REPLAYGAIN_PREVENT_CLIPPING] = preventClipping
+        }
+    }
+
+    suspend fun setNowPlayingArtworkStyle(style: NowPlayingArtworkStyle) {
+        dataStore.edit { prefs ->
+            prefs[Keys.NOW_PLAYING_ARTWORK_STYLE] = style.name
         }
     }
 
@@ -238,6 +245,7 @@ class UserPreferencesRepository(
                 prefs[Keys.REPLAYGAIN_PREAMP_DB] ?: 0.0f,
             ),
             replayGainPreventClipping = prefs[Keys.REPLAYGAIN_PREVENT_CLIPPING] ?: true,
+            nowPlayingArtworkStyle = NowPlayingArtworkStyle.fromStoredName(prefs[Keys.NOW_PLAYING_ARTWORK_STYLE]),
             persistedSafTreeUris = PersistenceSanitizer.sanitizeUriSet(
                 prefs[Keys.PERSISTED_SAF_TREE_URIS].orEmpty(),
             ),

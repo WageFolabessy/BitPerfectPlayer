@@ -486,4 +486,30 @@ Following physical testing of the signed Release APK on POCO F4 (Android 14 / Hy
 - **Strict Offline Privacy Audit (Source + All 8 Generated Debug, Release & UnitTest Manifests):** **PASS** — **0 `android.permission.INTERNET`**, **0 `android.permission.MANAGE_EXTERNAL_STORAGE`**.
 - **Physical Hardware Verification Pending (Not Executed in Cloud):** On POCO F4 (Android 14 / HyperOS) + KZ EDX Pro 2 USB-C, confirm on-device: (1) auto-scroll-to-top on sort/search changes while preserving scroll position when navigating back from `NowPlayingScreen`, (2) immediate paused queue switching when opening Queue from a different Album/Artist/Folder/Playlist vs. uninterrupted playback from the same Album or `NowPlayingScreen`, (3) clean TopAppBar on `NowPlayingScreen` and aligned dividers in Album Detail / Most Played, and (4) End-of-Track Sleep Timer pause across same-format gapless tracks and real USB-C DAC playback behavior.
 
+---
+
+## 15. Interactive Spinning Vinyl Record / Turntable Disc Mode
+
+### Delivered Architecture & UX
+1. **Pure-Kotlin Velocity-Sensitive Rotational Scrub Math (`VinylScrubMath.kt`):**
+   - Implemented deterministic turntable geometry & physics with **0 `android.*` / `androidx.*` imports**: `computeShortestAngleDeltaDegrees` (`(-180f, 180f]` seam-safe wrapping), `isWithinScrubRing` (center spindle dead-zone & outer disc bounds), C1-smooth monotonic `computeMsPerFullRotation` (`<= 45 deg/s -> 8s`, `180 deg/s -> 30s`, `>= 540 deg/s -> 120s` via smoothstep), `Double`-precision `computeIncrementalScrubDeltaMs` (preserving sub-millisecond 120 Hz slow-drag accumulation), `smoothAngularVelocity` (EMA rejecting `dt < 1 ms` and resetting across pauses `dt > 200 ms`), `decayInertiaVelocity` (`damping = 7.5f`), `shouldStartInertiaCoast` (`>= 120 deg/s`), `clampScrubPositionMs`, and `formatSignedDeltaMs`.
+2. **GPU-Accelerated Interactive Vinyl Disc Composable (`VinylDiscPlayer.kt`):**
+   - Built `InteractiveVinylDisc` (`272.dp` diameter) in the matte obsidian studio palette: `graphicsLayer { rotationZ = ... }` isolates 60/120 fps spinning (20 deg/s playback auto-spin, instant freeze on pause without resetting to `0°`) with **0 recompositions and 0 relayouts**.
+   - Renders matte dark vinyl (`#15151A` -> `#09090C`) with concentric micro-grooves, subtle track-band gaps, dark-metallic outer rim (`0.75.dp`), centered circular local artwork (`158.dp` via offline `AlbumArtworkLoader` + `remember(bitmap) { bitmap.asImageBitmap() }`), inner label ring, matte obsidian spindle hole (`14.dp`), and a **stationary** anisotropic studio sheen layer outside the rotating `graphicsLayer`.
+   - Rotational touch scrubbing (`awaitEachGesture`) consumes drags cleanly over `verticalScroll`, updates a narrow isolated matte scrub HUD pill (`02:14  +00:19`) and `NowPlayingSeekSection` live without recomposing `NowPlayingScreen`, triggers subtle `TextHandleMove` haptic detents every `~22°`, supports catchable bounded flick inertia (`<= 450 ms`, stopping at `< 25 deg/s` or track bounds), ignores zero-movement taps, and commits `onSeekTo(...)` **strictly once** on release/settle to prevent `MediaCodec`/`AudioTrack` stutter on 96/192 kHz FLAC.
+3. **Persisted Artwork Style Preference (`PersistenceModels.kt`, `UserPreferencesRepository.kt`, `MainViewModel.kt`, `NowPlayingScreen.kt`, `SettingsScreen.kt`, `BitPerfectAppNav.kt`):**
+   - Added `NowPlayingArtworkStyle` (`VINYL_DISC` default, `SQUARE_COVER`) persisted in DataStore Preferences, exposed via `distinctUntilChanged()` `StateFlow`, collected strictly inside `NowPlaying` and `Settings` routes.
+   - Added one-tap `"Switch to Square Cover"` / `"Switch to Vinyl Disc"` in `NowPlayingScreen`'s `MoreVert` overflow menu and a **"Now Playing Artwork"** segmented toggle (`Vinyl Disc` / `Square Cover`) in `SettingsScreen`.
+
+### Software Verification (`./gradlew clean testDebugUnitTest lintDebug assembleDebug assembleRelease`)
+- **Automated JVM Unit + Robolectric SQLite Migration + Headless Compose UI Tests:** **155 / 155 passed** across **30 test suites** (`0` failed, `0` errors, `0` skipped, `0` `@Ignore`), adding `VinylScrubMathTest` (7/7), extending `PersistenceAndPreferencesTest` (4/4), and extending `BitPerfectUiBehaviorTest` (11/11, including live spinning playback frame advancement, overflow style switching, and `SettingsScreen` toggle).
+- **Compiler & R8 Warnings:** `0` Kotlin compiler warnings (production + test), `0` KSP warnings, `0` R8 warnings.
+- **Android Lint (`lintDebug` & `lintVitalRelease`):** **0 errors**, **0 warnings across all `/app/src/` Kotlin, manifest, and resource files**.
+- **Debug APK (`assembleDebug`):** `app/build/outputs/apk/debug/app-debug.apk` (`20.06 MB` / `21,031,504 bytes`).
+- **Release APK (`assembleRelease` with R8 optimization):** `app/build/outputs/apk/release/app-release-unsigned.apk` (`2.43 MB` / `2,550,962 bytes`).
+- **Strict Offline Privacy Audit (Source + All 8 Generated Debug, Release & UnitTest Manifests):** **PASS** — **0 `android.permission.INTERNET`**, **0 `android.permission.MANAGE_EXTERNAL_STORAGE`**.
+- **Pure-Kotlin Domain Boundary (`VinylScrubMath.kt`):** **PASS** — **0 `android.*` / `androidx.*` imports**.
+- **Physical Hardware Verification Pending (Not Executed in Cloud):** On POCO F4 (Android 14 / HyperOS, 120 Hz OLED) + KZ EDX Pro 2 USB-C, confirm tactile feel of slow/medium/fast rotational scrubbing, catchable flick inertia, zero scroll conflict with `verticalScroll`, haptic detent subtlety, zero audio stutter on 96/192 kHz FLAC seek commit, and stationary sheen visual depth.
+
+
 
