@@ -33,6 +33,7 @@ import com.cangkir.bitperfectplayer.audio.QueueSnapshot
 import com.cangkir.bitperfectplayer.audio.ReplayGainMetadata
 import com.cangkir.bitperfectplayer.audio.SleepTimerPreset
 import com.cangkir.bitperfectplayer.audio.SleepTimerState
+import com.cangkir.bitperfectplayer.data.DefaultHomepage
 import com.cangkir.bitperfectplayer.data.NowPlayingArtworkStyle
 import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
 import com.cangkir.bitperfectplayer.library.LibrarySnapshot
@@ -1434,5 +1435,201 @@ class BitPerfectUiBehaviorTest {
         assertEquals(fullSorted, playedTracks)
         assertEquals(2, playedStartIndex)
         assertEquals(QueueContext.allSongs(), playedContext)
+    }
+
+    @Test
+    fun settingsScreen_defaultHomepagePickerDisplaysAllSevenOptionsAndUpdatesPreference() {
+        var currentHomepage by mutableStateOf(DefaultHomepage.ALL_SONGS)
+        val selections = mutableListOf<DefaultHomepage>()
+
+        composeRule.setContent {
+            BitPerfectPlayerTheme {
+                SettingsScreen(
+                    libraryState = LibrarySnapshot(),
+                    playbackState = PlaybackControllerState(),
+                    sleepTimerStateFlow = MutableStateFlow(SleepTimerState()),
+                    defaultHomepage = currentHomepage,
+                    onSetDefaultHomepage = { selected ->
+                        selections.add(selected)
+                        currentHomepage = selected
+                    },
+                    onImportFolder = {},
+                    onRemoveSafFolder = {},
+                    onRefreshLibrary = {},
+                    onSetGaplessEnabled = {},
+                    onSetReplayGainMode = {},
+                    onSetReplayGainPreampDb = {},
+                    onSetReplayGainPreventClipping = {},
+                    onSelectSleepTimerPreset = {},
+                    onExportLocalBackup = {},
+                    onImportLocalBackup = {},
+                    onOpenDiagnostics = {},
+                )
+            }
+        }
+
+        composeRule.onNode(hasScrollToIndexAction()).performScrollToIndex(1)
+        composeRule.onNodeWithContentDescription("Default Homepage: All Songs").assertIsDisplayed().performClick()
+        composeRule.waitForIdle()
+
+        // All 7 options rendered inside the modal bottom sheet
+        DefaultHomepage.entries.forEach { option ->
+            composeRule.onAllNodesWithText(option.displayName).fetchSemanticsNodes().let { nodes ->
+                assertTrue("Expected option '${option.displayName}' in Default Homepage sheet", nodes.isNotEmpty())
+            }
+        }
+
+        // Selecting Playlists updates preference and dismisses sheet
+        composeRule.onNodeWithText("Playlists").performScrollTo().assertIsDisplayed().performClick()
+        composeRule.waitForIdle()
+
+        assertEquals(listOf(DefaultHomepage.PLAYLISTS), selections)
+        composeRule.onNodeWithContentDescription("Default Homepage: Playlists").assertIsDisplayed()
+    }
+
+    @Test
+    fun startupNavHost_honorsDefaultHomepagePlaylistsAndDoesNotHijackWhenPreferenceChanges() {
+        var homepagePref by mutableStateOf(DefaultHomepage.PLAYLISTS)
+
+        composeRule.setContent {
+            BitPerfectPlayerTheme {
+                BitPerfectStartupNavHost(
+                    startupHomepage = homepagePref,
+                    libraryContent = { initialTab ->
+                        LibraryScreen(
+                            libraryState = LibrarySnapshot(allSongs = listOf(hiResFlacTrack)),
+                            favoriteTrackUris = emptySet(),
+                            playbackState = PlaybackControllerState(),
+                            albumArtworkLoader = artworkLoader,
+                            onRefreshLibrary = {},
+                            onImportFolder = {},
+                            onPlayTracks = { _, _, _ -> },
+                            onEnqueueTrack = {},
+                            onEnqueueNext = {},
+                            onEnqueueTracks = { _, _ -> },
+                            onEnqueueTracksNext = { _, _ -> },
+                            onSetTrackSort = { _, _ -> },
+                            onSetGroupSort = { _, _ -> },
+                            onAddToPlaylist = {},
+                            onShowTrackInfo = {},
+                            onToggleFavorite = {},
+                            onOpenQueue = {},
+                            onOpenDiagnostics = {},
+                            initialTab = initialTab,
+                        )
+                    },
+                    playlistsContent = {
+                        PlaylistsScreen(
+                            playlistsState = PlaylistsUiSnapshot(isLoaded = true),
+                            activeTrackUri = null,
+                            albumArtworkLoader = artworkLoader,
+                            onPlayTracks = { _, _, _ -> },
+                            onEnqueueTracks = { _, _ -> },
+                            onEnqueueTracksNext = { _, _ -> },
+                            onSetPlaylistSort = { _, _ -> },
+                            onOpenQueue = {},
+                            onCreatePlaylist = {},
+                            onRenamePlaylist = { _, _ -> },
+                            onDeletePlaylist = { _, _ -> },
+                            onRemovePlaylistEntry = { _, _ -> },
+                            onMovePlaylistEntry = { _, _, _ -> },
+                            onExportPlaylist = { _, _ -> },
+                            onImportPlaylist = {},
+                        )
+                    },
+                    settingsContent = {
+                        SettingsScreen(
+                            libraryState = LibrarySnapshot(),
+                            playbackState = PlaybackControllerState(),
+                            sleepTimerStateFlow = MutableStateFlow(SleepTimerState()),
+                            defaultHomepage = homepagePref,
+                            onSetDefaultHomepage = { homepagePref = it },
+                            onImportFolder = {},
+                            onRemoveSafFolder = {},
+                            onRefreshLibrary = {},
+                            onSetGaplessEnabled = {},
+                            onSetReplayGainMode = {},
+                            onSetReplayGainPreampDb = {},
+                            onSetReplayGainPreventClipping = {},
+                            onSelectSleepTimerPreset = {},
+                            onExportLocalBackup = {},
+                            onImportLocalBackup = {},
+                            onOpenDiagnostics = {},
+                        )
+                    },
+                )
+            }
+        }
+
+        // Cold startup lands directly on Playlists
+        composeRule.onNodeWithText("YOUR PLAYLISTS").assertIsDisplayed()
+
+        // Navigate manually to Settings, change preference to Albums -> MUST NOT hijack back to Library!
+        composeRule.onNodeWithContentDescription("Settings").assertIsDisplayed().performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("AUDIO ENGINE").assertIsDisplayed()
+
+        homepagePref = DefaultHomepage.ALBUMS
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("AUDIO ENGINE").assertIsDisplayed()
+    }
+
+    @Test
+    fun startupNavHost_honorsDefaultHomepageAlbumsTabAndAllowsManualTabSwitching() {
+        val albumGroup = com.cangkir.bitperfectplayer.library.LibraryGroup(
+            name = "21st Century Breakdown",
+            subtitle = "Green Day · 1 track",
+            tracks = listOf(hiResFlacTrack),
+        )
+        var homepagePref by mutableStateOf(DefaultHomepage.ALBUMS)
+
+        composeRule.setContent {
+            BitPerfectPlayerTheme {
+                BitPerfectStartupNavHost(
+                    startupHomepage = homepagePref,
+                    libraryContent = { initialTab ->
+                        LibraryScreen(
+                            libraryState = LibrarySnapshot(
+                                allSongs = listOf(hiResFlacTrack),
+                                albums = listOf(albumGroup),
+                            ),
+                            favoriteTrackUris = emptySet(),
+                            playbackState = PlaybackControllerState(),
+                            albumArtworkLoader = artworkLoader,
+                            onRefreshLibrary = {},
+                            onImportFolder = {},
+                            onPlayTracks = { _, _, _ -> },
+                            onEnqueueTrack = {},
+                            onEnqueueNext = {},
+                            onEnqueueTracks = { _, _ -> },
+                            onEnqueueTracksNext = { _, _ -> },
+                            onSetTrackSort = { _, _ -> },
+                            onSetGroupSort = { _, _ -> },
+                            onAddToPlaylist = {},
+                            onShowTrackInfo = {},
+                            onToggleFavorite = {},
+                            onOpenQueue = {},
+                            onOpenDiagnostics = {},
+                            initialTab = initialTab,
+                        )
+                    },
+                    playlistsContent = {},
+                    settingsContent = {},
+                )
+            }
+        }
+
+        // Cold startup opens Library directly on Albums tab
+        composeRule.onNodeWithText("1 album").assertIsDisplayed()
+        composeRule.onNodeWithText("21st Century Breakdown").assertIsDisplayed()
+
+        // Manually switch to All Songs tab -> changing preference later never resets user's active tab
+        composeRule.onNodeWithText("All Songs").performScrollTo().assertIsDisplayed().performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("1 track").assertIsDisplayed()
+
+        homepagePref = DefaultHomepage.FAVORITES
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("1 track").assertIsDisplayed()
     }
 }

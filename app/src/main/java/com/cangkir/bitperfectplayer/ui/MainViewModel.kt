@@ -11,6 +11,7 @@ import com.cangkir.bitperfectplayer.audio.QueueContext
 import com.cangkir.bitperfectplayer.audio.ReplayGainMode
 import com.cangkir.bitperfectplayer.audio.SleepTimerPreset
 import com.cangkir.bitperfectplayer.audio.SleepTimerState
+import com.cangkir.bitperfectplayer.data.DefaultHomepage
 import com.cangkir.bitperfectplayer.data.NowPlayingArtworkStyle
 import com.cangkir.bitperfectplayer.data.SpectrumColorStyle
 import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
@@ -114,6 +115,24 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
             initialValue = true,
         )
 
+    /** Persisted startup homepage preference shown and updated in Settings. */
+    val defaultHomepage: StateFlow<DefaultHomepage> = container.preferencesRepository.preferencesFlow
+        .map { it.defaultHomepage }
+        .distinctUntilChanged()
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.Eagerly,
+            initialValue = DefaultHomepage.ALL_SONGS,
+        )
+
+    /**
+     * Latched strictly ONCE per ViewModel lifetime when DataStore emits its initial snapshot so
+     * cold startup opens the configured homepage cleanly without ever hijacking subsequent user
+     * tab switches or Settings changes.
+     */
+    private val _initialStartupHomepage = MutableStateFlow<DefaultHomepage?>(null)
+    val initialStartupHomepage: StateFlow<DefaultHomepage?> = _initialStartupHomepage.asStateFlow()
+
     private val _lyricsUiState = MutableStateFlow(LyricsUiState())
     val lyricsUiState: StateFlow<LyricsUiState> = _lyricsUiState.asStateFlow()
 
@@ -125,6 +144,11 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     val uiMessage: StateFlow<String?> = _uiMessage.asStateFlow()
 
     init {
+        viewModelScope.launch {
+            val loadedHomepage = container.preferencesRepository.getSnapshot().defaultHomepage
+            _initialStartupHomepage.compareAndSet(null, loadedHomepage)
+        }
+
         // Trigger incremental background sync while cached tracks from Room render immediately.
         refreshLibrary()
 
@@ -292,6 +316,12 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     fun setSpectrumSparksEnabled(enabled: Boolean) {
         viewModelScope.launch {
             container.preferencesRepository.setSpectrumSparksEnabled(enabled)
+        }
+    }
+
+    fun setDefaultHomepage(homepage: DefaultHomepage) {
+        viewModelScope.launch {
+            container.preferencesRepository.setDefaultHomepage(homepage)
         }
     }
 

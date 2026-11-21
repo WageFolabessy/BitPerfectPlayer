@@ -70,9 +70,10 @@ fun LibraryScreen(
     onToggleFavorite: (PlaybackTrack) -> Unit,
     onOpenQueue: () -> Unit,
     onOpenDiagnostics: () -> Unit,
+    initialTab: LibraryTab = LibraryTab.ALL_SONGS,
 ) {
     val context = LocalContext.current
-    var selectedTab by rememberSaveable { mutableStateOf(LibraryTab.ALL_SONGS) }
+    var selectedTab by rememberSaveable { mutableStateOf(initialTab) }
     var searchQuery by rememberSaveable { mutableStateOf("") }
     var openedGroupName by rememberSaveable { mutableStateOf<String?>(null) }
 

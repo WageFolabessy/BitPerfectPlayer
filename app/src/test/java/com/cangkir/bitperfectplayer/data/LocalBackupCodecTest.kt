@@ -144,5 +144,49 @@ class LocalBackupCodecTest {
         assertEquals(fp2, decoded.trackStats[0].contentFingerprint)
         assertEquals(0, decoded.trackStats[0].playCount)
         assertEquals(0L, decoded.trackStats[0].totalPlayTimeMs)
+        assertEquals(DefaultHomepage.ALL_SONGS, decoded.defaultHomepage)
+    }
+
+    @Test
+    fun encodeAndDecode_preservesDefaultHomepageAndHandlesLegacyBackupsMissingField() {
+        val withPlaylistsHome = LocalBackupPayload(
+            schemaVersion = LocalBackupCodec.CURRENT_SCHEMA_VERSION,
+            appId = LocalBackupCodec.APP_ID,
+            exportedAtEpochMs = 1_735_000_000_000L,
+            defaultHomepage = DefaultHomepage.PLAYLISTS,
+        )
+        val encoded = LocalBackupCodec.encode(withPlaylistsHome)
+        assertTrue(encoded.contains("\"defaultHomepage\": \"PLAYLISTS\""))
+        val decoded = LocalBackupCodec.decode(encoded).getOrThrow()
+        assertEquals(DefaultHomepage.PLAYLISTS, decoded.defaultHomepage)
+
+        // Legacy v1.0 / v1.1 JSON without defaultHomepage field must safely default to ALL_SONGS
+        val legacyJson = """
+            {
+              "schemaVersion": 1,
+              "appId": "com.cangkir.bitperfectplayer",
+              "exportedAtEpochMs": 1700000000000,
+              "playlists": [],
+              "lyrics": [],
+              "favorites": [],
+              "trackStats": []
+            }
+        """.trimIndent()
+        val legacyDecoded = LocalBackupCodec.decode(legacyJson).getOrThrow()
+        assertEquals(DefaultHomepage.ALL_SONGS, legacyDecoded.defaultHomepage)
+
+        // Unknown / corrupted defaultHomepage value also falls back safely to ALL_SONGS
+        val unknownHomepageJson = """
+            {
+              "schemaVersion": 1,
+              "defaultHomepage": "FUTURE_UNKNOWN_TAB",
+              "playlists": [],
+              "lyrics": [],
+              "favorites": [],
+              "trackStats": []
+            }
+        """.trimIndent()
+        val unknownDecoded = LocalBackupCodec.decode(unknownHomepageJson).getOrThrow()
+        assertEquals(DefaultHomepage.ALL_SONGS, unknownDecoded.defaultHomepage)
     }
 }

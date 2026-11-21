@@ -29,7 +29,7 @@ class AppContainer(context: Context) {
     val persistenceRepository: LocalPersistenceRepository by lazy { LocalPersistenceRepository(database) }
     val preferencesRepository: UserPreferencesRepository by lazy { UserPreferencesRepository.fromContext(appContext) }
     val backupRepository: LocalBackupRepository by lazy {
-        LocalBackupRepository(appContext, persistenceRepository)
+        LocalBackupRepository(appContext, persistenceRepository, preferencesRepository)
     }
     val fingerprintProvider: AndroidContentFingerprintProvider by lazy {
         AndroidContentFingerprintProvider(appContext.contentResolver)

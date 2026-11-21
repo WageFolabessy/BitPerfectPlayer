@@ -137,7 +137,10 @@ class LocalPersistenceRepository(
         return trackStatsDao.getByFingerprint(normalized)?.toDomain()
     }
 
-    suspend fun exportLocalBackupPayload(nowEpochMs: Long = System.currentTimeMillis()): LocalBackupPayload {
+    suspend fun exportLocalBackupPayload(
+        nowEpochMs: Long = System.currentTimeMillis(),
+        defaultHomepage: DefaultHomepage = DefaultHomepage.ALL_SONGS,
+    ): LocalBackupPayload {
         val playlists = playlistDao.getAllPlaylists()
         val tracksByPlaylist = playlistDao.getAllPlaylistTracks().groupBy { it.playlistId }
         val backupPlaylists = playlists.map { pl ->
@@ -160,6 +163,7 @@ class LocalPersistenceRepository(
             schemaVersion = LocalBackupCodec.CURRENT_SCHEMA_VERSION,
             appId = LocalBackupCodec.APP_ID,
             exportedAtEpochMs = nowEpochMs,
+            defaultHomepage = defaultHomepage,
             playlists = backupPlaylists,
             lyrics = lyricsDao.getAll().map { it.toDomain() },
             favorites = favoriteTrackDao.getAllFavorites().map { it.toDomain() },

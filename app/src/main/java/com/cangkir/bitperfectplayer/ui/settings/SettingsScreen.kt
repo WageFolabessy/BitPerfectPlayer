@@ -43,6 +43,7 @@ import com.cangkir.bitperfectplayer.audio.PlaybackControllerState
 import com.cangkir.bitperfectplayer.audio.ReplayGainMode
 import com.cangkir.bitperfectplayer.audio.SleepTimerPreset
 import com.cangkir.bitperfectplayer.audio.SleepTimerState
+import com.cangkir.bitperfectplayer.data.DefaultHomepage
 import com.cangkir.bitperfectplayer.data.LocalBackupRepository
 import com.cangkir.bitperfectplayer.data.NowPlayingArtworkStyle
 import com.cangkir.bitperfectplayer.data.SpectrumColorStyle
@@ -60,6 +61,8 @@ fun SettingsScreen(
     libraryState: LibrarySnapshot,
     playbackState: PlaybackControllerState,
     sleepTimerStateFlow: StateFlow<SleepTimerState>,
+    defaultHomepage: DefaultHomepage = DefaultHomepage.ALL_SONGS,
+    onSetDefaultHomepage: (DefaultHomepage) -> Unit = {},
     artworkStyle: NowPlayingArtworkStyle = NowPlayingArtworkStyle.VINYL_DISC,
     onSetArtworkStyle: (NowPlayingArtworkStyle) -> Unit = {},
     spectrumVisualizerEnabled: Boolean = true,
@@ -82,6 +85,7 @@ fun SettingsScreen(
 ) {
     val context = LocalContext.current
     var showSleepTimerSheet by remember { mutableStateOf(false) }
+    var showDefaultHomepageSheet by remember { mutableStateOf(false) }
 
     val folderPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree(),
@@ -123,8 +127,8 @@ fun SettingsScreen(
                 @Suppress("DEPRECATION")
                 context.packageManager.getPackageInfo(context.packageName, 0)
             }
-            pkgInfo.versionName ?: "1.1"
-        }.getOrDefault("1.1")
+            pkgInfo.versionName ?: "1.2"
+        }.getOrDefault("1.2")
     }
 
     val safetyState = playbackState.engineState.safetyState
@@ -149,6 +153,17 @@ fun SettingsScreen(
             isBitPerfectOptIn = isBitPerfectOptIn,
             onSelectPreset = onSelectSleepTimerPreset,
             onDismiss = { showSleepTimerSheet = false },
+        )
+    }
+
+    if (showDefaultHomepageSheet) {
+        DefaultHomepageBottomSheet(
+            currentHomepage = defaultHomepage,
+            onSelectHomepage = { selected ->
+                onSetDefaultHomepage(selected)
+                showDefaultHomepageSheet = false
+            },
+            onDismiss = { showDefaultHomepageSheet = false },
         )
     }
 
@@ -206,6 +221,8 @@ fun SettingsScreen(
 
                 item(key = "section_display", contentType = "settings_group") {
                     SettingsDisplaySection(
+                        defaultHomepage = defaultHomepage,
+                        onOpenDefaultHomepagePicker = { showDefaultHomepageSheet = true },
                         artworkStyle = artworkStyle,
                         onSetArtworkStyle = onSetArtworkStyle,
                         spectrumVisualizerEnabled = spectrumVisualizerEnabled,

@@ -1,5 +1,7 @@
 package com.cangkir.bitperfectplayer.ui
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -35,6 +37,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -43,12 +46,15 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavGraph.Companion.findStartDestination
+import androidx.navigation.NavGraphBuilder
+import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
 import com.cangkir.bitperfectplayer.audio.QueueSourceType
+import com.cangkir.bitperfectplayer.data.DefaultHomepage
 import com.cangkir.bitperfectplayer.ui.library.LibraryScreen
 import com.cangkir.bitperfectplayer.ui.nowplaying.NowPlayingScreen
 import com.cangkir.bitperfectplayer.ui.playlists.AddToPlaylistDialog
@@ -66,6 +72,8 @@ private object Routes {
     const val LYRICS = "lyrics"
     const val DIAGNOSTICS = "diagnostics"
 }
+
+internal fun DefaultHomepage.toStartDestinationRoute(): String = if (isPlaylistsRoute) Routes.PLAYLISTS else Routes.LIBRARY
 
 private data class TopLevelTab(val route: String, val label: String, val icon: ImageVector)
 
@@ -91,6 +99,24 @@ private val TOP_LEVEL_ROUTES = setOf(Routes.LIBRARY, Routes.PLAYLISTS, Routes.SE
 
 @Composable
 fun BitPerfectAppRoot(viewModel: MainViewModel) {
+    val initialStartupHomepage by viewModel.initialStartupHomepage.collectAsStateWithLifecycle()
+    val resolvedStartupHomepage = initialStartupHomepage
+    if (resolvedStartupHomepage == null) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background),
+        )
+        return
+    }
+    BitPerfectAppRootContent(
+        viewModel = viewModel,
+        startupHomepage = resolvedStartupHomepage,
+    )
+}
+
+@Composable
+private fun BitPerfectAppRootContent(viewModel: MainViewModel, startupHomepage: DefaultHomepage) {
     val navController = rememberNavController()
     val libraryState by viewModel.libraryState.collectAsStateWithLifecycle()
     val playlistsState by viewModel.playlistsState.collectAsStateWithLifecycle()
@@ -101,10 +127,6 @@ fun BitPerfectAppRoot(viewModel: MainViewModel) {
     val uiMessage by viewModel.uiMessage.collectAsStateWithLifecycle()
 
     var trackPendingAddToPlaylist by remember { mutableStateOf<PlaybackTrack?>(null) }
-
-    val backStackEntry by navController.currentBackStackEntryAsState()
-    val currentRoute = backStackEntry?.destination?.route
-    val isTopLevelRoute = currentRoute == null || currentRoute in TOP_LEVEL_ROUTES
 
     val snackbarHostState = remember { SnackbarHostState() }
     LaunchedEffect(uiMessage) {
@@ -122,17 +144,6 @@ fun BitPerfectAppRoot(viewModel: MainViewModel) {
     }
     val openDiagnostics = remember(navController) {
         { navController.navigate(Routes.DIAGNOSTICS) { launchSingleTop = true } }
-    }
-    val selectTopLevelTab = remember(navController) {
-        { route: String ->
-            navController.navigate(route) {
-                popUpTo(navController.graph.findStartDestination().id) {
-                    saveState = true
-                }
-                launchSingleTop = true
-                restoreState = true
-            }
-        }
     }
 
     trackPendingAddToPlaylist?.let { targetTrack ->
@@ -163,11 +174,10 @@ fun BitPerfectAppRoot(viewModel: MainViewModel) {
         )
     }
 
-    BitPerfectAdaptiveTopLevelFrame(
-        isTopLevelRoute = isTopLevelRoute,
-        currentRoute = currentRoute ?: Routes.LIBRARY,
+    BitPerfectStartupNavHost(
+        startupHomepage = startupHomepage,
+        navController = navController,
         snackbarHostState = snackbarHostState,
-        onSelectTab = selectTopLevelTab,
         miniPlayerContent = {
             MiniPlayerBar(
                 playbackState = playbackState,
@@ -178,202 +188,255 @@ fun BitPerfectAppRoot(viewModel: MainViewModel) {
                 onNext = viewModel::next,
             )
         },
+        libraryContent = { initialLibraryTab ->
+            LibraryScreen(
+                libraryState = libraryState,
+                favoriteTrackUris = favoriteTrackUris,
+                playbackState = playbackState,
+                albumArtworkLoader = viewModel.albumArtworkLoader,
+                onRefreshLibrary = viewModel::refreshLibrary,
+                onImportFolder = viewModel::importSafFolder,
+                onPlayTracks = { tracks, index, context ->
+                    viewModel.playTracks(tracks, index, context)
+                },
+                onEnqueueTrack = viewModel::enqueueTrack,
+                onEnqueueNext = viewModel::enqueueTrackNext,
+                onEnqueueTracks = viewModel::enqueueTracks,
+                onEnqueueTracksNext = viewModel::enqueueTracksNext,
+                onSetTrackSort = viewModel::setTrackSort,
+                onSetGroupSort = viewModel::setGroupSort,
+                onAddToPlaylist = openAddToPlaylist,
+                onShowTrackInfo = viewModel::openTrackInfo,
+                onToggleFavorite = viewModel::toggleFavorite,
+                onOpenQueue = openQueue,
+                onOpenDiagnostics = openDiagnostics,
+                initialTab = initialLibraryTab,
+            )
+        },
+        playlistsContent = {
+            PlaylistsScreen(
+                playlistsState = playlistsState,
+                activeTrackUri = playbackState.activeTrack?.uriString,
+                albumArtworkLoader = viewModel.albumArtworkLoader,
+                onPlayTracks = { tracks, index, context ->
+                    viewModel.playTracks(tracks, index, context)
+                },
+                onEnqueueTracks = viewModel::enqueueTracks,
+                onEnqueueTracksNext = viewModel::enqueueTracksNext,
+                onSetPlaylistSort = viewModel::setTrackSort,
+                onOpenQueue = openQueue,
+                onCreatePlaylist = viewModel::createPlaylist,
+                onRenamePlaylist = viewModel::renamePlaylist,
+                onDeletePlaylist = viewModel::deletePlaylist,
+                onRemovePlaylistEntry = viewModel::removePlaylistEntry,
+                onMovePlaylistEntry = viewModel::movePlaylistEntry,
+                onExportPlaylist = viewModel::exportPlaylistToM3u8,
+                onImportPlaylist = viewModel::importPlaylistFromM3u8,
+            )
+        },
+        settingsContent = {
+            val defaultHomepage by viewModel.defaultHomepage.collectAsStateWithLifecycle()
+            val nowPlayingArtworkStyle by viewModel.nowPlayingArtworkStyle.collectAsStateWithLifecycle()
+            val spectrumVisualizerEnabled by viewModel.spectrumVisualizerEnabled.collectAsStateWithLifecycle()
+            val spectrumColorStyle by viewModel.spectrumColorStyle.collectAsStateWithLifecycle()
+            val spectrumSparksEnabled by viewModel.spectrumSparksEnabled.collectAsStateWithLifecycle()
+            SettingsScreen(
+                libraryState = libraryState,
+                playbackState = playbackState,
+                sleepTimerStateFlow = viewModel.sleepTimerState,
+                defaultHomepage = defaultHomepage,
+                onSetDefaultHomepage = viewModel::setDefaultHomepage,
+                artworkStyle = nowPlayingArtworkStyle,
+                onSetArtworkStyle = viewModel::setNowPlayingArtworkStyle,
+                spectrumVisualizerEnabled = spectrumVisualizerEnabled,
+                onSetSpectrumVisualizerEnabled = viewModel::setSpectrumVisualizerEnabled,
+                spectrumColorStyle = spectrumColorStyle,
+                onSetSpectrumColorStyle = viewModel::setSpectrumColorStyle,
+                spectrumSparksEnabled = spectrumSparksEnabled,
+                onSetSpectrumSparksEnabled = viewModel::setSpectrumSparksEnabled,
+                onImportFolder = viewModel::importSafFolder,
+                onRemoveSafFolder = viewModel::removeSafFolder,
+                onRefreshLibrary = viewModel::refreshLibrary,
+                onSetGaplessEnabled = viewModel::setGaplessEnabled,
+                onSetReplayGainMode = viewModel::setReplayGainMode,
+                onSetReplayGainPreampDb = viewModel::setReplayGainPreampDb,
+                onSetReplayGainPreventClipping = viewModel::setReplayGainPreventClipping,
+                onSelectSleepTimerPreset = viewModel::setSleepTimerPreset,
+                onExportLocalBackup = viewModel::exportLocalBackup,
+                onImportLocalBackup = viewModel::importLocalBackup,
+                onOpenDiagnostics = openDiagnostics,
+            )
+        },
+    ) {
+        composable(Routes.NOW_PLAYING) {
+            val nowPlayingArtworkStyle by viewModel.nowPlayingArtworkStyle.collectAsStateWithLifecycle()
+            val spectrumVisualizerEnabled by viewModel.spectrumVisualizerEnabled.collectAsStateWithLifecycle()
+            val spectrumColorStyle by viewModel.spectrumColorStyle.collectAsStateWithLifecycle()
+            val spectrumSparksEnabled by viewModel.spectrumSparksEnabled.collectAsStateWithLifecycle()
+            val activeTrack = playbackState.activeTrack
+            val isFav = activeTrack != null &&
+                (
+                    activeTrack.uriString in favoriteTrackUris ||
+                        activeTrack.contentFingerprint?.lowercase()?.let { it in libraryState.favoriteFingerprints } == true
+                    )
+            NowPlayingScreen(
+                playbackState = playbackState,
+                playbackPositionMsFlow = viewModel.playbackPositionMs,
+                sleepTimerStateFlow = viewModel.sleepTimerState,
+                albumArtworkLoader = viewModel.albumArtworkLoader,
+                isFavorite = isFav,
+                artworkStyle = nowPlayingArtworkStyle,
+                onSetArtworkStyle = viewModel::setNowPlayingArtworkStyle,
+                spectrumVisualizerEnabled = spectrumVisualizerEnabled,
+                onSetSpectrumVisualizerEnabled = viewModel::setSpectrumVisualizerEnabled,
+                spectrumColorStyle = spectrumColorStyle,
+                onCycleSpectrumColorStyle = viewModel::cycleSpectrumColorStyle,
+                spectrumSparksEnabled = spectrumSparksEnabled,
+                onSetSpectrumSparksEnabled = viewModel::setSpectrumSparksEnabled,
+                onSetSpectrumVisualizerActive = viewModel::setSpectrumVisualizerActive,
+                onSampleSpectrumWindow = viewModel::sampleCurrentSpectrumWindow,
+                onBack = { navController.popBackStack() },
+                onToggleFavorite = viewModel::toggleFavorite,
+                onAddToPlaylist = openAddToPlaylist,
+                onShowTrackInfo = viewModel::openTrackInfo,
+                onSelectSleepTimerPreset = viewModel::setSleepTimerPreset,
+                onTogglePlayPause = viewModel::togglePlayPause,
+                onPrevious = viewModel::previous,
+                onNext = viewModel::next,
+                onSeekTo = viewModel::seekTo,
+                onBeginTurntableScratch = viewModel::beginTurntableScratch,
+                onUpdateTurntableScratchRate = viewModel::updateTurntableScratchRate,
+                onEndTurntableScratch = viewModel::endTurntableScratch,
+                onToggleShuffle = viewModel::toggleShuffle,
+                onCycleRepeatMode = viewModel::cycleRepeatMode,
+                onRequestBitPerfectMode = viewModel::requestBitPerfectMode,
+                onConfirmBitPerfectWarning = viewModel::confirmBitPerfectWarning,
+                onDismissSafetyWarning = viewModel::dismissSafetyWarning,
+                onSwitchToSafeMode = viewModel::switchToSafeMode,
+                onClearAutoPauseNotice = viewModel::clearAutoPauseNotice,
+                onOpenQueue = openQueue,
+                onOpenLyrics = {
+                    navController.navigate(Routes.LYRICS) { launchSingleTop = true }
+                },
+                onOpenDiagnostics = openDiagnostics,
+            )
+        }
+
+        composable(Routes.QUEUE) {
+            val activeContextTracks = remember(playbackState.queueContext, libraryState, playlistsState) {
+                val ctx = playbackState.queueContext
+                val key = ctx.sourceKey ?: ctx.sourceLabel
+                when (ctx.sourceType) {
+                    QueueSourceType.ALBUM -> libraryState.albums.firstOrNull { it.name == key }?.tracks.orEmpty()
+                    QueueSourceType.ARTIST -> libraryState.artists.firstOrNull { it.name == key }?.tracks.orEmpty()
+                    QueueSourceType.FOLDER -> libraryState.folders.firstOrNull { it.name == key }?.tracks.orEmpty()
+                    QueueSourceType.PLAYLIST -> playlistsState.playlists.firstOrNull { it.id.toString() == key }?.tracks.orEmpty()
+                    QueueSourceType.RECENT -> libraryState.recentlyPlayed
+                    QueueSourceType.FAVORITES -> libraryState.favorites
+                    QueueSourceType.CUSTOM -> if (ctx.sourceKey == com.cangkir.bitperfectplayer.audio.QueueContext.MOST_PLAYED_KEY) {
+                        playlistsState.mostPlayed.map { it.track }
+                    } else {
+                        emptyList()
+                    }
+                    QueueSourceType.ALL_SONGS -> emptyList()
+                }
+            }
+            QueueScreen(
+                playbackState = playbackState,
+                libraryTracks = libraryState.allSongs,
+                activeContextTracks = activeContextTracks,
+                albumArtworkLoader = viewModel.albumArtworkLoader,
+                onBack = { navController.popBackStack() },
+                onSelectQueueIndex = viewModel::playTrackAtQueueIndex,
+                onAddTrackToQueue = viewModel::enqueueTrack,
+                onRemoveQueueItem = viewModel::removeQueueItem,
+                onMoveQueueItem = viewModel::moveQueueItem,
+                onToggleShuffle = viewModel::toggleShuffle,
+                onCycleRepeatMode = viewModel::cycleRepeatMode,
+            )
+        }
+
+        composable(Routes.LYRICS) {
+            LyricsScreen(
+                playbackState = playbackState,
+                playbackPositionMsFlow = viewModel.playbackPositionMs,
+                lyricsUiState = lyricsUiState,
+                onBack = { navController.popBackStack() },
+                onImportLrcUri = viewModel::importLrcForActiveTrack,
+                onSaveManualLyrics = viewModel::saveManualLyricsForActiveTrack,
+                onDeleteLyrics = viewModel::deleteLyricsForActiveTrack,
+                onTogglePlayPause = viewModel::togglePlayPause,
+                onSeekTo = viewModel::seekTo,
+            )
+        }
+
+        composable(Routes.DIAGNOSTICS) {
+            DiagnosticsScreen(
+                playbackState = playbackState,
+                onBack = { navController.popBackStack() },
+                onSwitchToSafeMode = viewModel::switchToSafeMode,
+                onRequestBitPerfectMode = viewModel::requestBitPerfectMode,
+                onConfirmBitPerfectWarning = viewModel::confirmBitPerfectWarning,
+                onDismissSafetyWarning = viewModel::dismissSafetyWarning,
+            )
+        }
+    }
+}
+
+@Composable
+internal fun BitPerfectStartupNavHost(
+    startupHomepage: DefaultHomepage,
+    navController: NavHostController = rememberNavController(),
+    snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
+    miniPlayerContent: @Composable () -> Unit = {},
+    libraryContent: @Composable (LibraryTab) -> Unit,
+    playlistsContent: @Composable () -> Unit,
+    settingsContent: @Composable () -> Unit,
+    extraRoutes: NavGraphBuilder.() -> Unit = {},
+) {
+    // Latch start destination & initial Library tab strictly ONCE so later preference changes in
+    // Settings or user tab switches never hijack active navigation.
+    val startDestination = rememberSaveable { startupHomepage.toStartDestinationRoute() }
+    val initialLibraryTab = rememberSaveable { startupHomepage.toInitialLibraryTab() }
+
+    val backStackEntry by navController.currentBackStackEntryAsState()
+    val currentRoute = backStackEntry?.destination?.route
+    val isTopLevelRoute = currentRoute == null || currentRoute in TOP_LEVEL_ROUTES
+
+    val selectTopLevelTab = remember(navController) {
+        { route: String ->
+            navController.navigate(route) {
+                popUpTo(navController.graph.findStartDestination().id) {
+                    saveState = true
+                }
+                launchSingleTop = true
+                restoreState = true
+            }
+        }
+    }
+
+    BitPerfectAdaptiveTopLevelFrame(
+        isTopLevelRoute = isTopLevelRoute,
+        currentRoute = currentRoute ?: startDestination,
+        snackbarHostState = snackbarHostState,
+        onSelectTab = selectTopLevelTab,
+        miniPlayerContent = miniPlayerContent,
     ) { contentModifier ->
         NavHost(
             navController = navController,
-            startDestination = Routes.LIBRARY,
+            startDestination = startDestination,
             modifier = contentModifier,
         ) {
             composable(Routes.LIBRARY) {
-                LibraryScreen(
-                    libraryState = libraryState,
-                    favoriteTrackUris = favoriteTrackUris,
-                    playbackState = playbackState,
-                    albumArtworkLoader = viewModel.albumArtworkLoader,
-                    onRefreshLibrary = viewModel::refreshLibrary,
-                    onImportFolder = viewModel::importSafFolder,
-                    onPlayTracks = { tracks, index, context ->
-                        viewModel.playTracks(tracks, index, context)
-                    },
-                    onEnqueueTrack = viewModel::enqueueTrack,
-                    onEnqueueNext = viewModel::enqueueTrackNext,
-                    onEnqueueTracks = viewModel::enqueueTracks,
-                    onEnqueueTracksNext = viewModel::enqueueTracksNext,
-                    onSetTrackSort = viewModel::setTrackSort,
-                    onSetGroupSort = viewModel::setGroupSort,
-                    onAddToPlaylist = openAddToPlaylist,
-                    onShowTrackInfo = viewModel::openTrackInfo,
-                    onToggleFavorite = viewModel::toggleFavorite,
-                    onOpenQueue = openQueue,
-                    onOpenDiagnostics = openDiagnostics,
-                )
+                libraryContent(initialLibraryTab)
             }
-
             composable(Routes.PLAYLISTS) {
-                PlaylistsScreen(
-                    playlistsState = playlistsState,
-                    activeTrackUri = playbackState.activeTrack?.uriString,
-                    albumArtworkLoader = viewModel.albumArtworkLoader,
-                    onPlayTracks = { tracks, index, context ->
-                        viewModel.playTracks(tracks, index, context)
-                    },
-                    onEnqueueTracks = viewModel::enqueueTracks,
-                    onEnqueueTracksNext = viewModel::enqueueTracksNext,
-                    onSetPlaylistSort = viewModel::setTrackSort,
-                    onOpenQueue = openQueue,
-                    onCreatePlaylist = viewModel::createPlaylist,
-                    onRenamePlaylist = viewModel::renamePlaylist,
-                    onDeletePlaylist = viewModel::deletePlaylist,
-                    onRemovePlaylistEntry = viewModel::removePlaylistEntry,
-                    onMovePlaylistEntry = viewModel::movePlaylistEntry,
-                    onExportPlaylist = viewModel::exportPlaylistToM3u8,
-                    onImportPlaylist = viewModel::importPlaylistFromM3u8,
-                )
+                playlistsContent()
             }
-
             composable(Routes.SETTINGS) {
-                val nowPlayingArtworkStyle by viewModel.nowPlayingArtworkStyle.collectAsStateWithLifecycle()
-                val spectrumVisualizerEnabled by viewModel.spectrumVisualizerEnabled.collectAsStateWithLifecycle()
-                val spectrumColorStyle by viewModel.spectrumColorStyle.collectAsStateWithLifecycle()
-                val spectrumSparksEnabled by viewModel.spectrumSparksEnabled.collectAsStateWithLifecycle()
-                SettingsScreen(
-                    libraryState = libraryState,
-                    playbackState = playbackState,
-                    sleepTimerStateFlow = viewModel.sleepTimerState,
-                    artworkStyle = nowPlayingArtworkStyle,
-                    onSetArtworkStyle = viewModel::setNowPlayingArtworkStyle,
-                    spectrumVisualizerEnabled = spectrumVisualizerEnabled,
-                    onSetSpectrumVisualizerEnabled = viewModel::setSpectrumVisualizerEnabled,
-                    spectrumColorStyle = spectrumColorStyle,
-                    onSetSpectrumColorStyle = viewModel::setSpectrumColorStyle,
-                    spectrumSparksEnabled = spectrumSparksEnabled,
-                    onSetSpectrumSparksEnabled = viewModel::setSpectrumSparksEnabled,
-                    onImportFolder = viewModel::importSafFolder,
-                    onRemoveSafFolder = viewModel::removeSafFolder,
-                    onRefreshLibrary = viewModel::refreshLibrary,
-                    onSetGaplessEnabled = viewModel::setGaplessEnabled,
-                    onSetReplayGainMode = viewModel::setReplayGainMode,
-                    onSetReplayGainPreampDb = viewModel::setReplayGainPreampDb,
-                    onSetReplayGainPreventClipping = viewModel::setReplayGainPreventClipping,
-                    onSelectSleepTimerPreset = viewModel::setSleepTimerPreset,
-                    onExportLocalBackup = viewModel::exportLocalBackup,
-                    onImportLocalBackup = viewModel::importLocalBackup,
-                    onOpenDiagnostics = openDiagnostics,
-                )
+                settingsContent()
             }
-
-            composable(Routes.NOW_PLAYING) {
-                val nowPlayingArtworkStyle by viewModel.nowPlayingArtworkStyle.collectAsStateWithLifecycle()
-                val spectrumVisualizerEnabled by viewModel.spectrumVisualizerEnabled.collectAsStateWithLifecycle()
-                val spectrumColorStyle by viewModel.spectrumColorStyle.collectAsStateWithLifecycle()
-                val spectrumSparksEnabled by viewModel.spectrumSparksEnabled.collectAsStateWithLifecycle()
-                val activeTrack = playbackState.activeTrack
-                val isFav = activeTrack != null &&
-                    (
-                        activeTrack.uriString in favoriteTrackUris ||
-                            activeTrack.contentFingerprint?.lowercase()?.let { it in libraryState.favoriteFingerprints } == true
-                        )
-                NowPlayingScreen(
-                    playbackState = playbackState,
-                    playbackPositionMsFlow = viewModel.playbackPositionMs,
-                    sleepTimerStateFlow = viewModel.sleepTimerState,
-                    albumArtworkLoader = viewModel.albumArtworkLoader,
-                    isFavorite = isFav,
-                    artworkStyle = nowPlayingArtworkStyle,
-                    onSetArtworkStyle = viewModel::setNowPlayingArtworkStyle,
-                    spectrumVisualizerEnabled = spectrumVisualizerEnabled,
-                    onSetSpectrumVisualizerEnabled = viewModel::setSpectrumVisualizerEnabled,
-                    spectrumColorStyle = spectrumColorStyle,
-                    onCycleSpectrumColorStyle = viewModel::cycleSpectrumColorStyle,
-                    spectrumSparksEnabled = spectrumSparksEnabled,
-                    onSetSpectrumSparksEnabled = viewModel::setSpectrumSparksEnabled,
-                    onSetSpectrumVisualizerActive = viewModel::setSpectrumVisualizerActive,
-                    onSampleSpectrumWindow = viewModel::sampleCurrentSpectrumWindow,
-                    onBack = { navController.popBackStack() },
-                    onToggleFavorite = viewModel::toggleFavorite,
-                    onAddToPlaylist = openAddToPlaylist,
-                    onShowTrackInfo = viewModel::openTrackInfo,
-                    onSelectSleepTimerPreset = viewModel::setSleepTimerPreset,
-                    onTogglePlayPause = viewModel::togglePlayPause,
-                    onPrevious = viewModel::previous,
-                    onNext = viewModel::next,
-                    onSeekTo = viewModel::seekTo,
-                    onBeginTurntableScratch = viewModel::beginTurntableScratch,
-                    onUpdateTurntableScratchRate = viewModel::updateTurntableScratchRate,
-                    onEndTurntableScratch = viewModel::endTurntableScratch,
-                    onToggleShuffle = viewModel::toggleShuffle,
-                    onCycleRepeatMode = viewModel::cycleRepeatMode,
-                    onRequestBitPerfectMode = viewModel::requestBitPerfectMode,
-                    onConfirmBitPerfectWarning = viewModel::confirmBitPerfectWarning,
-                    onDismissSafetyWarning = viewModel::dismissSafetyWarning,
-                    onSwitchToSafeMode = viewModel::switchToSafeMode,
-                    onClearAutoPauseNotice = viewModel::clearAutoPauseNotice,
-                    onOpenQueue = openQueue,
-                    onOpenLyrics = {
-                        navController.navigate(Routes.LYRICS) { launchSingleTop = true }
-                    },
-                    onOpenDiagnostics = openDiagnostics,
-                )
-            }
-
-            composable(Routes.QUEUE) {
-                val activeContextTracks = remember(playbackState.queueContext, libraryState, playlistsState) {
-                    val ctx = playbackState.queueContext
-                    val key = ctx.sourceKey ?: ctx.sourceLabel
-                    when (ctx.sourceType) {
-                        QueueSourceType.ALBUM -> libraryState.albums.firstOrNull { it.name == key }?.tracks.orEmpty()
-                        QueueSourceType.ARTIST -> libraryState.artists.firstOrNull { it.name == key }?.tracks.orEmpty()
-                        QueueSourceType.FOLDER -> libraryState.folders.firstOrNull { it.name == key }?.tracks.orEmpty()
-                        QueueSourceType.PLAYLIST -> playlistsState.playlists.firstOrNull { it.id.toString() == key }?.tracks.orEmpty()
-                        QueueSourceType.RECENT -> libraryState.recentlyPlayed
-                        QueueSourceType.FAVORITES -> libraryState.favorites
-                        QueueSourceType.CUSTOM -> if (ctx.sourceKey == com.cangkir.bitperfectplayer.audio.QueueContext.MOST_PLAYED_KEY) {
-                            playlistsState.mostPlayed.map { it.track }
-                        } else {
-                            emptyList()
-                        }
-                        QueueSourceType.ALL_SONGS -> emptyList()
-                    }
-                }
-                QueueScreen(
-                    playbackState = playbackState,
-                    libraryTracks = libraryState.allSongs,
-                    activeContextTracks = activeContextTracks,
-                    albumArtworkLoader = viewModel.albumArtworkLoader,
-                    onBack = { navController.popBackStack() },
-                    onSelectQueueIndex = viewModel::playTrackAtQueueIndex,
-                    onAddTrackToQueue = viewModel::enqueueTrack,
-                    onRemoveQueueItem = viewModel::removeQueueItem,
-                    onMoveQueueItem = viewModel::moveQueueItem,
-                    onToggleShuffle = viewModel::toggleShuffle,
-                    onCycleRepeatMode = viewModel::cycleRepeatMode,
-                )
-            }
-
-            composable(Routes.LYRICS) {
-                LyricsScreen(
-                    playbackState = playbackState,
-                    playbackPositionMsFlow = viewModel.playbackPositionMs,
-                    lyricsUiState = lyricsUiState,
-                    onBack = { navController.popBackStack() },
-                    onImportLrcUri = viewModel::importLrcForActiveTrack,
-                    onSaveManualLyrics = viewModel::saveManualLyricsForActiveTrack,
-                    onDeleteLyrics = viewModel::deleteLyricsForActiveTrack,
-                    onTogglePlayPause = viewModel::togglePlayPause,
-                    onSeekTo = viewModel::seekTo,
-                )
-            }
-
-            composable(Routes.DIAGNOSTICS) {
-                DiagnosticsScreen(
-                    playbackState = playbackState,
-                    onBack = { navController.popBackStack() },
-                    onSwitchToSafeMode = viewModel::switchToSafeMode,
-                    onRequestBitPerfectMode = viewModel::requestBitPerfectMode,
-                    onConfirmBitPerfectWarning = viewModel::confirmBitPerfectWarning,
-                    onDismissSafetyWarning = viewModel::dismissSafetyWarning,
-                )
-            }
+            extraRoutes()
         }
     }
 }
