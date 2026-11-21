@@ -248,6 +248,8 @@ fun BitPerfectAppRoot(
             composable(Routes.SETTINGS) {
                 val nowPlayingArtworkStyle by viewModel.nowPlayingArtworkStyle.collectAsStateWithLifecycle()
                 val spectrumVisualizerEnabled by viewModel.spectrumVisualizerEnabled.collectAsStateWithLifecycle()
+                val spectrumColorStyle by viewModel.spectrumColorStyle.collectAsStateWithLifecycle()
+                val spectrumSparksEnabled by viewModel.spectrumSparksEnabled.collectAsStateWithLifecycle()
                 SettingsScreen(
                     libraryState = libraryState,
                     playbackState = playbackState,
@@ -256,6 +258,10 @@ fun BitPerfectAppRoot(
                     onSetArtworkStyle = viewModel::setNowPlayingArtworkStyle,
                     spectrumVisualizerEnabled = spectrumVisualizerEnabled,
                     onSetSpectrumVisualizerEnabled = viewModel::setSpectrumVisualizerEnabled,
+                    spectrumColorStyle = spectrumColorStyle,
+                    onSetSpectrumColorStyle = viewModel::setSpectrumColorStyle,
+                    spectrumSparksEnabled = spectrumSparksEnabled,
+                    onSetSpectrumSparksEnabled = viewModel::setSpectrumSparksEnabled,
                     onImportFolder = viewModel::importSafFolder,
                     onRemoveSafFolder = viewModel::removeSafFolder,
                     onRefreshLibrary = viewModel::refreshLibrary,
@@ -273,6 +279,8 @@ fun BitPerfectAppRoot(
             composable(Routes.NOW_PLAYING) {
                 val nowPlayingArtworkStyle by viewModel.nowPlayingArtworkStyle.collectAsStateWithLifecycle()
                 val spectrumVisualizerEnabled by viewModel.spectrumVisualizerEnabled.collectAsStateWithLifecycle()
+                val spectrumColorStyle by viewModel.spectrumColorStyle.collectAsStateWithLifecycle()
+                val spectrumSparksEnabled by viewModel.spectrumSparksEnabled.collectAsStateWithLifecycle()
                 val activeTrack = playbackState.activeTrack
                 val isFav = activeTrack != null && (
                     activeTrack.uriString in favoriteTrackUris ||
@@ -288,6 +296,10 @@ fun BitPerfectAppRoot(
                     onSetArtworkStyle = viewModel::setNowPlayingArtworkStyle,
                     spectrumVisualizerEnabled = spectrumVisualizerEnabled,
                     onSetSpectrumVisualizerEnabled = viewModel::setSpectrumVisualizerEnabled,
+                    spectrumColorStyle = spectrumColorStyle,
+                    onCycleSpectrumColorStyle = viewModel::cycleSpectrumColorStyle,
+                    spectrumSparksEnabled = spectrumSparksEnabled,
+                    onSetSpectrumSparksEnabled = viewModel::setSpectrumSparksEnabled,
                     onSetSpectrumVisualizerActive = viewModel::setSpectrumVisualizerActive,
                     onSampleSpectrumWindow = viewModel::sampleCurrentSpectrumWindow,
                     onBack = { navController.popBackStack() },

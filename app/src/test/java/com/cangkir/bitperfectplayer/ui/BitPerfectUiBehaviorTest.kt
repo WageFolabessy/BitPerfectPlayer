@@ -834,11 +834,137 @@ class BitPerfectUiBehaviorTest {
         )
         assertTrue("Expected spectrum tap deactivated when hidden", activeSignals.lastOrNull() == false)
 
-        // Re-enable spectrum and switch to Square Cover -> compact 28.dp bar strip renders cleanly.
+        // Re-enable spectrum and switch to Square Cover -> compact 42.dp bar strip renders cleanly.
         composeRule.onNodeWithContentDescription("More track actions").assertIsDisplayed().performClick()
         composeRule.onNodeWithText("Show Spectrum").assertIsDisplayed().performClick()
         composeRule.onNodeWithContentDescription("More track actions").assertIsDisplayed().performClick()
         composeRule.onNodeWithText("Switch to Square Cover").assertIsDisplayed().performClick()
         composeRule.onNodeWithContentDescription("Audio spectrum visualizer bar strip").assertIsDisplayed()
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h915dp")
+    fun settingsScreen_spectrumStyleSelectorAndKineticSparksToggleWork() {
+        var style by mutableStateOf(com.cangkir.bitperfectplayer.data.SpectrumColorStyle.PRISM)
+        var sparks by mutableStateOf(true)
+        val styleChanges = mutableListOf<com.cangkir.bitperfectplayer.data.SpectrumColorStyle>()
+        val sparkChanges = mutableListOf<Boolean>()
+
+        composeRule.setContent {
+            BitPerfectPlayerTheme {
+                SettingsScreen(
+                    libraryState = LibrarySnapshot(),
+                    playbackState = PlaybackControllerState(),
+                    sleepTimerStateFlow = MutableStateFlow(SleepTimerState()),
+                    spectrumVisualizerEnabled = true,
+                    spectrumColorStyle = style,
+                    onSetSpectrumColorStyle = { next ->
+                        styleChanges.add(next)
+                        style = next
+                    },
+                    spectrumSparksEnabled = sparks,
+                    onSetSpectrumSparksEnabled = { next ->
+                        sparkChanges.add(next)
+                        sparks = next
+                    },
+                    onImportFolder = {},
+                    onRemoveSafFolder = {},
+                    onRefreshLibrary = {},
+                    onSetGaplessEnabled = {},
+                    onSetReplayGainMode = {},
+                    onSetReplayGainPreampDb = {},
+                    onSetReplayGainPreventClipping = {},
+                    onSelectSleepTimerPreset = {},
+                    onExportLocalBackup = {},
+                    onImportLocalBackup = {},
+                    onOpenDiagnostics = {},
+                )
+            }
+        }
+
+        composeRule.onNode(hasScrollToIndexAction()).performScrollToIndex(1)
+        composeRule.onNodeWithText("Spectrum Style").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Spectrum style Studio").assertIsDisplayed().performClick()
+        composeRule.onNodeWithContentDescription("Spectrum style Album").assertIsDisplayed().performClick()
+        composeRule.onNodeWithText("Kinetic Sparks").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Toggle kinetic sparks").assertIsDisplayed().performClick()
+
+        assertEquals(
+            listOf(
+                com.cangkir.bitperfectplayer.data.SpectrumColorStyle.STUDIO,
+                com.cangkir.bitperfectplayer.data.SpectrumColorStyle.ALBUM_ADAPTIVE,
+            ),
+            styleChanges,
+        )
+        assertEquals(listOf(false), sparkChanges)
+    }
+
+    @Test
+    fun nowPlayingScreen_overflowMenuCyclesSpectrumStyleAndTogglesSparks() {
+        var style by mutableStateOf(com.cangkir.bitperfectplayer.data.SpectrumColorStyle.PRISM)
+        var sparks by mutableStateOf(true)
+
+        val pausedState = PlaybackControllerState(
+            activeTrack = hiResFlacTrack,
+            queueContext = QueueContext.album("21st Century Breakdown"),
+            engineState = EnginePlaybackState(
+                status = PlaybackStatus.PAUSED,
+                durationMs = hiResFlacTrack.durationMs,
+            ),
+        )
+
+        composeRule.setContent {
+            BitPerfectPlayerTheme {
+                NowPlayingScreen(
+                    playbackState = pausedState,
+                    playbackPositionMsFlow = MutableStateFlow(45_000L),
+                    sleepTimerStateFlow = MutableStateFlow(SleepTimerState()),
+                    albumArtworkLoader = artworkLoader,
+                    isFavorite = false,
+                    spectrumVisualizerEnabled = true,
+                    spectrumColorStyle = style,
+                    onCycleSpectrumColorStyle = { style = style.next() },
+                    spectrumSparksEnabled = sparks,
+                    onSetSpectrumSparksEnabled = { sparks = it },
+                    onBack = {},
+                    onToggleFavorite = {},
+                    onAddToPlaylist = {},
+                    onShowTrackInfo = {},
+                    onSelectSleepTimerPreset = {},
+                    onTogglePlayPause = {},
+                    onPrevious = {},
+                    onNext = {},
+                    onSeekTo = {},
+                    onToggleShuffle = {},
+                    onCycleRepeatMode = {},
+                    onRequestBitPerfectMode = {},
+                    onConfirmBitPerfectWarning = {},
+                    onDismissSafetyWarning = {},
+                    onSwitchToSafeMode = {},
+                    onClearAutoPauseNotice = {},
+                    onOpenQueue = {},
+                    onOpenLyrics = {},
+                    onOpenDiagnostics = {},
+                )
+            }
+        }
+
+        // Cycle Prism -> Album -> Studio via overflow menu
+        composeRule.onNodeWithContentDescription("More track actions").assertIsDisplayed().performClick()
+        composeRule.onNodeWithText("Spectrum Style: Prism").assertIsDisplayed().performClick()
+        assertEquals(com.cangkir.bitperfectplayer.data.SpectrumColorStyle.ALBUM_ADAPTIVE, style)
+
+        composeRule.onNodeWithContentDescription("More track actions").assertIsDisplayed().performClick()
+        composeRule.onNodeWithText("Spectrum Style: Album").assertIsDisplayed().performClick()
+        assertEquals(com.cangkir.bitperfectplayer.data.SpectrumColorStyle.STUDIO, style)
+
+        // Toggle Kinetic Sparks off -> label switches to Enable Sparks
+        composeRule.onNodeWithContentDescription("More track actions").assertIsDisplayed().performClick()
+        composeRule.onNodeWithText("Disable Sparks").assertIsDisplayed().performClick()
+        assertEquals(false, sparks)
+
+        composeRule.onNodeWithContentDescription("More track actions").assertIsDisplayed().performClick()
+        composeRule.onNodeWithText("Enable Sparks").assertIsDisplayed().performClick()
+        assertEquals(true, sparks)
     }
 }

@@ -63,8 +63,10 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
+import android.graphics.Bitmap
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -86,6 +88,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.cangkir.bitperfectplayer.audio.AlbumPaletteExtractor
 import com.cangkir.bitperfectplayer.audio.AudioOutputMode
 import com.cangkir.bitperfectplayer.audio.AudioSafetyController
 import com.cangkir.bitperfectplayer.audio.PlaybackControllerState
@@ -94,6 +97,7 @@ import com.cangkir.bitperfectplayer.audio.RepeatMode
 import com.cangkir.bitperfectplayer.audio.SleepTimerPreset
 import com.cangkir.bitperfectplayer.audio.SleepTimerState
 import com.cangkir.bitperfectplayer.data.NowPlayingArtworkStyle
+import com.cangkir.bitperfectplayer.data.SpectrumColorStyle
 import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
 import com.cangkir.bitperfectplayer.ui.theme.AmberIndicated
 import com.cangkir.bitperfectplayer.ui.theme.AmberIndicatedContainer
@@ -106,7 +110,9 @@ import com.cangkir.bitperfectplayer.ui.theme.OnAmberIndicatedContainer
 import com.cangkir.bitperfectplayer.ui.theme.OnCoralWarningContainer
 import com.cangkir.bitperfectplayer.ui.theme.OnEmeraldSafeContainer
 import com.cangkir.bitperfectplayer.ui.theme.TextMuted
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -120,6 +126,10 @@ fun NowPlayingScreen(
     onSetArtworkStyle: (NowPlayingArtworkStyle) -> Unit = {},
     spectrumVisualizerEnabled: Boolean = true,
     onSetSpectrumVisualizerEnabled: (Boolean) -> Unit = {},
+    spectrumColorStyle: SpectrumColorStyle = SpectrumColorStyle.PRISM,
+    onCycleSpectrumColorStyle: () -> Unit = {},
+    spectrumSparksEnabled: Boolean = true,
+    onSetSpectrumSparksEnabled: (Boolean) -> Unit = {},
     onSetSpectrumVisualizerActive: (Boolean) -> Unit = {},
     onSampleSpectrumWindow: (FloatArray) -> Int = { 0 },
     onBack: () -> Unit,
@@ -171,6 +181,42 @@ fun NowPlayingScreen(
             lifecycle.removeObserver(observer)
             latestSetSpectrumActive(false)
         }
+    }
+
+    // Async local cover-art accent extraction strictly on Dispatchers.Default when Album style is selected.
+    var albumSpectrumPalette by remember(track?.uriString) {
+        mutableStateOf(AlbumPaletteExtractor.FALLBACK_STUDIO_PALETTE)
+    }
+    LaunchedEffect(track?.uriString, spectrumVisualizerEnabled, spectrumColorStyle) {
+        if (track == null || !spectrumVisualizerEnabled || spectrumColorStyle != SpectrumColorStyle.ALBUM_ADAPTIVE) {
+            return@LaunchedEffect
+        }
+        val bitmap = albumArtworkLoader.loadArtwork(track, AlbumArtworkLoader.THUMBNAIL_SIZE_PX)
+        val extracted = withContext(Dispatchers.Default) {
+            if (bitmap == null || bitmap.isRecycled || bitmap.width <= 0 || bitmap.height <= 0) {
+                AlbumPaletteExtractor.FALLBACK_STUDIO_PALETTE
+            } else {
+                runCatching {
+                    val readableBitmap = if (bitmap.config == Bitmap.Config.HARDWARE) {
+                        bitmap.copy(Bitmap.Config.ARGB_8888, false)
+                    } else {
+                        bitmap
+                    }
+                    try {
+                        val w = readableBitmap.width
+                        val h = readableBitmap.height
+                        val pixels = IntArray(w * h)
+                        readableBitmap.getPixels(pixels, 0, w, 0, 0, w, h)
+                        AlbumPaletteExtractor.extractAccentPalette(pixels, w, h)
+                    } finally {
+                        if (readableBitmap !== bitmap) {
+                            readableBitmap.recycle()
+                        }
+                    }
+                }.getOrDefault(AlbumPaletteExtractor.FALLBACK_STUDIO_PALETTE)
+            }
+        }
+        albumSpectrumPalette = extracted
     }
 
     var showAudioModeSheet by remember { mutableStateOf(false) }
@@ -345,6 +391,30 @@ fun NowPlayingScreen(
                                             onSetSpectrumVisualizerEnabled(!spectrumVisualizerEnabled)
                                         },
                                     )
+                                    if (spectrumVisualizerEnabled) {
+                                        DropdownMenuItem(
+                                            text = { Text("Spectrum Style: ${spectrumColorStyle.displayName}") },
+                                            onClick = {
+                                                overflowMenuExpanded = false
+                                                onCycleSpectrumColorStyle()
+                                            },
+                                        )
+                                        DropdownMenuItem(
+                                            text = {
+                                                Text(
+                                                    if (spectrumSparksEnabled) {
+                                                        "Disable Sparks"
+                                                    } else {
+                                                        "Enable Sparks"
+                                                    },
+                                                )
+                                            },
+                                            onClick = {
+                                                overflowMenuExpanded = false
+                                                onSetSpectrumSparksEnabled(!spectrumSparksEnabled)
+                                            },
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -432,7 +502,7 @@ fun NowPlayingScreen(
             }
 
             // Hero Artwork Centerpiece: Interactive Spinning Vinyl Disc (wrapped by optional Radial Spectrum)
-            // or Swipeable Square Cover (with optional compact 28.dp studio spectrum bar strip).
+            // or Swipeable Square Cover (with optional compact 42.dp bar + sparks spectrum strip).
             when (artworkStyle) {
                 NowPlayingArtworkStyle.VINYL_DISC -> {
                     if (spectrumVisualizerEnabled) {
@@ -440,6 +510,10 @@ fun NowPlayingScreen(
                             isEnabled = true,
                             isPlaying = playbackState.isPlaying,
                             sampleSpectrumWindow = onSampleSpectrumWindow,
+                            colorStyle = spectrumColorStyle,
+                            sparksEnabled = spectrumSparksEnabled,
+                            albumPalette = albumSpectrumPalette,
+                            trackKey = track.uriString,
                         ) {
                             InteractiveVinylDisc(
                                 track = track,
@@ -480,11 +554,15 @@ fun NowPlayingScreen(
                         onNext = onNext,
                     )
                     if (spectrumVisualizerEnabled) {
-                        Spacer(modifier = Modifier.height(10.dp))
+                        Spacer(modifier = Modifier.height(8.dp))
                         CompactSpectrumBarStrip(
                             isEnabled = true,
                             isPlaying = playbackState.isPlaying,
                             sampleSpectrumWindow = onSampleSpectrumWindow,
+                            colorStyle = spectrumColorStyle,
+                            sparksEnabled = spectrumSparksEnabled,
+                            albumPalette = albumSpectrumPalette,
+                            trackKey = track.uriString,
                         )
                     }
                 }

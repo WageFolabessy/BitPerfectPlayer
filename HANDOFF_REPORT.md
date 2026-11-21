@@ -592,6 +592,35 @@ Following physical testing of the signed Release APK on POCO F4 (Android 14 / Hy
 - **Strict Offline & Zero-Permission Audit (Source + All 9 Generated Debug, Release & UnitTest Manifests):** **PASS** — **0 `INTERNET`**, **0 `RECORD_AUDIO`**, **0 `MANAGE_EXTERNAL_STORAGE`**.
 - **Physical Hardware Verification Pending (Not Executed in Cloud):** Re-verify on POCO F4 (Android 14 / HyperOS) + KZ EDX Pro 2 USB-C that `logcat` shows **0** `Method exceeds compiler instruction limit` warnings for `AudioOutputEngine` and **0** `AudioTrack restartIfDisabled` underruns during rapid 44,100 Hz and 96,000/192,000 Hz turntable scratching and release.
 
+---
+
+## 19. Switchable Spectrum Palettes (`Studio` · `Prism` · `Album`) & Transient `Kinetic Sparks`
+
+### Delivered Architecture & UX
+1. **Pure-Kotlin Palettes, Local Cover-Art Extractor, & Zero-Allocation Particle Engine (`SpectrumVisualDsp.kt`, `PersistenceModels.kt`):**
+   - Added `SpectrumColorStyle` (`STUDIO("Studio")`, `PRISM("Prism")` default, `ALBUM_ADAPTIVE("Album")`) and `spectrumSparksEnabled` (`true` default) to `UserPreferences` + `UserPreferencesRepository`.
+   - Built pure-Kotlin `AlbumPaletteExtractor` (zero `android.*` / `androidx.*` imports, zero external palette libraries): coarse-stride (~1,600-sample) RGB-to-HSL 24-hue bucket analysis ignoring near-black (`L < 0.14`), near-white (`L > 0.90`), and low-chroma gray (`S < 0.18`), selecting up to 3 accents separated by `>= 36°` with OLED vibrancy clamping (`S in 0.55..0.90`, `L in 0.52..0.72`), monochromatic harmony derivation for single-color covers, and Studio slate-ice fallback for grayscale or missing artwork.
+   - Built `SpectrumColorMapper` for `STUDIO` (obsidian-slate `#3D3D47` -> `#7BA7D9` -> `#D7E5F5`), 5-stop OLED-tuned `PRISM` (coral-red/orange bass -> amber-gold -> emerald/aqua mids -> cobalt/violet highs), and `ALBUM_ADAPTIVE` bar/tip/spark ARGB interpolation with zero heap allocations.
+   - Built `KineticSparkPool` (`MAX_SPARKS = 64` pre-allocated primitive arrays): triggers 1–2 radial/upward sparks per band on sharp upward energy transients (`delta > 0.12f && energy > 0.28f`) gated by per-band `85 ms` cooldowns, integrates velocity with exponential drag (`exp(-4.0 * dt)`), tracks active count, and supports instant `clear()` on track change or toggle-off.
+2. **120 Hz Zero-Recomposition Canvas Rendering (`RadialSpectrumRing.kt`):**
+   - Expanded `RadialSpectrumRing` to `316.dp` around a centered `240.dp` `InteractiveVinylDisc` (`38.dp` radial headroom: `5.dp` gap + `18.dp` max bars + outward spark flight) and `CompactSpectrumBarStrip` to `42.dp` (`24.dp` bars + `18.dp` upward spark headroom).
+   - Rendered Kinetic Sparks strictly inside the existing draw-phase-only `Canvas` using crisp velocity-aligned `drawLine` micro-streaks + `drawCircle` bright core dots — **0 GPU blur filters (`BlurMaskFilter`/`RenderEffect`)**, **0 Compose recompositions**, and **0 per-frame allocations**, halting frame ticks cleanly once paused bars decay (`< 0.002f`) and active sparks reach `0`.
+   - Left `AudioOutputEngine.kt` (`runPlaybackLoop()`) **completely untouched** (`0` bytes diff), preserving ART JIT/AOT native compilation and bit-perfect read-only audio isolation.
+3. **Scoped State Collection, Async Artwork Extraction, & Controls (`MainViewModel.kt`, `BitPerfectAppNav.kt`, `SettingsScreen.kt`, `NowPlayingScreen.kt`):**
+   - Exposed `spectrumColorStyle` and `spectrumSparksEnabled` via `distinctUntilChanged()` `StateFlow`s collected strictly inside `Routes.SETTINGS` and `Routes.NOW_PLAYING`.
+   - Added async `Dispatchers.Default` cover-art pixel extraction per `track.uriString` when `ALBUM_ADAPTIVE` is active (handling `Bitmap.Config.HARDWARE` cleanly via a temporary ARGB_8888 copy without recycling cached thumbnails).
+   - Added **Spectrum Style (`Studio` · `Prism` · `Album`)** segmented controls and **Kinetic Sparks** toggle inside `SettingsScreen` (`DISPLAY`, visible when spectrum is enabled) plus quick overflow menu items (`"Spectrum Style: ..."`, `"Disable Sparks"` / `"Enable Sparks"`) inside `NowPlayingScreen`.
+
+### Software Verification (`./gradlew testDebugUnitTest lintDebug assembleDebug assembleRelease`)
+- **Automated JVM Unit + Robolectric SQLite Migration + Headless Compose UI Tests:** **181 / 181 passed** across **33 test suites** (`0` failed, `0` errors, `0` skipped, `0` `@Ignore`), adding `SpectrumVisualDspTest` (5/5) and extending `PersistenceAndPreferencesTest` (4/4) and `BitPerfectUiBehaviorTest` (17/17).
+- **Compiler & R8 Warnings:** `0` Kotlin compiler warnings (production + test), `0` KSP warnings, `0` R8 warnings.
+- **Android Lint (`lintDebug` & `lintVitalRelease`):** **0 errors**, **0 warnings across all `/app/src/` Kotlin, manifest, and resource files**.
+- **Debug APK (`assembleDebug`):** `app/build/outputs/apk/debug/app-debug.apk` (`20.15 MB` / `21,129,808 bytes`).
+- **Release APK (`assembleRelease` with R8 optimization):** `app/build/outputs/apk/release/app-release-unsigned.apk` (`2.50 MB` / `2,616,514 bytes`).
+- **Strict Offline & Zero-Permission Audit (Source + All 8 Generated Debug, Release & UnitTest Manifests):** **PASS** — **0 `INTERNET`**, **0 `RECORD_AUDIO`**, **0 `MANAGE_EXTERNAL_STORAGE`**, **0 `android.media.audiofx.Visualizer` references**, **0 GPU blur filter usages**.
+- **Pure-Kotlin Domain Boundary (`SpectrumVisualDsp.kt`) & Audio Loop Preservation (`AudioOutputEngine.kt`):** **PASS** — **0 `android.*` / `androidx.*` imports** in `SpectrumVisualDsp.kt`; **0 bytes diff** on `AudioOutputEngine.kt`.
+- **Physical Hardware Verification Pending (Not Executed in Cloud):** On POCO F4 (Android 14 / HyperOS, 120 Hz OLED) + KZ EDX Pro 2 USB-C, confirm visual legibility and OLED contrast across `Studio`, `Prism`, and `Album` palettes on varied/grayscale/missing cover art, crisp beat-synced `Kinetic Sparks` bursts without clipped bounds or frame drops at 120 Hz in both Vinyl Disc and Square Cover modes, clean spark fade-out on pause/track change, unobstructed turntable touch scrubbing, and unchanged bit-perfect/Hi-Res playback stability.
+
 
 
 

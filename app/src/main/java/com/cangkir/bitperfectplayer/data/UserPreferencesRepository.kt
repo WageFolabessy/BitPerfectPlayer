@@ -45,6 +45,8 @@ class UserPreferencesRepository(
         val REPLAYGAIN_PREVENT_CLIPPING = booleanPreferencesKey("replaygain_prevent_clipping")
         val NOW_PLAYING_ARTWORK_STYLE = stringPreferencesKey("now_playing_artwork_style")
         val SPECTRUM_VISUALIZER_ENABLED = booleanPreferencesKey("spectrum_visualizer_enabled")
+        val SPECTRUM_COLOR_STYLE = stringPreferencesKey("spectrum_color_style")
+        val SPECTRUM_SPARKS_ENABLED = booleanPreferencesKey("spectrum_sparks_enabled")
         val PERSISTED_SAF_TREE_URIS = stringSetPreferencesKey("persisted_saf_tree_uris")
         val PERSISTED_SAF_FILE_URIS = stringSetPreferencesKey("persisted_saf_file_uris")
         val LAST_TRACK_URI = stringPreferencesKey("last_track_uri")
@@ -121,6 +123,18 @@ class UserPreferencesRepository(
     suspend fun setSpectrumVisualizerEnabled(enabled: Boolean) {
         dataStore.edit { prefs ->
             prefs[Keys.SPECTRUM_VISUALIZER_ENABLED] = enabled
+        }
+    }
+
+    suspend fun setSpectrumColorStyle(style: SpectrumColorStyle) {
+        dataStore.edit { prefs ->
+            prefs[Keys.SPECTRUM_COLOR_STYLE] = style.name
+        }
+    }
+
+    suspend fun setSpectrumSparksEnabled(enabled: Boolean) {
+        dataStore.edit { prefs ->
+            prefs[Keys.SPECTRUM_SPARKS_ENABLED] = enabled
         }
     }
 
@@ -254,6 +268,8 @@ class UserPreferencesRepository(
             replayGainPreventClipping = prefs[Keys.REPLAYGAIN_PREVENT_CLIPPING] ?: true,
             nowPlayingArtworkStyle = NowPlayingArtworkStyle.fromStoredName(prefs[Keys.NOW_PLAYING_ARTWORK_STYLE]),
             spectrumVisualizerEnabled = prefs[Keys.SPECTRUM_VISUALIZER_ENABLED] ?: true,
+            spectrumColorStyle = SpectrumColorStyle.fromStoredName(prefs[Keys.SPECTRUM_COLOR_STYLE]),
+            spectrumSparksEnabled = prefs[Keys.SPECTRUM_SPARKS_ENABLED] ?: true,
             persistedSafTreeUris = PersistenceSanitizer.sanitizeUriSet(
                 prefs[Keys.PERSISTED_SAF_TREE_URIS].orEmpty(),
             ),

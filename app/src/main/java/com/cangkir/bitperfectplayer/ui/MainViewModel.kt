@@ -14,6 +14,7 @@ import com.cangkir.bitperfectplayer.audio.ReplayGainMode
 import com.cangkir.bitperfectplayer.audio.SleepTimerPreset
 import com.cangkir.bitperfectplayer.audio.SleepTimerState
 import com.cangkir.bitperfectplayer.data.NowPlayingArtworkStyle
+import com.cangkir.bitperfectplayer.data.SpectrumColorStyle
 import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
 import com.cangkir.bitperfectplayer.library.GroupSortScope
 import com.cangkir.bitperfectplayer.library.GroupSortSpec
@@ -90,6 +91,26 @@ class MainViewModel(
      */
     val spectrumVisualizerEnabled: StateFlow<Boolean> = container.preferencesRepository.preferencesFlow
         .map { it.spectrumVisualizerEnabled }
+        .distinctUntilChanged()
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.Eagerly,
+            initialValue = true,
+        )
+
+    /** Persisted color palette mode (`Studio`, `Prism`, `Album`) for the spectrum visualizer. */
+    val spectrumColorStyle: StateFlow<SpectrumColorStyle> = container.preferencesRepository.preferencesFlow
+        .map { it.spectrumColorStyle }
+        .distinctUntilChanged()
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.Eagerly,
+            initialValue = SpectrumColorStyle.PRISM,
+        )
+
+    /** Persisted toggle for transient-driven Kinetic Sparks particles (`true` by default). */
+    val spectrumSparksEnabled: StateFlow<Boolean> = container.preferencesRepository.preferencesFlow
+        .map { it.spectrumSparksEnabled }
         .distinctUntilChanged()
         .stateIn(
             scope = viewModelScope,
@@ -290,6 +311,23 @@ class MainViewModel(
         }
         viewModelScope.launch {
             container.preferencesRepository.setSpectrumVisualizerEnabled(enabled)
+        }
+    }
+
+    fun setSpectrumColorStyle(style: SpectrumColorStyle) {
+        viewModelScope.launch {
+            container.preferencesRepository.setSpectrumColorStyle(style)
+        }
+    }
+
+    fun cycleSpectrumColorStyle() {
+        val next = spectrumColorStyle.value.next()
+        setSpectrumColorStyle(next)
+    }
+
+    fun setSpectrumSparksEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            container.preferencesRepository.setSpectrumSparksEnabled(enabled)
         }
     }
 

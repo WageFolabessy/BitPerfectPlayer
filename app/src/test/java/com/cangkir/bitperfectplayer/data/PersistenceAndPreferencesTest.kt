@@ -43,6 +43,8 @@ class PersistenceAndPreferencesTest {
         assertTrue(snapshot.replayGainPreventClipping)
         assertEquals(NowPlayingArtworkStyle.VINYL_DISC, snapshot.nowPlayingArtworkStyle)
         assertTrue(snapshot.spectrumVisualizerEnabled)
+        assertEquals(SpectrumColorStyle.PRISM, snapshot.spectrumColorStyle)
+        assertTrue(snapshot.spectrumSparksEnabled)
         assertTrue(snapshot.persistedSafTreeUris.isEmpty())
         assertTrue(snapshot.persistedSafFileUris.isEmpty())
         assertNull(snapshot.lastPlaybackState.trackUri)
@@ -67,6 +69,8 @@ class PersistenceAndPreferencesTest {
         repo.setReplayGainPreventClipping(false)
         repo.setNowPlayingArtworkStyle(NowPlayingArtworkStyle.SQUARE_COVER)
         repo.setSpectrumVisualizerEnabled(false)
+        repo.setSpectrumColorStyle(SpectrumColorStyle.ALBUM_ADAPTIVE)
+        repo.setSpectrumSparksEnabled(false)
         repo.addPersistedSafTreeUri("  content://com.android.externalstorage.documents/tree/primary%3AMusic  ")
         repo.addPersistedSafTreeUri("   ") // Blank URI ignored
         repo.addPersistedSafFileUri("content://com.android.externalstorage.documents/document/primary%3Asong.flac")
@@ -103,6 +107,8 @@ class PersistenceAndPreferencesTest {
         assertFalse(snapshot.replayGainPreventClipping)
         assertEquals(NowPlayingArtworkStyle.SQUARE_COVER, snapshot.nowPlayingArtworkStyle)
         assertFalse(snapshot.spectrumVisualizerEnabled)
+        assertEquals(SpectrumColorStyle.ALBUM_ADAPTIVE, snapshot.spectrumColorStyle)
+        assertFalse(snapshot.spectrumSparksEnabled)
         assertEquals(
             setOf("content://com.android.externalstorage.documents/tree/primary%3AMusic"),
             snapshot.persistedSafTreeUris,
@@ -137,6 +143,8 @@ class PersistenceAndPreferencesTest {
         repo.setReplayGainPreampDb(-99.0f) // Clamped to -6.0 dB
         repo.setNowPlayingArtworkStyle(NowPlayingArtworkStyle.VINYL_DISC)
         repo.setSpectrumVisualizerEnabled(true)
+        repo.setSpectrumColorStyle(SpectrumColorStyle.STUDIO)
+        repo.setSpectrumSparksEnabled(true)
         repo.clearLastPlaybackState()
 
         val updated = repo.getSnapshot()
@@ -144,6 +152,8 @@ class PersistenceAndPreferencesTest {
         assertEquals(-6.0f, updated.replayGainPreampDb, 1e-6f)
         assertEquals(NowPlayingArtworkStyle.VINYL_DISC, updated.nowPlayingArtworkStyle)
         assertTrue(updated.spectrumVisualizerEnabled)
+        assertEquals(SpectrumColorStyle.STUDIO, updated.spectrumColorStyle)
+        assertTrue(updated.spectrumSparksEnabled)
         assertTrue(updated.persistedSafTreeUris.isEmpty())
         assertNull(updated.lastPlaybackState.trackUri)
         assertNull(updated.lastPlaybackState.contentFingerprint)

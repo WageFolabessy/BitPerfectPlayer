@@ -130,6 +130,17 @@ This file records autonomous architectural, dependency, and environment decision
 - **Rationale:** Completely avoids `android.media.audiofx.Visualizer` and `RECORD_AUDIO` (zero scary microphone permissions, works on exclusive USB bit-perfect HAL paths where system `Visualizer` returns zeros), keeps bass/mid/treble frequency mapping accurate on 96/192 kHz Hi-Res files via anti-aliased decimation, eliminates ~160 ms audio-to-visual lookahead lag via `playbackHeadPosition` sync, and preserves silky 120 Hz UI performance.
 - **Rejected Alternatives:** `android.media.audiofx.Visualizer` (requires `RECORD_AUDIO` runtime permission and breaks when `MIXER_BEHAVIOR_BIT_PERFECT` bypasses the Android mixer); running FFT inside `BitPerfectAudioThread` (risks audio underruns on Hi-Res streams); storing spectrum bars in Compose `State<List<Float>>` (would trigger 60–120 Hz Compose recompositions and GC churn); adding native FFTW/KissFFT C++ libraries (unnecessary NDK complexity for a 1024-point radix-2 FFT).
 
+---
+
+### D9.3: Switchable Spectrum Palettes (`Studio`/`Prism`/`Album`), Pure-Kotlin Album Palette Extractor, & Zero-Allocation `KineticSparkPool`
+- **Decision:**
+  1. Added pure-Kotlin `SpectrumVisualDsp.kt` (zero `android.*`/`androidx.*` imports, zero external palette dependencies) containing `AlbumPaletteExtractor` (coarse-stride ~1,600-sample RGB->HSL 24-hue bucketing with `>= 36°` separation, OLED vibrancy clamping `S in 0.55..0.90`, `L in 0.52..0.72`, monochromatic harmony derivation, and Studio slate-ice fallback on grayscale/missing artwork), `SpectrumColorMapper` (`STUDIO`, 5-stop OLED-tuned `PRISM`, and `ALBUM_ADAPTIVE`), and fixed-capacity `KineticSparkPool` (`MAX_SPARKS = 64` pre-allocated primitive arrays with per-band `85 ms` transient cooldowns and exponential drag physics).
+  2. Expanded `RadialSpectrumRing` cleanly to `316.dp` around a centered `240.dp` `InteractiveVinylDisc` (`38.dp` radial headroom) and `CompactSpectrumBarStrip` to `42.dp` (`24.dp` bars + `18.dp` upward spark headroom), drawing sparks as crisp velocity-aligned `drawLine` micro-streaks + `drawCircle` core dots inside the same draw-phase-only `Canvas` (zero GPU blur masks, zero Compose recompositions, zero per-frame allocations) while keeping `AudioOutputEngine.runPlaybackLoop()` completely untouched.
+  3. Persisted `spectrumColorStyle` (`PRISM` default) and `spectrumSparksEnabled` (`true` default) in DataStore, exposed via `distinctUntilChanged()` `StateFlow`s collected strictly inside `Routes.SETTINGS` and `Routes.NOW_PLAYING`, with async `Dispatchers.Default` bitmap pixel extraction in `NowPlayingScreen` (software-bitmap-safe for `Bitmap.Config.HARDWARE`).
+- **Rationale:** Delivers lively, audiophile-grade OLED reactivity across both Vinyl Disc and Square Cover modes without introducing `androidx.palette` dependencies, GPU blur thermal overhead, Compose recomposition jank, or ART instruction-limit bloat on `AudioOutputEngine`.
+- **Rejected Alternatives:** Adding `androidx.palette:palette-ktx` (extra dependency and not pure-Kotlin unit-testable without Robolectric); using `BlurMaskFilter` / `RenderEffect` glow shaders on particles (causes 120 Hz GPU frame drops and heat on mobile GPUs); spawning `data class Spark` objects per beat (causes GC churn during 120 Hz animation).
+
+
 
 
 

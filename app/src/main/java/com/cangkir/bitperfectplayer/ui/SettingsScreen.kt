@@ -76,6 +76,7 @@ import com.cangkir.bitperfectplayer.audio.SleepTimerPreset
 import com.cangkir.bitperfectplayer.audio.SleepTimerState
 import com.cangkir.bitperfectplayer.data.LocalBackupRepository
 import com.cangkir.bitperfectplayer.data.NowPlayingArtworkStyle
+import com.cangkir.bitperfectplayer.data.SpectrumColorStyle
 import com.cangkir.bitperfectplayer.library.LibrarySnapshot
 import com.cangkir.bitperfectplayer.ui.theme.AmberIndicated
 import com.cangkir.bitperfectplayer.ui.theme.EmeraldSafe
@@ -96,6 +97,10 @@ fun SettingsScreen(
     onSetArtworkStyle: (NowPlayingArtworkStyle) -> Unit = {},
     spectrumVisualizerEnabled: Boolean = true,
     onSetSpectrumVisualizerEnabled: (Boolean) -> Unit = {},
+    spectrumColorStyle: SpectrumColorStyle = SpectrumColorStyle.PRISM,
+    onSetSpectrumColorStyle: (SpectrumColorStyle) -> Unit = {},
+    spectrumSparksEnabled: Boolean = true,
+    onSetSpectrumSparksEnabled: (Boolean) -> Unit = {},
     onImportFolder: (Uri) -> Unit,
     onRemoveSafFolder: (String) -> Unit,
     onRefreshLibrary: () -> Unit,
@@ -570,6 +575,98 @@ fun SettingsScreen(
                                     contentDescription = "Toggle spectrum visualizer"
                                 },
                             )
+                        }
+
+                        if (spectrumVisualizerEnabled) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(start = 14.dp, end = 14.dp, bottom = 12.dp),
+                            ) {
+                                Text(
+                                    text = "Spectrum Style",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                Surface(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                                    border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.65f)),
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(3.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                    ) {
+                                        SpectrumColorStyle.entries.forEach { option ->
+                                            val selected = spectrumColorStyle == option
+                                            Button(
+                                                onClick = { onSetSpectrumColorStyle(option) },
+                                                shape = RoundedCornerShape(8.dp),
+                                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .sizeIn(minHeight = 48.dp)
+                                                    .semantics {
+                                                        contentDescription = "Spectrum style ${option.displayName}"
+                                                    },
+                                                colors = if (selected) {
+                                                    ButtonDefaults.buttonColors(
+                                                        containerColor = IcePrimaryContainer,
+                                                        contentColor = OnIcePrimaryContainer,
+                                                    )
+                                                } else {
+                                                    ButtonDefaults.textButtonColors(
+                                                        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    )
+                                                },
+                                            ) {
+                                                Text(
+                                                    text = option.displayName,
+                                                    maxLines = 1,
+                                                    softWrap = false,
+                                                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(10.dp))
+
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .sizeIn(minHeight = 48.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "Kinetic Sparks",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                        )
+                                        Text(
+                                            text = "Transient particle bursts launched from beat peaks",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = TextMuted,
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Switch(
+                                        checked = spectrumSparksEnabled,
+                                        onCheckedChange = onSetSpectrumSparksEnabled,
+                                        modifier = Modifier.semantics {
+                                            contentDescription = "Toggle kinetic sparks"
+                                        },
+                                    )
+                                }
+                            }
                         }
                     }
                 }

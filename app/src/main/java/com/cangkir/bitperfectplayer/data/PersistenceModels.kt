@@ -163,6 +163,30 @@ enum class NowPlayingArtworkStyle(
 }
 
 /**
+ * Persisted color palette mode for the offline read-only FFT spectrum visualizer
+ * (defaults to [PRISM]).
+ */
+enum class SpectrumColorStyle(
+    val displayName: String,
+) {
+    STUDIO("Studio"),
+    PRISM("Prism"),
+    ALBUM_ADAPTIVE("Album"),
+    ;
+
+    fun next(): SpectrumColorStyle = when (this) {
+        STUDIO -> PRISM
+        PRISM -> ALBUM_ADAPTIVE
+        ALBUM_ADAPTIVE -> STUDIO
+    }
+
+    companion object {
+        fun fromStoredName(raw: String?): SpectrumColorStyle =
+            entries.firstOrNull { it.name.equals(raw?.trim(), ignoreCase = true) } ?: PRISM
+    }
+}
+
+/**
  * Snapshot of the last active track, playback position, and queue origin context for scoped
  * restoration on app relaunch.
  */
@@ -194,6 +218,8 @@ data class UserPreferences(
     val replayGainPreventClipping: Boolean = true,
     val nowPlayingArtworkStyle: NowPlayingArtworkStyle = NowPlayingArtworkStyle.VINYL_DISC,
     val spectrumVisualizerEnabled: Boolean = true,
+    val spectrumColorStyle: SpectrumColorStyle = SpectrumColorStyle.PRISM,
+    val spectrumSparksEnabled: Boolean = true,
     val persistedSafTreeUris: Set<String> = emptySet(),
     val persistedSafFileUris: Set<String> = emptySet(),
     val lastPlaybackState: LastPlaybackState = LastPlaybackState(),
