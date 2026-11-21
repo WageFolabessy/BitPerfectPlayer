@@ -158,4 +158,28 @@ class AudioSafetyControllerTest {
         assertFalse(state.isPendingSafetyWarning)
         assertEquals(null, state.lastAutoPauseReason)
     }
+
+    @Test
+    fun formatAutoPauseNotice_returnsDescriptiveSafetyMessageForEachReason() {
+        assertEquals(
+            "Auto-paused: audio output disconnected or becoming noisy.",
+            AudioSafetyController.formatAutoPauseNotice(AutoPauseReason.BECOMING_NOISY),
+        )
+        assertEquals(
+            "Auto-paused: USB audio device disconnected (Safe Mode restored).",
+            AudioSafetyController.formatAutoPauseNotice(AutoPauseReason.USB_DISCONNECTED),
+        )
+        assertEquals(
+            "Auto-paused: USB audio device connected in Safe Mode.",
+            AudioSafetyController.formatAutoPauseNotice(AutoPauseReason.USB_CONNECTED_ROUTE_CHANGE),
+        )
+        assertEquals(
+            "Auto-paused: audio output route changed (Safe Mode active).",
+            AudioSafetyController.formatAutoPauseNotice(AutoPauseReason.OUTPUT_ROUTE_CHANGED),
+        )
+        assertEquals(
+            "Auto-paused for hearing safety.",
+            AudioSafetyController.formatAutoPauseNotice(null),
+        )
+    }
 }

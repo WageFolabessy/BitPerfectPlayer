@@ -288,4 +288,85 @@ class TurntableAudioDspTest {
         assertEquals(0.0f, buf[(4_800 - 1) * 2], 1e-6f)
         assertEquals(0.0f, buf[(4_800 - 1) * 2 + 1], 1e-6f)
     }
+
+    @Test
+    fun scratchPolicy_computesEntryCursorVirtualBoundsPositionAndSeamlessDrainEligibility() {
+        // 1. Entry cursor subtracts unplayed AudioTrack lookahead and clamps into ring buffer range
+        val entryCursor = TurntableScratchPolicy.computeScratchEntryCursorFrame(
+            currentStreamHeadFrame = 48_000L,
+            totalFramesWrittenToTrack = 50_000L,
+            hwPlaybackHeadFrames = 42_000L, // 8,000 frames unplayed in AudioTrack
+            oldestAvailableFrame = 10_000L,
+            writeHeadFrame = 48_000L,
+        )
+        assertEquals(40_000.0, entryCursor, 1e-6)
+
+        // Clamps to oldestAvailableFrame when lookahead exceeds ring window
+        val clampedLow = TurntableScratchPolicy.computeScratchEntryCursorFrame(
+            currentStreamHeadFrame = 12_000L,
+            totalFramesWrittenToTrack = 20_000L,
+            hwPlaybackHeadFrames = 5_000L,
+            oldestAvailableFrame = 10_000L,
+            writeHeadFrame = 12_000L,
+        )
+        assertEquals(10_000.0, clampedLow, 1e-6)
+
+        // 2. Virtual frame bounds respect streamOriginMs and track durationMs
+        val (minFrame, maxFrame) = TurntableScratchPolicy.computeVirtualFrameBounds(
+            streamOriginMs = 10_000L,
+            sampleRateHz = 48_000,
+            durationMs = 60_000L,
+        )
+        assertEquals(-480_000.0, minFrame, 1.0)
+        assertEquals(2_400_000.0, maxFrame, 1.0)
+
+        // 3. Clamped scratch position converts virtual cursor relative to streamOriginMs and clamps to [0..durationMs]
+        assertEquals(
+            12_000L,
+            TurntableScratchPolicy.computeClampedScratchPositionMs(
+                streamOriginMs = 10_000L,
+                scratchCursorFrame = 96_000.0,
+                sampleRateHz = 48_000,
+                durationMs = 60_000L,
+            ),
+        )
+        assertEquals(
+            0L,
+            TurntableScratchPolicy.computeClampedScratchPositionMs(
+                streamOriginMs = 1_000L,
+                scratchCursorFrame = -96_000.0,
+                sampleRateHz = 48_000,
+                durationMs = 60_000L,
+            ),
+        )
+
+        // 4. Seamless ring drain requires buffered frames > 0, no explicit fallback seek, and cursor inside ring window
+        assertTrue(
+            TurntableScratchPolicy.canResumeViaSeamlessRingDrain(
+                bufferedFrameCount = 48_000,
+                cursorFrameLong = 24_000L,
+                oldestAvailableFrame = 0L,
+                writeHeadFrame = 48_000L,
+                fallbackSeekMs = -1L,
+            ),
+        )
+        assertFalse(
+            TurntableScratchPolicy.canResumeViaSeamlessRingDrain(
+                bufferedFrameCount = 48_000,
+                cursorFrameLong = -500L,
+                oldestAvailableFrame = 0L,
+                writeHeadFrame = 48_000L,
+                fallbackSeekMs = -1L,
+            ),
+        )
+        assertFalse(
+            TurntableScratchPolicy.canResumeViaSeamlessRingDrain(
+                bufferedFrameCount = 48_000,
+                cursorFrameLong = 24_000L,
+                oldestAvailableFrame = 0L,
+                writeHeadFrame = 48_000L,
+                fallbackSeekMs = 15_000L,
+            ),
+        )
+    }
 }

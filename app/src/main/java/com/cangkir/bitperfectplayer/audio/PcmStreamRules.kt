@@ -91,6 +91,19 @@ object PcmStreamRules {
     }
 
     /**
+     * Computes a frame-aligned `AudioTrack` stream buffer size in bytes that guarantees at least
+     * `2x` the OS minimum buffer (with a `1024`-frame floor) or `~50 ms` (`sampleRateHz / 20`),
+     * rounded up to an exact multiple of [bytesPerFrame].
+     */
+    fun computeAudioTrackBufferSizeBytes(reportedMinBufferSize: Int, sampleRateHz: Int, bytesPerFrame: Int): Int {
+        val frame = bytesPerFrame.coerceAtLeast(1)
+        val safeRate = sampleRateHz.coerceAtLeast(1)
+        val minBuf = reportedMinBufferSize.coerceAtLeast(frame * 1024)
+        val rawBufSize = maxOf(minBuf * 2, frame * (safeRate / 20))
+        return computeAlignedBufferSize(rawBufSize, frame)
+    }
+
+    /**
      * Extracts an exact slice `[offset, offset + size)` from [source] without reading outside the
      * codec-reported bounds and without leaving residual position/limit corruption on [source].
      */

@@ -103,6 +103,27 @@ class PcmStreamRulesTest {
     }
 
     @Test
+    fun computeAudioTrackBufferSizeBytes_enforcesFrameAligned2xMinimumAnd1024FrameOr50MsFloor() {
+        // Stereo 24-bit packed (6 bytes/frame) at 96 kHz: 2x reported min buffer size (30,724), rounded up to multiple of 6 (30,726)
+        val buf24Packed = PcmStreamRules.computeAudioTrackBufferSizeBytes(
+            reportedMinBufferSize = 15_362,
+            sampleRateHz = 96_000,
+            bytesPerFrame = 6,
+        )
+        assertEquals(0, buf24Packed % 6)
+        assertEquals(30_726, buf24Packed)
+
+        // Negative or zero AudioTrack.getMinBufferSize fallback enforces max(2 * 1024 frames, sampleRateHz / 20 frames)
+        val fallback44k1Stereo16 = PcmStreamRules.computeAudioTrackBufferSizeBytes(
+            reportedMinBufferSize = -2,
+            sampleRateHz = 44_100,
+            bytesPerFrame = 4,
+        )
+        assertEquals(0, fallback44k1Stereo16 % 4)
+        assertEquals(4 * (44_100 / 20), fallback44k1Stereo16)
+    }
+
+    @Test
     fun extractBufferSlice_respectsExactOffsetAndSizeWithoutMutatingSource() {
         val raw = ByteArray(32) { it.toByte() }
         val buffer = ByteBuffer.wrap(raw)

@@ -19,6 +19,65 @@ import kotlin.math.sign
 object TurntableScratchPolicy {
     fun isLiveTurntableEligible(safetyMode: AudioOutputMode, isPlaying: Boolean, hasActiveTrack: Boolean): Boolean =
         safetyMode == AudioOutputMode.SAFE_VOLUME_MODE && isPlaying && hasActiveTrack
+
+    /**
+     * Anchors the live scratch cursor to the exact hardware playback head currently reaching the
+     * output device (accounting for frames already queued inside `AudioTrack` ahead of the head),
+     * clamped to the valid retained ring-buffer range `[oldestAvailableFrame, maxReadableFrame]`.
+     */
+    fun computeScratchEntryCursorFrame(
+        currentStreamHeadFrame: Long,
+        totalFramesWrittenToTrack: Long,
+        hwPlaybackHeadFrames: Long,
+        oldestAvailableFrame: Long,
+        writeHeadFrame: Long,
+    ): Double {
+        val queuedAhead = (totalFramesWrittenToTrack - hwPlaybackHeadFrames).coerceAtLeast(0L)
+        val maxReadableFrame = (writeHeadFrame - 1L).coerceAtLeast(oldestAvailableFrame)
+        return (currentStreamHeadFrame - queuedAhead)
+            .coerceIn(oldestAvailableFrame, maxReadableFrame)
+            .toDouble()
+    }
+
+    /**
+     * Computes the virtual stream-frame bounds `[minVirtualFrame, maxVirtualFrame]` relative to
+     * [streamOriginMs] so reverse scratching can rewind smoothly to track `00:00` even after
+     * passing `oldestAvailableFrame`.
+     */
+    fun computeVirtualFrameBounds(streamOriginMs: Long, sampleRateHz: Int, durationMs: Long): Pair<Double, Double> {
+        val safeRate = sampleRateHz.coerceAtLeast(1).toDouble()
+        val minVirtualFrame = -(streamOriginMs.toDouble() * safeRate / 1000.0)
+        val maxVirtualFrame = if (durationMs > 0L) {
+            ((durationMs - streamOriginMs).toDouble() * safeRate / 1000.0)
+                .coerceAtLeast(minVirtualFrame)
+        } else {
+            Double.MAX_VALUE
+        }
+        return minVirtualFrame to maxVirtualFrame
+    }
+
+    /**
+     * Converts a relative virtual scratch cursor frame into a clamped millisecond track position.
+     */
+    fun computeClampedScratchPositionMs(streamOriginMs: Long, scratchCursorFrame: Double, sampleRateHz: Int, durationMs: Long): Long {
+        val safeRate = sampleRateHz.coerceAtLeast(1).toDouble()
+        val rawMs = (streamOriginMs + (scratchCursorFrame * 1000.0) / safeRate).roundToLong()
+        return if (durationMs > 0L) rawMs.coerceIn(0L, durationMs) else rawMs.coerceAtLeast(0L)
+    }
+
+    /**
+     * Returns `true` when post-scratch release can resume immediately via the Fast Seamless `1.0x`
+     * Ring Drain Path (zero `MediaCodec.flush()`), or `false` when a Deep Rewind `seekToMs` is required.
+     */
+    fun canResumeViaSeamlessRingDrain(
+        bufferedFrameCount: Int,
+        cursorFrameLong: Long,
+        oldestAvailableFrame: Long,
+        writeHeadFrame: Long,
+        fallbackSeekMs: Long = -1L,
+    ): Boolean = bufferedFrameCount > 0 &&
+        fallbackSeekMs < 0L &&
+        cursorFrameLong in oldestAvailableFrame..writeHeadFrame
 }
 
 /**

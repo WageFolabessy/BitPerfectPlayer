@@ -226,5 +226,13 @@ class AudioSafetyController {
                 "Bit-Perfect Mode may bypass system volume and play at full 100% (0 dBFS) output, " +
                 "which can cause hearing damage on high-sensitivity earphones/IEMs. " +
                 "Remove earphones before starting playback or stay in Safe Mode."
+
+        fun formatAutoPauseNotice(reason: AutoPauseReason?): String = when (reason) {
+            AutoPauseReason.BECOMING_NOISY -> "Auto-paused: audio output disconnected or becoming noisy."
+            AutoPauseReason.USB_DISCONNECTED -> "Auto-paused: USB audio device disconnected (Safe Mode restored)."
+            AutoPauseReason.USB_CONNECTED_ROUTE_CHANGE -> "Auto-paused: USB audio device connected in Safe Mode."
+            AutoPauseReason.OUTPUT_ROUTE_CHANGED -> "Auto-paused: audio output route changed (Safe Mode active)."
+            null -> "Auto-paused for hearing safety."
+        }
     }
 }
