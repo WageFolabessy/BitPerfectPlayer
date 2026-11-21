@@ -30,6 +30,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -47,6 +48,8 @@ import com.cangkir.bitperfectplayer.data.DefaultHomepage
 import com.cangkir.bitperfectplayer.data.LocalBackupRepository
 import com.cangkir.bitperfectplayer.data.NowPlayingArtworkStyle
 import com.cangkir.bitperfectplayer.data.SpectrumColorStyle
+import com.cangkir.bitperfectplayer.diagnostics.DiagnosticLogExporter
+import com.cangkir.bitperfectplayer.diagnostics.DiagnosticLogStats
 import com.cangkir.bitperfectplayer.library.LibrarySnapshot
 import com.cangkir.bitperfectplayer.ui.SleepTimerBottomSheet
 import com.cangkir.bitperfectplayer.ui.WindowLayoutMetrics
@@ -71,6 +74,13 @@ fun SettingsScreen(
     onSetSpectrumColorStyle: (SpectrumColorStyle) -> Unit = {},
     spectrumSparksEnabled: Boolean = true,
     onSetSpectrumSparksEnabled: (Boolean) -> Unit = {},
+    diagnosticLoggingEnabled: Boolean = false,
+    diagnosticLogStats: DiagnosticLogStats = DiagnosticLogStats(),
+    onSetDiagnosticLoggingEnabled: (Boolean) -> Unit = {},
+    onExportDiagnosticLogs: (Uri) -> Unit = {},
+    onShareDiagnosticLogs: () -> Unit = {},
+    onClearDiagnosticLogs: () -> Unit = {},
+    onRefreshDiagnosticLogStats: () -> Unit = {},
     onImportFolder: (Uri) -> Unit,
     onRemoveSafFolder: (String) -> Unit,
     onRefreshLibrary: () -> Unit,
@@ -86,6 +96,10 @@ fun SettingsScreen(
     val context = LocalContext.current
     var showSleepTimerSheet by remember { mutableStateOf(false) }
     var showDefaultHomepageSheet by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        onRefreshDiagnosticLogStats()
+    }
 
     val folderPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree(),
@@ -109,6 +123,14 @@ fun SettingsScreen(
     ) { sourceUri ->
         if (sourceUri != null) {
             onImportLocalBackup(sourceUri)
+        }
+    }
+
+    val diagnosticExportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/zip"),
+    ) { destinationUri ->
+        if (destinationUri != null) {
+            onExportDiagnosticLogs(destinationUri)
         }
     }
 
@@ -251,6 +273,19 @@ fun SettingsScreen(
                         onImportClick = {
                             backupImportLauncher.launch(arrayOf("application/json", "*/*"))
                         },
+                    )
+                }
+
+                item(key = "section_diagnostic_logging", contentType = "settings_group") {
+                    SettingsDiagnosticLoggingSection(
+                        enabled = diagnosticLoggingEnabled,
+                        logStats = diagnosticLogStats,
+                        onSetEnabled = onSetDiagnosticLoggingEnabled,
+                        onExportClick = {
+                            diagnosticExportLauncher.launch(DiagnosticLogExporter.suggestZipFileName(appVersionName))
+                        },
+                        onShareClick = onShareDiagnosticLogs,
+                        onClearClick = onClearDiagnosticLogs,
                     )
                 }
 

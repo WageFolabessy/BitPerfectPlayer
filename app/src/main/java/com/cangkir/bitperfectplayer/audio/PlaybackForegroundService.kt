@@ -363,6 +363,9 @@ class PlaybackForegroundService : Service() {
 
     private fun handleForegroundStartFailure(reason: String, throwable: Throwable) {
         Log.w(TAG, "Foreground service promotion blocked ($reason)", throwable)
+        (application as? BitPerfectApplication)?.container?.diagnosticLogger?.logError("FGS_START_BLOCKED") {
+            linkedMapOf("stage" to "startForeground", "reason" to reason, "api" to Build.VERSION.SDK_INT)
+        }
         isForegroundActive = false
         foregroundPlaybackGate.markServiceStartFailed(reason)
     }
@@ -500,8 +503,8 @@ class PlaybackForegroundService : Service() {
 
         fun startService(context: Context, foregroundPlaybackGate: ForegroundPlaybackGate? = null): Boolean {
             val appContext = context.applicationContext
-            val gate = foregroundPlaybackGate
-                ?: (appContext as? BitPerfectApplication)?.container?.foregroundPlaybackGate
+            val appContainer = (appContext as? BitPerfectApplication)?.container
+            val gate = foregroundPlaybackGate ?: appContainer?.foregroundPlaybackGate
             val intent = Intent(appContext, PlaybackForegroundService::class.java).setAction(ACTION_START)
             return try {
                 ContextCompat.startForegroundService(appContext, intent)
@@ -509,11 +512,17 @@ class PlaybackForegroundService : Service() {
             } catch (e: SecurityException) {
                 val reason = "SecurityException: ${e.message}"
                 Log.w(TAG, "Blocked from starting PlaybackForegroundService ($reason)", e)
+                appContainer?.diagnosticLogger?.logError("FGS_START_BLOCKED") {
+                    linkedMapOf("stage" to "startForegroundService", "reason" to reason, "api" to Build.VERSION.SDK_INT)
+                }
                 gate?.markServiceStartFailed(reason)
                 false
             } catch (e: IllegalStateException) {
                 val reason = formatIllegalStateStartFailure(e)
                 Log.w(TAG, "Blocked from starting PlaybackForegroundService ($reason)", e)
+                appContainer?.diagnosticLogger?.logError("FGS_START_BLOCKED") {
+                    linkedMapOf("stage" to "startForegroundService", "reason" to reason, "api" to Build.VERSION.SDK_INT)
+                }
                 gate?.markServiceStartFailed(reason)
                 false
             }

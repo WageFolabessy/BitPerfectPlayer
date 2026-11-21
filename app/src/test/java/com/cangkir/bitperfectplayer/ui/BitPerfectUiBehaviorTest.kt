@@ -8,6 +8,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasScrollToIndexAction
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
@@ -1631,5 +1633,80 @@ class BitPerfectUiBehaviorTest {
         homepagePref = DefaultHomepage.FAVORITES
         composeRule.waitForIdle()
         composeRule.onNodeWithText("1 track").assertIsDisplayed()
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h915dp")
+    fun settingsScreen_diagnosticLoggingSectionDefaultsOffAndSupportsToggleShareClear() {
+        var loggingEnabled by mutableStateOf(false)
+        var logStats by mutableStateOf(com.cangkir.bitperfectplayer.diagnostics.DiagnosticLogStats())
+        val toggleEvents = mutableListOf<Boolean>()
+        var shareClicks = 0
+        var clearClicks = 0
+
+        composeRule.setContent {
+            BitPerfectPlayerTheme {
+                SettingsScreen(
+                    libraryState = LibrarySnapshot(),
+                    playbackState = PlaybackControllerState(),
+                    sleepTimerStateFlow = MutableStateFlow(SleepTimerState()),
+                    diagnosticLoggingEnabled = loggingEnabled,
+                    diagnosticLogStats = logStats,
+                    onSetDiagnosticLoggingEnabled = { next ->
+                        toggleEvents.add(next)
+                        loggingEnabled = next
+                        if (next) {
+                            logStats = com.cangkir.bitperfectplayer.diagnostics.DiagnosticLogStats(
+                                fileCount = 3,
+                                totalBytes = 14_541L,
+                            )
+                        }
+                    },
+                    onShareDiagnosticLogs = { shareClicks++ },
+                    onClearDiagnosticLogs = {
+                        clearClicks++
+                        logStats = com.cangkir.bitperfectplayer.diagnostics.DiagnosticLogStats()
+                    },
+                    onImportFolder = {},
+                    onRemoveSafFolder = {},
+                    onRefreshLibrary = {},
+                    onSetGaplessEnabled = {},
+                    onSetReplayGainMode = {},
+                    onSetReplayGainPreampDb = {},
+                    onSetReplayGainPreventClipping = {},
+                    onSelectSleepTimerPreset = {},
+                    onExportLocalBackup = {},
+                    onImportLocalBackup = {},
+                    onOpenDiagnostics = {},
+                )
+            }
+        }
+
+        // Scroll to section_diagnostic_logging (index 4: audio, display, library, backup, diagnostic)
+        composeRule.onNode(hasScrollToIndexAction()).performScrollToIndex(4)
+        composeRule.onNodeWithText("DIAGNOSTIC LOGGING").assertIsDisplayed()
+        composeRule.onNodeWithText("Enable Local Diagnostic Logging").assertIsDisplayed()
+        composeRule.onNodeWithText("No logs stored").assertIsDisplayed()
+
+        // Default OFF + no logs -> Export, Share, and Clear are disabled
+        composeRule.onNodeWithText("Export Logs (.zip)").assertIsNotEnabled()
+        composeRule.onNodeWithText("Share Logs").assertIsNotEnabled()
+        composeRule.onNodeWithText("Clear Logs").assertIsNotEnabled()
+
+        // Toggle ON -> enables actions and displays live footprint
+        composeRule.onNodeWithContentDescription("Toggle local diagnostic logging")
+            .assertIsDisplayed()
+            .performClick()
+        assertEquals(listOf(true), toggleEvents)
+        composeRule.onNodeWithText("3 files · 14.2 KB").assertIsDisplayed()
+        composeRule.onNodeWithText("Export Logs (.zip)").assertIsEnabled()
+        composeRule.onNodeWithText("Share Logs").assertIsEnabled().performClick()
+        assertEquals(1, shareClicks)
+
+        // Clear Logs -> resets stats back to "No logs stored" and disables Clear button
+        composeRule.onNodeWithText("Clear Logs").assertIsEnabled().performClick()
+        assertEquals(1, clearClicks)
+        composeRule.onNodeWithText("No logs stored").assertIsDisplayed()
+        composeRule.onNodeWithText("Clear Logs").assertIsNotEnabled()
     }
 }

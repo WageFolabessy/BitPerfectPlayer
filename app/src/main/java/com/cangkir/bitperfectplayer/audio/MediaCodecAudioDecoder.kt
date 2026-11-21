@@ -8,6 +8,8 @@ import android.media.MediaFormat
 import android.net.Uri
 import android.os.Build
 import android.util.Log
+import com.cangkir.bitperfectplayer.diagnostics.DiagnosticLogFormatter
+import com.cangkir.bitperfectplayer.diagnostics.LocalDiagnosticLogger
 import com.cangkir.bitperfectplayer.lyrics.FileChannelSeekableByteSource
 import java.io.FileInputStream
 import java.io.IOException
@@ -342,12 +344,47 @@ class MediaCodecAudioDecoder private constructor(
         private const val PRIME_MAX_ATTEMPTS = 64
 
         @Throws(AudioDecodeException::class)
-        fun open(context: Context, uri: Uri, fileName: String?, mimeHint: String? = null): PcmAudioDecoder {
+        fun open(
+            context: Context,
+            uri: Uri,
+            fileName: String?,
+            mimeHint: String? = null,
+            diagnosticLogger: LocalDiagnosticLogger? = null,
+        ): PcmAudioDecoder {
             val classified = AudioFormatClassifier.classify(fileName, mimeHint)
-            if (classified == SupportedAudioFormat.WAV) {
-                openDirectWavDecoder(context, uri)?.let { return it }
+            return try {
+                val decoder = if (classified == SupportedAudioFormat.WAV) {
+                    openDirectWavDecoder(context, uri) ?: openMediaCodecDecoder(context, uri, fileName, classified)
+                } else {
+                    openMediaCodecDecoder(context, uri, fileName, classified)
+                }
+                diagnosticLogger?.logAudio("DECODER_CONFIG") {
+                    val fmt = decoder.format
+                    linkedMapOf(
+                        "ext" to DiagnosticLogFormatter.extractSafeFileExtension(fileName, mimeHint),
+                        "container" to fmt.sourceContainer,
+                        "codec" to fmt.sourceCodec,
+                        "decoder" to fmt.decoderName,
+                        "srcSr" to fmt.sourceSampleRateHz,
+                        "srcBit" to (fmt.sourceBitDepth ?: 0),
+                        "outSr" to fmt.sampleRateHz,
+                        "outCh" to fmt.channelCount,
+                        "outEnc" to fmt.encoding.name,
+                        "outBit" to fmt.effectiveBitDepth,
+                        "verifiedHdr" to fmt.sourceHeaderVerified,
+                    )
+                }
+                decoder
+            } catch (e: AudioDecodeException) {
+                diagnosticLogger?.logError("DECODER_OPEN_ERROR") {
+                    linkedMapOf(
+                        "ext" to DiagnosticLogFormatter.extractSafeFileExtension(fileName, mimeHint),
+                        "errType" to e.javaClass.simpleName,
+                        "msg" to e.message,
+                    )
+                }
+                throw e
             }
-            return openMediaCodecDecoder(context, uri, fileName, classified)
         }
 
         private fun openDirectWavDecoder(context: Context, uri: Uri): WavPcmDecoder? {

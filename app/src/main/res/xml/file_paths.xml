@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Strictly scoped to temporary diagnostic log export zip archives (zero storage permissions). -->
+    <cache-path
+        name="diagnostic_exports"
+        path="diagnostic_exports/" />
+</paths>

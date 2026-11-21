@@ -41,6 +41,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -235,11 +236,14 @@ private fun BitPerfectAppRootContent(viewModel: MainViewModel, startupHomepage: 
             )
         },
         settingsContent = {
+            val context = LocalContext.current
             val defaultHomepage by viewModel.defaultHomepage.collectAsStateWithLifecycle()
             val nowPlayingArtworkStyle by viewModel.nowPlayingArtworkStyle.collectAsStateWithLifecycle()
             val spectrumVisualizerEnabled by viewModel.spectrumVisualizerEnabled.collectAsStateWithLifecycle()
             val spectrumColorStyle by viewModel.spectrumColorStyle.collectAsStateWithLifecycle()
             val spectrumSparksEnabled by viewModel.spectrumSparksEnabled.collectAsStateWithLifecycle()
+            val diagnosticLoggingEnabled by viewModel.diagnosticLoggingEnabled.collectAsStateWithLifecycle()
+            val diagnosticLogStats by viewModel.diagnosticLogStats.collectAsStateWithLifecycle()
             SettingsScreen(
                 libraryState = libraryState,
                 playbackState = playbackState,
@@ -254,6 +258,21 @@ private fun BitPerfectAppRootContent(viewModel: MainViewModel, startupHomepage: 
                 onSetSpectrumColorStyle = viewModel::setSpectrumColorStyle,
                 spectrumSparksEnabled = spectrumSparksEnabled,
                 onSetSpectrumSparksEnabled = viewModel::setSpectrumSparksEnabled,
+                diagnosticLoggingEnabled = diagnosticLoggingEnabled,
+                diagnosticLogStats = diagnosticLogStats,
+                onSetDiagnosticLoggingEnabled = viewModel::setDiagnosticLoggingEnabled,
+                onExportDiagnosticLogs = viewModel::exportDiagnosticLogs,
+                onShareDiagnosticLogs = {
+                    viewModel.shareDiagnosticLogs { shareIntent ->
+                        runCatching {
+                            context.startActivity(shareIntent)
+                        }.onFailure {
+                            viewModel.showUiMessage("No app available to share diagnostic logs")
+                        }
+                    }
+                },
+                onClearDiagnosticLogs = viewModel::clearDiagnosticLogs,
+                onRefreshDiagnosticLogStats = viewModel::refreshDiagnosticLogStats,
                 onImportFolder = viewModel::importSafFolder,
                 onRemoveSafFolder = viewModel::removeSafFolder,
                 onRefreshLibrary = viewModel::refreshLibrary,

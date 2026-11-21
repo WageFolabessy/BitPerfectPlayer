@@ -46,6 +46,7 @@ class UserPreferencesRepository(private val dataStore: DataStore<Preferences>) {
         val SPECTRUM_COLOR_STYLE = stringPreferencesKey("spectrum_color_style")
         val SPECTRUM_SPARKS_ENABLED = booleanPreferencesKey("spectrum_sparks_enabled")
         val DEFAULT_HOMEPAGE = stringPreferencesKey("default_homepage")
+        val DIAGNOSTIC_LOGGING_ENABLED = booleanPreferencesKey("diagnostic_logging_enabled")
         val PERSISTED_SAF_TREE_URIS = stringSetPreferencesKey("persisted_saf_tree_uris")
         val PERSISTED_SAF_FILE_URIS = stringSetPreferencesKey("persisted_saf_file_uris")
         val LAST_TRACK_URI = stringPreferencesKey("last_track_uri")
@@ -140,6 +141,12 @@ class UserPreferencesRepository(private val dataStore: DataStore<Preferences>) {
     suspend fun setDefaultHomepage(homepage: DefaultHomepage) {
         dataStore.edit { prefs ->
             prefs[Keys.DEFAULT_HOMEPAGE] = homepage.name
+        }
+    }
+
+    suspend fun setDiagnosticLoggingEnabled(enabled: Boolean) {
+        dataStore.edit { prefs ->
+            prefs[Keys.DIAGNOSTIC_LOGGING_ENABLED] = enabled
         }
     }
 
@@ -276,6 +283,7 @@ class UserPreferencesRepository(private val dataStore: DataStore<Preferences>) {
             spectrumColorStyle = SpectrumColorStyle.fromStoredName(prefs[Keys.SPECTRUM_COLOR_STYLE]),
             spectrumSparksEnabled = prefs[Keys.SPECTRUM_SPARKS_ENABLED] ?: true,
             defaultHomepage = DefaultHomepage.fromStoredName(prefs[Keys.DEFAULT_HOMEPAGE]),
+            diagnosticLoggingEnabled = prefs[Keys.DIAGNOSTIC_LOGGING_ENABLED] ?: false,
             persistedSafTreeUris = PersistenceSanitizer.sanitizeUriSet(
                 prefs[Keys.PERSISTED_SAF_TREE_URIS].orEmpty(),
             ),

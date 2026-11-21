@@ -8,6 +8,8 @@ import com.cangkir.bitperfectplayer.data.RepeatModePreference
 import com.cangkir.bitperfectplayer.data.ReplayGainModePreference
 import com.cangkir.bitperfectplayer.data.TrackHistoryRecord
 import com.cangkir.bitperfectplayer.data.UserPreferencesRepository
+import com.cangkir.bitperfectplayer.diagnostics.DiagnosticLogFormatter
+import com.cangkir.bitperfectplayer.diagnostics.LocalDiagnosticLogger
 import com.cangkir.bitperfectplayer.library.LibrarySnapshot
 import com.cangkir.bitperfectplayer.library.PlaylistsUiSnapshot
 import com.cangkir.bitperfectplayer.lyrics.AndroidContentFingerprintProvider
@@ -57,6 +59,7 @@ class PlaybackController(
     private val persistenceRepository: LocalPersistenceRepository,
     private val fingerprintProvider: AndroidContentFingerprintProvider,
     private val foregroundPlaybackGate: ForegroundPlaybackGate = ForegroundPlaybackGate(initialAppInForeground = true),
+    private val diagnosticLogger: LocalDiagnosticLogger? = null,
 ) {
     private val appContext = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -72,6 +75,7 @@ class PlaybackController(
         onTrackCompleted = { handleTrackCompleted() },
         onGaplessTransition = { transitioned -> handleGaplessTransition(transitioned) },
         onActivePlaybackElapsedMs = { deltaMs -> handleActivePlaybackElapsed(deltaMs) },
+        diagnosticLogger = diagnosticLogger,
     )
 
     private val sleepTimerController = SleepTimerController(
@@ -295,7 +299,9 @@ class PlaybackController(
         val token = foregroundPlaybackGate.beginHandshake()
         PlaybackForegroundService.startService(appContext, foregroundPlaybackGate)
         foregroundHandshakeJob = scope.launch {
-            when (foregroundPlaybackGate.awaitServicePromotion(token = token)) {
+            val result = foregroundPlaybackGate.awaitServicePromotion(token = token)
+            logForegroundHandshakeOutcome(source = "play", result = result)
+            when (result) {
                 ForegroundHandshakeResult.READY_IMMEDIATELY,
                 ForegroundHandshakeResult.PROMOTED,
                 -> {
@@ -690,6 +696,8 @@ class PlaybackController(
                 mimeType = nextTrack.mimeType,
                 startPositionMs = 0L,
                 autoPlay = true,
+                fingerprintPrefix = DiagnosticLogFormatter.shortFingerprintPrefix(nextTrack.contentFingerprint),
+                fileSizeBytes = nextTrack.fileSizeBytes,
             ),
         )
     }
@@ -749,6 +757,8 @@ class PlaybackController(
             mimeType = track.mimeType,
             startPositionMs = startPositionMs,
             autoPlay = autoPlay,
+            fingerprintPrefix = DiagnosticLogFormatter.shortFingerprintPrefix(track.contentFingerprint),
+            fileSizeBytes = track.fileSizeBytes,
         )
         if (!autoPlay) {
             foregroundPlaybackGate.cancelPendingHandshake()
@@ -771,7 +781,9 @@ class PlaybackController(
         val token = foregroundPlaybackGate.beginHandshake()
         PlaybackForegroundService.startService(appContext, foregroundPlaybackGate)
         foregroundHandshakeJob = scope.launch {
-            when (foregroundPlaybackGate.awaitServicePromotion(token = token)) {
+            val result = foregroundPlaybackGate.awaitServicePromotion(token = token)
+            logForegroundHandshakeOutcome(source = "loadActiveTrack", result = result)
+            when (result) {
                 ForegroundHandshakeResult.READY_IMMEDIATELY,
                 ForegroundHandshakeResult.PROMOTED,
                 -> {
@@ -792,6 +804,26 @@ class PlaybackController(
                 }
                 ForegroundHandshakeResult.CANCELLED -> Unit
             }
+        }
+    }
+
+    private fun logForegroundHandshakeOutcome(source: String, result: ForegroundHandshakeResult) {
+        when (result) {
+            ForegroundHandshakeResult.PROMOTED -> {
+                diagnosticLogger?.logAudio("FGS_HANDSHAKE") {
+                    linkedMapOf("source" to source, "outcome" to result.name)
+                }
+            }
+            ForegroundHandshakeResult.FAILED_START_NOT_ALLOWED,
+            ForegroundHandshakeResult.TIMED_OUT,
+            -> {
+                diagnosticLogger?.logError("FGS_HANDSHAKE") {
+                    linkedMapOf("source" to source, "outcome" to result.name)
+                }
+            }
+            ForegroundHandshakeResult.READY_IMMEDIATELY,
+            ForegroundHandshakeResult.CANCELLED,
+            -> Unit
         }
     }
 

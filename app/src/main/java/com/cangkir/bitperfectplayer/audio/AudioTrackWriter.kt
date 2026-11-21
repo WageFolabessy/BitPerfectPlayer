@@ -5,6 +5,7 @@ import android.media.AudioFormat
 import android.media.AudioTrack
 import android.os.Build
 import android.util.Log
+import com.cangkir.bitperfectplayer.diagnostics.LocalDiagnosticLogger
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
@@ -23,6 +24,7 @@ internal class AudioTrackWriter(
     private val releasedFlag: AtomicBoolean,
     private val isPausedFlag: AtomicBoolean,
     private val pendingSeekMs: AtomicLong,
+    private val diagnosticLogger: LocalDiagnosticLogger? = null,
 ) {
     // Strictly read-only, lifecycle-gated PCM tap (~192 KB) for the radial FFT spectrum visualizer.
     // Allocated lazily ONLY when active; released immediately when disabled, backgrounded, or stopped.
@@ -181,12 +183,28 @@ internal class AudioTrackWriter(
                 "bytesPerFrame=$bytesPerFrame, bufferBytes=$alignedBufSize, " +
                 "mixer=${routeAndMixerManager.activeNegotiatedMixerBehavior}",
         )
+        diagnosticLogger?.logAudio("AUDIOTRACK_CONFIG") {
+            linkedMapOf(
+                "sr" to actualSampleRateHz,
+                "ch" to pcmFormat.channelCount,
+                "enc" to actualEncodingLabel,
+                "decodedEnc" to pcmFormat.encoding.name,
+                "bufBytes" to alignedBufSize,
+                "bufFrames" to track.bufferSizeInFrames,
+                "usb" to (usbDevice != null),
+                "mixer" to routeAndMixerManager.activeNegotiatedMixerBehavior.name,
+            )
+        }
         return ConfiguredAudioTrack(
             track = track,
             actualSampleRateHz = actualSampleRateHz,
             actualEncodingLabel = actualEncodingLabel,
         )
     }
+
+    fun readUnderrunCount(track: AudioTrack?): Int = runCatching {
+        if (track != null && track.state == AudioTrack.STATE_INITIALIZED) track.underrunCount else 0
+    }.getOrDefault(0)
 
     fun tryCreateConfiguredAudioTrackLocked(
         pcmFormat: DecodedPcmFormat,

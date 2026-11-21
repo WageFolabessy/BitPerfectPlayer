@@ -1,6 +1,8 @@
 package com.cangkir.bitperfectplayer.audio
 
 import android.media.AudioTrack
+import android.os.SystemClock
+import com.cangkir.bitperfectplayer.diagnostics.LocalDiagnosticLogger
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.atomic.AtomicBoolean
@@ -274,6 +276,7 @@ internal class TurntableScratchRunner(
     private val onActivePlaybackElapsedMs: ((Long) -> Unit)?,
     private val onEndOfStream: (PlaybackLoopState) -> Boolean,
     private val onMidStreamFormatChanged: (PlaybackLoopState, DecodedPcmFormat) -> Boolean,
+    private val diagnosticLogger: LocalDiagnosticLogger? = null,
 ) {
     private val turntableScratchRequested = AtomicBoolean(false)
     private val turntableTargetRateBits = AtomicInteger(0)
@@ -467,6 +470,7 @@ internal class TurntableScratchRunner(
     }
 
     fun handlePendingSeekInLoop(state: PlaybackLoopState, requestedSeekMs: Long) {
+        val seekStartMs = SystemClock.elapsedRealtime()
         accumulateActivePlayTime(state, forceFlush = true)
         val wasPlaying = !isPausedFlag.get()
         trackWriter.safePause(state.currentTrack)
@@ -484,13 +488,21 @@ internal class TurntableScratchRunner(
             durationMs = state.durationMs,
             expectedGeneration = state.expectedGeneration,
         )
+        diagnosticLogger?.logPerf("SEEK_LATENCY") {
+            linkedMapOf(
+                "seekMs" to (SystemClock.elapsedRealtime() - seekStartMs).coerceAtLeast(0L),
+                "targetPosMs" to requestedSeekMs,
+                "actualPosMs" to actualSeekMs,
+                "wasPlaying" to wasPlaying,
+            )
+        }
     }
 
     fun processNormalPcmChunkInLoop(state: PlaybackLoopState, bytesRead: Int) {
         val alignedLen = state.prepareAlignedPcmChunk(bytesRead)
         if (alignedLen > 0) {
             val combinedBytes = state.alignedChunkBytes
-            // Safe-Mode-only pre-ReplayGain ring-buffer tee (zero allocs; NEVER runs in Bit-Perfect mode).
+            // Safe-Mode-only pre-ReplayGain ring-buffer tee (zero allocations; NEVER runs in Bit-Perfect mode).
             teeNormalPcmIntoRingBufferIfSafeMode(state, combinedBytes, alignedLen)
 
             // Mandatory Bit-Perfect Invariant: strictly bypass ReplayGain (gain = 1.0f) in BIT_PERFECT_OPT_IN.
@@ -572,6 +584,7 @@ internal class TurntableScratchRunner(
             return
         }
 
+        val scratchEntryElapsedMs = SystemClock.elapsedRealtime()
         // 1. Flush and freeze PlayCountTracker so scratching never inflates listening time.
         accumulateActivePlayTime(state, forceFlush = true)
 
@@ -602,6 +615,15 @@ internal class TurntableScratchRunner(
             trackStartThresholdFrames = activeStartThreshold,
             chunkFrames = state.scratchChunkFrames,
         )
+        diagnosticLogger?.logAudio("TURNTABLE_STATE") {
+            linkedMapOf(
+                "action" to "enter",
+                "sr" to state.sampleRate,
+                "startThreshold" to activeStartThreshold,
+                "maxAhead" to maxAheadFrames,
+                "ringFrames" to (ringBuf.writeHeadFrame - ringBuf.oldestAvailableFrame),
+            )
+        }
         trackWriter.safePlay(state.currentTrack)
         val headTracker = TurntableFlushHeadTracker(
             initialObservedHead = trackWriter.readUnsignedPlaybackHeadFrames(state.currentTrack),
@@ -666,6 +688,13 @@ internal class TurntableScratchRunner(
         }
 
         exitTurntableScratchCleanly(state, ringBuf, scratchResampler, minVirtualFrame, maxVirtualFrame)
+        diagnosticLogger?.logAudio("TURNTABLE_STATE") {
+            linkedMapOf(
+                "action" to "exit",
+                "durationMs" to (SystemClock.elapsedRealtime() - scratchEntryElapsedMs).coerceAtLeast(0L),
+                "ringDrain" to (state.ringDrainCursorFrame >= 0L),
+            )
+        }
     }
 
     private fun ensureSafeModeLoopScratchReady(state: PlaybackLoopState): Boolean {

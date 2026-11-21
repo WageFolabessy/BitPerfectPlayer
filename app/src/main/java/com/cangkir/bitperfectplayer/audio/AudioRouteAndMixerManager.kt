@@ -14,6 +14,7 @@ import android.os.Build
 import android.os.Handler
 import androidx.annotation.RequiresApi
 import androidx.core.content.ContextCompat
+import com.cangkir.bitperfectplayer.diagnostics.LocalDiagnosticLogger
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -36,8 +37,14 @@ internal class AudioRouteAndMixerManager(
     private val onDuckSafeModeVolume: (Float) -> Unit,
     private val isCurrentlyPlaying: () -> Boolean,
     private val isReleased: () -> Boolean,
+    private val diagnosticLogger: LocalDiagnosticLogger? = null,
 ) {
-    private data class MixerNegotiationResult(val behavior: NegotiatedMixerBehavior, val summary: String)
+    private data class MixerNegotiationResult(
+        val behavior: NegotiatedMixerBehavior,
+        val summary: String,
+        val supportedProfileCount: Int = 0,
+        val bitPerfectProfileCount: Int = 0,
+    )
 
     @Volatile
     var activeOutputDevice: AudioDeviceInfo? = null
@@ -66,6 +73,9 @@ internal class AudioRouteAndMixerManager(
     private val initialDeviceCallbackPending = AtomicBoolean(true)
 
     private val focusChangeListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
+        diagnosticLogger?.logAudio("AUDIO_FOCUS") {
+            mapOf("change" to focusChange, "mode" to safetyController.state().mode.name)
+        }
         when (focusChange) {
             AudioManager.AUDIOFOCUS_LOSS -> {
                 hasAudioFocus = false
@@ -205,6 +215,11 @@ internal class AudioRouteAndMixerManager(
         if (hasAudioFocus) return true
         val res = audioManager.requestAudioFocus(audioFocusRequest)
         hasAudioFocus = (res == AudioManager.AUDIOFOCUS_REQUEST_GRANTED)
+        if (!hasAudioFocus) {
+            diagnosticLogger?.logError("AUDIOFOCUS_REQUEST_FAILED") {
+                mapOf("result" to res, "mode" to safetyController.state().mode.name)
+            }
+        }
         return hasAudioFocus
     }
 
@@ -237,6 +252,20 @@ internal class AudioRouteAndMixerManager(
         )
         activeNegotiatedMixerBehavior = negotiation.behavior
         activeNegotiatedMixerSummary = negotiation.summary
+        diagnosticLogger?.logAudio("USB_MIXER_NEGOTIATED") {
+            linkedMapOf(
+                "mode" to safetyController.state().mode.name,
+                "behavior" to negotiation.behavior.name,
+                "usb" to (usbDevice != null),
+                "conn" to mapConnectionType(currentDevice).name,
+                "sr" to pcmFormat.sampleRateHz,
+                "enc" to encodingNameResolver(androidEncoding),
+                "ch" to pcmFormat.channelCount,
+                "supportedProfiles" to negotiation.supportedProfileCount,
+                "bitPerfectProfiles" to negotiation.bitPerfectProfileCount,
+                "api" to Build.VERSION.SDK_INT,
+            )
+        }
         return usbDevice
     }
 
@@ -418,6 +447,7 @@ internal class AudioRouteAndMixerManager(
             targetChannelCount = pcmFormat.channelCount,
             targetChannelMask = channelMask,
         )
+        val bpCount = candidates.count { it.isBitPerfect }
         executeApi34NegotiationPlan(
             safetyMode = safetyMode,
             pcmFormat = pcmFormat,
@@ -426,6 +456,9 @@ internal class AudioRouteAndMixerManager(
             supported = supported,
             plan = plan,
             encodingNameResolver = encodingNameResolver,
+        ).copy(
+            supportedProfileCount = supported.size,
+            bitPerfectProfileCount = bpCount,
         )
     } catch (e: IllegalArgumentException) {
         fallbackApi34MixerError(safetyMode, usbDevice, e)
@@ -603,6 +636,14 @@ internal class AudioRouteAndMixerManager(
         usbDevice: AudioDeviceInfo,
         error: RuntimeException,
     ): MixerNegotiationResult {
+        diagnosticLogger?.logError("USB_MIXER_ERROR") {
+            linkedMapOf(
+                "mode" to safetyMode.name,
+                "errorType" to error.javaClass.simpleName,
+                "msg" to (error.message ?: "unknown"),
+                "api" to Build.VERSION.SDK_INT,
+            )
+        }
         clearPreferredMixerAttributesOnApi34(usbDevice)
         return if (safetyMode == AudioOutputMode.SAFE_VOLUME_MODE) {
             safeModeDefaultMixerResult()
