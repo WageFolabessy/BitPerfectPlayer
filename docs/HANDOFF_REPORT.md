@@ -2,8 +2,8 @@
 
 - **Project:** `com.cangkir.bitperfectplayer` (Kotlin + Jetpack Compose, 100% Offline Android Music Player)
 - **Active Branch:** `feat/v1.2` *(branched from `main` at `b157c4b`)*
-- **Overall Status:** **`feat/v1.2` Audio Engine Fixes Complete & Software-Verified** *(211 / 211 automated tests passing across 35 suites with `ktlintCheck`, `detekt`, Android Lint, Debug APK, and R8 Release APK clean; physical POCO F4 + Android 16 / USB-C DAC hardware verification pending)*
-- **Tasks Completed:** **17 / 17** (`T0.1` through `T5.4` in `docs/TASKS.md`) + `v1.1` release + `v1.2` 3-fix audio engine upgrade
+- **Overall Status:** **`feat/v1.2` Audio Engine + Queue/Library UX Upgrades Complete & Software-Verified** *(217 / 217 automated tests passing across 35 suites with `ktlintCheck`, `detekt`, Android Lint, Debug APK, and R8 Release APK clean; physical POCO F4 + Android 16 / USB-C DAC hardware verification pending)*
+- **Tasks Completed:** **17 / 17** (`T0.1` through `T5.4` in `docs/TASKS.md`) + `v1.1` release + `v1.2` audio engine & queue/library UX upgrades
 - **Active Blockers:** None (`BLOCKED.md` not required)
 
 ---
@@ -892,4 +892,37 @@ Split the 4 oversized Compose screen files (`LibraryScreen.kt`, `PlaylistsScreen
 - **Android 16 (API 36) / Custom ROM 24-bit/96 kHz FLAC (`audio/raw`):** Confirm crisp, noise-free playback via `RawExtractorPcmDecoder` and verify Stage 1–2 diagnostics show `FLAC` + `MediaExtractor Direct PCM (...)`.
 - **Live Turntable Post-Auto-Pause Scratch:** Trigger a real USB plug-in or screen-recorder `AUTO_PAUSE` event (forcing `loadTrack(..., autoPlay = false)`), tap Play, and immediately touch/scrub forward (`2x–4x`), hold (`0x`), and reverse (`-2x`) without seeking first; confirm immediate audible scratch response and live delta movement.
 - **API 34+ USB `MIXER_BEHAVIOR_DEFAULT` Native Sample-Rate Negotiation:** Play 44.1 kHz and 96 kHz lossless tracks on a USB-C DAC (KZ EDX Pro 2 USB-C) in both Safe Mode and Bit-Perfect Opt-In on a HAL with 0 bit-perfect profiles; verify Stage 4 reports `MIXER_BEHAVIOR_DEFAULT` locked to native track Hz with volume active, and verify clean `clearPreferredMixerAttributes` teardown on stop/unplug.
+
+---
+
+## 29. `feat/v1.2` Playback Queue & Library UX Upgrades (`D11.4`–`D11.6`)
+
+### Delivered UX Improvements
+1. **Strictly Passive Read-Only Queue Top-Bar Icon ([`BitPerfectAppNav.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/BitPerfectAppNav.kt), [`LibraryScreen.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/library/LibraryScreen.kt), [`PlaylistsScreen.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/playlists/PlaylistsScreen.kt), [`MainViewModel.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/MainViewModel.kt), [`PlaybackController.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/PlaybackController.kt), [`QueueContext.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/QueueContext.kt)):**
+   - Tapping the top-bar Queue icon (`Icons.AutoMirrored.Filled.QueueMusic`) from any screen (`All Songs`, `Folders`, `Artists`, `Albums`, `Recent`, `Favorites`, `Playlists`, Album/Artist/Folder/Playlist/Most Played details, `Now Playing`) now passively opens `QueueScreen` showing the active playback queue without pausing playback or replacing the queue.
+   - Removed dead auto-context-switching APIs (`BrowsingQueueContext`, `QueueContextResolver.shouldSwitchToBrowsingContext`, `MainViewModel.prepareQueueScreenContext`, `PlaybackController.loadContextQueue`).
+2. **Pure-Compose Drag-and-Drop Reordering in `QueueScreen` ([`QueueScreen.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/QueueScreen.kt), [`PlaybackQueueManager.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/PlaybackQueueManager.kt), [`QueueContext.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/QueueContext.kt)):**
+   - Removed Up/Down arrow reorder buttons (`ArrowUpward` / `ArrowDownward`) completely and added a leading `Icons.Rounded.DragHandle` (`48.dp x 48.dp` dedicated touch/semantics target, `contentDescription = "Reorder track"`, decoupled from middle track-selection click and far-right `Remove` button; hairline divider aligned at `104.dp`).
+   - Added stable per-slot `entryIds: List<Long>` to `QueueSnapshot<T>` (eliminating duplicate-key crashes even when identical track URIs appear multiple times) and pure-Kotlin `QueueDragReorderMath` (`computeDragSwap` with `2 px` hysteresis + `computeEdgeAutoScrollPx`).
+   - Mounted stationary `pointerInput` (`PointerEventPass.Initial`, RTL-aware leading `56.dp` handle column) on the `LazyColumn` so GPU-only `graphicsLayer` transforms never shift pointer coordinates, normal vertical scrolling across the rest of each row stays untouched, `firstVisibleItemIndex` stays anchored via `requestScrollToItem`, edge auto-scrolling runs smoothly via `withFrameNanos`, and `PlaybackQueueManager.moveItem(from, to)` keeps `currentIndex` anchored to the active playing track.
+3. **Full-List `All Songs` Search Playback ([`QueueContext.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/QueueContext.kt), [`LibraryScreen.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/library/LibraryScreen.kt)):**
+   - Added pure-Kotlin `QueueContextResolver.resolveFullListPlaybackSelection(...)` matching the tapped search result by stable `uriString` inside the full sorted `libraryState.allSongs` list (with safe bounded fallback).
+   - Tapping any filtered search hit in `All Songs` now loads the entire sorted `All Songs` queue starting at that track's index under `QueueContext.allSongs()`, keeping Next/Previous/Shuffle functional across the full library.
+
+### Software Verification (`./gradlew clean ktlintCheck detekt testDebugUnitTest lintDebug assembleDebug assembleRelease`)
+- **Kotlin Formatting (`ktlintCheck`):** **PASS — 0 violations** across `main`, `test`, and Kotlin Gradle scripts.
+- **Static Analysis (`detekt`):** **PASS — 0 issues** (0 baseline files).
+- **Automated JVM Unit + Robolectric Tests (`testDebugUnitTest`):** **217 / 217 passed** across **35 test suites** (`0` failed, `0` errors, `0` skipped, `0` `@Ignore`), including:
+  - [`QueueContextTest.kt`](../app/src/test/java/com/cangkir/bitperfectplayer/audio/QueueContextTest.kt): `5 / 5` (covering `resolveFullListPlaybackSelection`, `QueueDragReorderMath` downward/upward midpoint swaps + hysteresis + edge auto-scroll, and session restore).
+  - [`PlaybackQueueManagerTest.kt`](../app/src/test/java/com/cangkir/bitperfectplayer/audio/PlaybackQueueManagerTest.kt): `7 / 7` (verifying `moveItem` active-track identity + `entryIds` across all drag directions, duplicate URIs, and out-of-bounds guards).
+  - [`BitPerfectUiBehaviorTest.kt`](../app/src/test/java/com/cangkir/bitperfectplayer/ui/BitPerfectUiBehaviorTest.kt): `24 / 24` (+4 new UI behavior tests verifying strictly passive Queue icon across Library tabs/details and Playlists overview/detail, pure-Compose drag-handle reordering with zero arrow buttons, and full-list `All Songs` search playback).
+- **Compiler, KSP, & R8 Warnings:** **0** Kotlin compiler warnings, **0** KSP warnings, **0** R8 warnings.
+- **Android Lint (`lintDebug` & `lintVitalRelease`):** **0 errors**, **0 warnings across all `/app/src/` files**.
+- **Debug APK (`assembleDebug`):** `app/build/outputs/apk/debug/app-debug.apk` (`20.23 MB` / `21,207,774 bytes`).
+- **Release APK (`assembleRelease` with R8 optimization):** `app/build/outputs/apk/release/app-release-unsigned.apk` (`2.63 MB` / `2,762,384 bytes`; zero third-party drag-and-drop libraries).
+- **Pure-Kotlin Domain Boundary (`QueueContext.kt`, `PlaybackQueueManager.kt`):** **PASS — 0 `android.*` / `androidx.*` imports**.
+- **Strict Offline & Zero-Permission Audit (Source + All 6 Generated Debug, Release, & UnitTest Manifests):** **PASS — 0 `INTERNET`, 0 `RECORD_AUDIO`, 0 `MANAGE_EXTERNAL_STORAGE`**.
+
+### Physical Hardware Verification Pending (Not Executed in Cloud)
+- **Touch Ergonomics & 120 Hz Drag-and-Drop Feel:** Verify tactile haptic feedback, smooth row elevation/swapping across multi-track drags (including top/bottom edge auto-scrolling on 50+ track queues), and unaffected normal vertical scrolling on physical POCO F4 120 Hz display.
 

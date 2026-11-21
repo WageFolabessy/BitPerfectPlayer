@@ -273,3 +273,36 @@ This file records autonomous architectural, dependency, and environment decision
   - On USB-C dongles/ROMs whose Android 14–16 HAL exposes 0 `MIXER_BEHAVIOR_BIT_PERFECT` profiles yet advertises `MIXER_BEHAVIOR_DEFAULT` at `44.1 / 48 / 96 / 192 kHz`, negotiating preferred `MIXER_BEHAVIOR_DEFAULT` at the track's native sample rate avoids unnecessary OS resampling to 48 kHz while preserving full volume safety and honest 6-stage diagnostics.
 - **Rejected Alternatives:** Leaving `SAFE_VOLUME_MODE` and 0-bit-perfect HALs locked to default 48 kHz mixing without requesting the USB HAL's native sample-rate default mixer profile; labeling `DEFAULT_NATIVE_RATE` as "Bit-Perfect" (strictly rejected per honesty invariants).
 
+---
+
+## D11.4 — Strictly Passive Read-Only Queue Top-Bar Navigation
+- **Decision:**
+  1. Made tapping the top-bar Queue icon (`Icons.AutoMirrored.Filled.QueueMusic`) 100% passive (read-only navigation to `QueueScreen`) across every screen and detail view (`All Songs`, `Folders`, `Artists`, `Albums`, `Recent`, `Favorites`, `Playlists`, Album/Artist/Folder/Playlist/Most Played details, and `Now Playing`).
+  2. Removed the obsolete auto-context-switching pathway (`BrowsingQueueContext`, `QueueContextResolver.shouldSwitchToBrowsingContext(...)`, `MainViewModel.prepareQueueScreenContext(...)`, and `PlaybackController.loadContextQueue(...)`) and unified `onOpenQueue: () -> Unit` across `BitPerfectAppNav.kt`, `LibraryScreen.kt`, and `PlaylistsScreen.kt`.
+- **Rationale:**
+  - Opening the playback queue to inspect upcoming tracks must never silently overwrite the active queue or interrupt/pause playback simply because the user is browsing another tab, album, artist, folder, or playlist.
+  - Queue replacement now happens exclusively when the user explicitly plays a track or invokes Play/Enqueue actions.
+- **Rejected Alternatives:** Showing a confirmation modal whenever opening the Queue icon from another view (adds friction to a read-only inspection gesture).
+
+---
+
+## D11.5 — Zero-Dependency Pure-Compose Drag-and-Drop Reordering in `QueueScreen`
+- **Decision:**
+  1. Replaced the Up/Down arrow reorder buttons (`ArrowUpward` / `ArrowDownward`) in `QueueScreen.kt` with a tactile leading `Icons.Rounded.DragHandle` inside a dedicated `48.dp x 48.dp` `Box` (`contentDescription = "Reorder track"`, isolated via `Modifier.semantics(mergeDescendants = true) {}` and decoupled from the middle track-selection `clickable` `Row` and far-right `Remove` `IconButton`).
+  2. Added `entryIds: List<Long>` to `QueueSnapshot<T>` in `PlaybackQueueManager.kt` (backed by monotonically unique internal `QueueEntry.id` values) so every `LazyColumn` row has a globally unique stable key even when duplicate track URIs exist in the queue.
+  3. Added pure-Kotlin `VisibleQueueItemMetric`, `DragSwapDecision`, and `QueueDragReorderMath` (`computeDragSwap` with `2 px` hysteresis + exact offset continuity adjustment, and `computeEdgeAutoScrollPx`) in `QueueContext.kt` (0 `android.*` / `androidx.*` imports).
+  4. Attached a stationary `pointerInput` gesture handler (`PointerEventPass.Initial`, RTL-aware leading `56.dp` handle column) on the `LazyColumn` itself so GPU-only `graphicsLayer { translationY; scaleX; scaleY; shadowElevation }` transforms on the dragged row never shift pointer coordinates mid-drag and normal vertical scrolling across the rest of each row stays untouched. Preserved `firstVisibleItemIndex` scroll anchoring via `requestScrollToItem`, prevented duplicate swaps via `pendingExpectedIndex`, added `withFrameNanos` edge auto-scrolling, and guaranteed drag reset via `DisposableEffect` and single/empty-queue guards.
+- **Rationale:**
+  - Delivers smooth 120 Hz drag-and-drop queue reordering with zero third-party libraries (keeping the R8 Release APK lean at `2.63 MB`), zero duplicate-key crashes, and active-track identity anchored accurately through `PlaybackQueueManager.moveItem(from, to)`.
+- **Rejected Alternatives:** Adding an external Compose reorderable library (unnecessary dependency weight and transitive API churn); placing `pointerInput` inside the translated `QueueTrackRow` (causes coordinate feedback oscillation when `graphicsLayer.translationY` shifts the pointer receiver every frame).
+
+---
+
+## D11.6 — Full-List `All Songs` Search Playback Selection (Option 1)
+- **Decision:**
+  1. Added pure-Kotlin `QueueContextResolver.resolveFullListPlaybackSelection(fullTrackList, tappedTrack, fallbackTracks, fallbackIndex)` in `QueueContext.kt` matching `tappedTrack` by stable `uriString` inside the full sorted `allSongs` list (with safe bounded fallback if absent).
+  2. Wired `LibraryScreen.kt`'s `All Songs` `TrackListView.onPlayTracks` so tapping a track while `searchQuery.isNotBlank()` queues the full sorted `libraryState.allSongs` list starting at that track's exact index under `QueueContext.allSongs()`.
+- **Rationale:**
+  - Previously, tapping a track from a 1-result search created a 1-track queue where Next/Previous/Shuffle could not move to other songs. Loading the full sorted `All Songs` queue at the tapped track's index keeps search fast while preserving full library playback continuity.
+- **Rejected Alternatives:** Queueing only the filtered search hits (breaks Next/Previous/Shuffle whenever a specific title query matches 1 track); appending search results after the current queue (violates direct tap-to-play expectation).
+
