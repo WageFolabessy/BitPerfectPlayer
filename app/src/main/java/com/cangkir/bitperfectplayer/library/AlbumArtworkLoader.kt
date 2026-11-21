@@ -18,8 +18,6 @@ import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
-import kotlin.math.max
-import kotlin.math.roundToInt
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -296,14 +294,16 @@ class AlbumArtworkLoader(context: Context) {
     }
 
     private fun constrainMaxDimension(bitmap: Bitmap, targetSizePx: Int): Bitmap {
-        val longestSide = max(bitmap.width, bitmap.height)
-        val maxAllowed = (targetSizePx * 1.25f).roundToInt()
-        if (longestSide <= maxAllowed || longestSide <= 0) return bitmap
-        val ratio = targetSizePx.toFloat() / longestSide.toFloat()
-        val scaledWidth = (bitmap.width * ratio).roundToInt().coerceAtLeast(1)
-        val scaledHeight = (bitmap.height * ratio).roundToInt().coerceAtLeast(1)
+        val target = AlbumArtworkHelper.computeProportionalTargetDimensions(
+            srcWidth = bitmap.width,
+            srcHeight = bitmap.height,
+            maxDimensionPx = targetSizePx,
+            toleranceScale = 1.25f,
+        )
+        if (target.width == bitmap.width && target.height == bitmap.height) return bitmap
+        if (target.width <= 0 || target.height <= 0) return bitmap
         return runCatching {
-            val scaled = bitmap.scale(scaledWidth, scaledHeight, filter = true)
+            val scaled = bitmap.scale(target.width, target.height, filter = true)
             if (scaled !== bitmap) {
                 bitmap.recycle()
             }

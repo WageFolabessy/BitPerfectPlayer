@@ -2,13 +2,20 @@ package com.cangkir.bitperfectplayer.library
 
 import java.security.MessageDigest
 import java.util.Locale
+import kotlin.math.roundToInt
+
+/**
+ * Pure-Kotlin width/height pair for aspect-ratio-preserving artwork scaling (zero `android.*` imports).
+ */
+data class ArtworkDimensions(val width: Int, val height: Int)
 
 /**
  * Pure-Kotlin artwork helper utilities (zero `android.*` imports) for:
  * - Zero-crypto plain-string memory cache keys with album-level deduplication (safe on Main Thread)
  * - IO-only SHA-256 disk filename hashing
  * - Fast thumbnail vs hero extraction strategy selection
- * - Power-of-2 bitmap downsampling calculations, disk-prune throttling, and SAF sibling cover matching.
+ * - Power-of-2 bitmap downsampling and aspect-ratio-preserving proportional target scaling
+ * - Disk-prune throttling and SAF sibling cover matching.
  */
 object AlbumArtworkHelper {
     const val THUMBNAIL_BUCKET_PX = 160
@@ -177,6 +184,37 @@ object AlbumArtworkHelper {
             }
         }
         return inSampleSize.coerceAtLeast(1)
+    }
+
+    /**
+     * Computes aspect-ratio-preserving target dimensions bounded by [maxDimensionPx] along the
+     * longest edge. Never center-crops or stretches non-square artwork (`16:9`, `4:3`, portrait).
+     *
+     * When the source longest edge is already within `maxDimensionPx * toleranceScale`, returns
+     * the original dimensions unchanged to avoid unnecessary bitmap rescaling.
+     */
+    fun computeProportionalTargetDimensions(
+        srcWidth: Int,
+        srcHeight: Int,
+        maxDimensionPx: Int,
+        toleranceScale: Float = 1.0f,
+    ): ArtworkDimensions {
+        if (srcWidth <= 0 || srcHeight <= 0 || maxDimensionPx <= 0) {
+            return ArtworkDimensions(
+                width = srcWidth.coerceAtLeast(0),
+                height = srcHeight.coerceAtLeast(0),
+            )
+        }
+        val longestSide = maxOf(srcWidth, srcHeight)
+        val effectiveTolerance = if (toleranceScale.isFinite() && toleranceScale >= 1.0f) toleranceScale else 1.0f
+        val maxAllowed = (maxDimensionPx.toDouble() * effectiveTolerance.toDouble()).roundToInt()
+        if (longestSide <= maxAllowed) {
+            return ArtworkDimensions(width = srcWidth, height = srcHeight)
+        }
+        val scale = maxDimensionPx.toDouble() / longestSide.toDouble()
+        val targetWidth = (srcWidth.toDouble() * scale).roundToInt().coerceAtLeast(1)
+        val targetHeight = (srcHeight.toDouble() * scale).roundToInt().coerceAtLeast(1)
+        return ArtworkDimensions(width = targetWidth, height = targetHeight)
     }
 
     /**

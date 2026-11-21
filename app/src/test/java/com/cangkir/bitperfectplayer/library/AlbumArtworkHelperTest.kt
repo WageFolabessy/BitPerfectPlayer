@@ -209,4 +209,57 @@ class AlbumArtworkHelperTest {
         )
         assertNull(AlbumArtworkHelper.deriveParentDocumentId("opaque_doc_12345"))
     }
+
+    @Test
+    fun computeProportionalTargetDimensions_preservesAspectRatioForSquareLandscapeAndPortraitWithoutCropping() {
+        // Square 1:1 (1000x1000 -> 512x512)
+        assertEquals(
+            ArtworkDimensions(512, 512),
+            AlbumArtworkHelper.computeProportionalTargetDimensions(1000, 1000, maxDimensionPx = 512),
+        )
+
+        // Landscape 16:9 (1600x900 -> 512x288, exact 16:9 ratio preserved)
+        val landscape = AlbumArtworkHelper.computeProportionalTargetDimensions(1600, 900, maxDimensionPx = 512)
+        assertEquals(ArtworkDimensions(512, 288), landscape)
+        assertEquals(16.0 / 9.0, landscape.width.toDouble() / landscape.height.toDouble(), 0.001)
+
+        // Portrait 9:16 (900x1600 -> 288x512, exact 9:16 ratio preserved)
+        val portrait = AlbumArtworkHelper.computeProportionalTargetDimensions(900, 1600, maxDimensionPx = 512)
+        assertEquals(ArtworkDimensions(288, 512), portrait)
+        assertEquals(9.0 / 16.0, portrait.width.toDouble() / portrait.height.toDouble(), 0.001)
+
+        // Landscape 4:3 (1200x900 -> 600x450)
+        assertEquals(
+            ArtworkDimensions(600, 450),
+            AlbumArtworkHelper.computeProportionalTargetDimensions(1200, 900, maxDimensionPx = 600),
+        )
+
+        // Already within max bound -> returned intact without upscaling
+        assertEquals(
+            ArtworkDimensions(400, 225),
+            AlbumArtworkHelper.computeProportionalTargetDimensions(400, 225, maxDimensionPx = 512),
+        )
+
+        // Tolerance band (1.25f): 700 <= 750 stays untouched; 800 > 750 scales down to 600x338
+        assertEquals(
+            ArtworkDimensions(700, 394),
+            AlbumArtworkHelper.computeProportionalTargetDimensions(700, 394, maxDimensionPx = 600, toleranceScale = 1.25f),
+        )
+        assertEquals(
+            ArtworkDimensions(600, 338),
+            AlbumArtworkHelper.computeProportionalTargetDimensions(800, 450, maxDimensionPx = 600, toleranceScale = 1.25f),
+        )
+
+        // Extreme banner ratio never collapses shortest side to 0px
+        assertEquals(
+            ArtworkDimensions(160, 1),
+            AlbumArtworkHelper.computeProportionalTargetDimensions(5000, 10, maxDimensionPx = 160),
+        )
+
+        // Invalid dimensions handled safely
+        assertEquals(
+            ArtworkDimensions(0, 500),
+            AlbumArtworkHelper.computeProportionalTargetDimensions(0, 500, maxDimensionPx = 512),
+        )
+    }
 }
