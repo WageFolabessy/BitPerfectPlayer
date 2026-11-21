@@ -245,18 +245,21 @@ internal class AudioRouteAndMixerManager(
      * system audio routing and other apps are never left stuck in fixed-volume bit-perfect mode.
      */
     fun clearPreferredMixerAttributesOnApi34(explicitDevice: AudioDeviceInfo?) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return
-        val targets = linkedSetOf<AudioDeviceInfo>()
-        explicitDevice?.let { targets.add(it) }
-        lastConfiguredMixerDevice?.let { targets.add(it) }
-        activeOutputDevice?.takeIf { isUsbOutputDevice(it) }?.let { targets.add(it) }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            val targets = linkedSetOf<AudioDeviceInfo>()
+            explicitDevice?.let { targets.add(it) }
+            lastConfiguredMixerDevice?.let { targets.add(it) }
+            activeOutputDevice?.takeIf { isUsbOutputDevice(it) }?.let { targets.add(it) }
 
-        for (device in targets) {
-            runCatching {
-                audioManager.clearPreferredMixerAttributes(playbackAudioAttributes, device)
+            for (device in targets) {
+                runCatching {
+                    audioManager.clearPreferredMixerAttributes(playbackAudioAttributes, device)
+                }
             }
+            lastConfiguredMixerDevice = null
         }
-        lastConfiguredMixerDevice = null
+        activeNegotiatedMixerBehavior = NegotiatedMixerBehavior.NOT_APPLICABLE_SAFE_MODE
+        activeNegotiatedMixerSummary = "Default System Mixer (Safe Mode)"
     }
 
     fun resolveDiagnosticDeviceAndConnection(fallbackDeviceName: String): Pair<String, OutputConnectionType> {
@@ -351,79 +354,160 @@ internal class AudioRouteAndMixerManager(
         encodingNameResolver: (Int) -> String,
     ): MixerNegotiationResult {
         val safetyMode = safetyController.state().mode
-        if (safetyMode == AudioOutputMode.SAFE_VOLUME_MODE) {
-            return MixerNegotiationResult(
-                behavior = NegotiatedMixerBehavior.NOT_APPLICABLE_SAFE_MODE,
-                summary = "Default System Mixer (Safe Mode — Volume Active)",
-            )
-        }
         if (usbDevice == null) {
-            return MixerNegotiationResult(
-                behavior = NegotiatedMixerBehavior.UNSUPPORTED_NON_USB_OUTPUT,
-                summary = "Default System Mixer (No USB Audio Output Connected)",
-            )
+            return if (safetyMode == AudioOutputMode.SAFE_VOLUME_MODE) {
+                safeModeDefaultMixerResult()
+            } else {
+                MixerNegotiationResult(
+                    behavior = NegotiatedMixerBehavior.UNSUPPORTED_NON_USB_OUTPUT,
+                    summary = "Default System Mixer (No USB Audio Output Connected)",
+                )
+            }
         }
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            return MixerNegotiationResult(
-                behavior = NegotiatedMixerBehavior.UNSUPPORTED_API_BELOW_34,
-                summary = "Clean Native AudioTrack (Android ${Build.VERSION.SDK_INT} < API 34)",
-            )
+            return if (safetyMode == AudioOutputMode.SAFE_VOLUME_MODE) {
+                safeModeDefaultMixerResult()
+            } else {
+                MixerNegotiationResult(
+                    behavior = NegotiatedMixerBehavior.UNSUPPORTED_API_BELOW_34,
+                    summary = "Clean Native AudioTrack (Android ${Build.VERSION.SDK_INT} < API 34)",
+                )
+            }
         }
-        return negotiateApi34BitPerfectMixer(pcmFormat, androidEncoding, channelMask, usbDevice, encodingNameResolver)
+        return negotiateApi34UsbMixer(
+            safetyMode = safetyMode,
+            pcmFormat = pcmFormat,
+            androidEncoding = androidEncoding,
+            channelMask = channelMask,
+            usbDevice = usbDevice,
+            encodingNameResolver = encodingNameResolver,
+        )
     }
 
+    private fun safeModeDefaultMixerResult(): MixerNegotiationResult = MixerNegotiationResult(
+        behavior = NegotiatedMixerBehavior.NOT_APPLICABLE_SAFE_MODE,
+        summary = "Default System Mixer (Safe Mode — Volume Active)",
+    )
+
     @RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
-    private fun negotiateApi34BitPerfectMixer(
+    private fun negotiateApi34UsbMixer(
+        safetyMode: AudioOutputMode,
         pcmFormat: DecodedPcmFormat,
         androidEncoding: Int,
         channelMask: Int,
         usbDevice: AudioDeviceInfo,
         encodingNameResolver: (Int) -> String,
     ): MixerNegotiationResult = try {
-        val bitPerfectCandidates = audioManager.getSupportedMixerAttributes(usbDevice).filter {
-            it.mixerBehavior == AudioMixerAttributes.MIXER_BEHAVIOR_BIT_PERFECT
-        }
-        if (bitPerfectCandidates.isEmpty()) {
-            MixerNegotiationResult(
-                behavior = NegotiatedMixerBehavior.DEFAULT_MIXER_FALLBACK,
-                summary = "Default System Mixer (USB HAL reported 0 bit-perfect profiles)",
+        val supported = audioManager.getSupportedMixerAttributes(usbDevice)
+        val candidates = supported.mapIndexed { idx, attr ->
+            val fmt = attr.format
+            UsbMixerCandidate(
+                index = idx,
+                isBitPerfect = attr.mixerBehavior == AudioMixerAttributes.MIXER_BEHAVIOR_BIT_PERFECT,
+                sampleRateHz = fmt.sampleRate,
+                androidEncoding = fmt.encoding,
+                channelCount = fmt.channelCount,
+                channelMask = fmt.channelMask,
             )
-        } else {
-            // Prefer exact sample rate + encoding + channel mask match.
-            val exactMatch = bitPerfectCandidates.firstOrNull { candidate ->
-                val fmt = candidate.format
-                fmt.sampleRate == pcmFormat.sampleRateHz &&
-                    fmt.encoding == androidEncoding &&
-                    (fmt.channelMask == channelMask || fmt.channelCount == pcmFormat.channelCount)
-            }
-            if (exactMatch == null) {
-                buildNoExactMatchResult(
-                    bitPerfectCandidates = bitPerfectCandidates,
-                    sampleRateHz = pcmFormat.sampleRateHz,
-                    androidEncoding = androidEncoding,
-                    encodingNameResolver = encodingNameResolver,
-                )
-            } else {
-                applyAndVerifyBitPerfectAttribute(usbDevice, exactMatch, encodingNameResolver)
-            }
         }
+        val plan = UsbMixerProfileSelector.buildNegotiationPlan(
+            candidates = candidates,
+            safetyMode = safetyMode,
+            targetSampleRateHz = pcmFormat.sampleRateHz,
+            targetAndroidEncoding = androidEncoding,
+            targetChannelCount = pcmFormat.channelCount,
+            targetChannelMask = channelMask,
+        )
+        executeApi34NegotiationPlan(
+            safetyMode = safetyMode,
+            pcmFormat = pcmFormat,
+            androidEncoding = androidEncoding,
+            usbDevice = usbDevice,
+            supported = supported,
+            plan = plan,
+            encodingNameResolver = encodingNameResolver,
+        )
     } catch (e: IllegalArgumentException) {
-        fallbackApi34MixerError(usbDevice, e)
+        fallbackApi34MixerError(safetyMode, usbDevice, e)
     } catch (e: IllegalStateException) {
-        fallbackApi34MixerError(usbDevice, e)
+        fallbackApi34MixerError(safetyMode, usbDevice, e)
     } catch (e: SecurityException) {
-        fallbackApi34MixerError(usbDevice, e)
+        fallbackApi34MixerError(safetyMode, usbDevice, e)
     } catch (e: UnsupportedOperationException) {
-        fallbackApi34MixerError(usbDevice, e)
+        fallbackApi34MixerError(safetyMode, usbDevice, e)
     }
 
     @RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
-    private fun buildNoExactMatchResult(
-        bitPerfectCandidates: List<AudioMixerAttributes>,
+    private fun executeApi34NegotiationPlan(
+        safetyMode: AudioOutputMode,
+        pcmFormat: DecodedPcmFormat,
+        androidEncoding: Int,
+        usbDevice: AudioDeviceInfo,
+        supported: List<AudioMixerAttributes>,
+        plan: UsbMixerNegotiationPlan,
+        encodingNameResolver: (Int) -> String,
+    ): MixerNegotiationResult {
+        val primaryIdx = plan.primaryCandidateIndex
+        return when (plan.primaryKind) {
+            UsbMixerSelectionKind.BIT_PERFECT -> {
+                val bpResult = applyAndVerifyBitPerfectAttribute(usbDevice, supported[primaryIdx!!], encodingNameResolver)
+                if (bpResult.behavior == NegotiatedMixerBehavior.BIT_PERFECT) {
+                    bpResult
+                } else {
+                    val fallbackIdx = plan.fallbackDefaultCandidateIndex
+                    if (fallbackIdx != null) {
+                        applyAndVerifyDefaultNativeRateAttribute(
+                            usbDevice = usbDevice,
+                            attribute = supported[fallbackIdx],
+                            targetSampleRateHz = pcmFormat.sampleRateHz,
+                            safetyMode = safetyMode,
+                            encodingNameResolver = encodingNameResolver,
+                        ) ?: bpResult
+                    } else {
+                        bpResult
+                    }
+                }
+            }
+            UsbMixerSelectionKind.DEFAULT_NATIVE_RATE -> {
+                applyAndVerifyDefaultNativeRateAttribute(
+                    usbDevice = usbDevice,
+                    attribute = supported[primaryIdx!!],
+                    targetSampleRateHz = pcmFormat.sampleRateHz,
+                    safetyMode = safetyMode,
+                    encodingNameResolver = encodingNameResolver,
+                )
+                    ?: buildFallbackWhenNoProfileConfirmed(
+                        safetyMode,
+                        supported,
+                        pcmFormat.sampleRateHz,
+                        androidEncoding,
+                        encodingNameResolver,
+                    )
+            }
+            UsbMixerSelectionKind.NONE -> {
+                buildFallbackWhenNoProfileConfirmed(safetyMode, supported, pcmFormat.sampleRateHz, androidEncoding, encodingNameResolver)
+            }
+        }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+    private fun buildFallbackWhenNoProfileConfirmed(
+        safetyMode: AudioOutputMode,
+        supported: List<AudioMixerAttributes>,
         sampleRateHz: Int,
         androidEncoding: Int,
         encodingNameResolver: (Int) -> String,
     ): MixerNegotiationResult {
+        if (safetyMode == AudioOutputMode.SAFE_VOLUME_MODE) {
+            return safeModeDefaultMixerResult()
+        }
+        val bitPerfectCandidates = supported.filter { it.mixerBehavior == AudioMixerAttributes.MIXER_BEHAVIOR_BIT_PERFECT }
+        if (bitPerfectCandidates.isEmpty()) {
+            return MixerNegotiationResult(
+                behavior = NegotiatedMixerBehavior.DEFAULT_MIXER_FALLBACK,
+                summary = "Default System Mixer (USB HAL reported 0 matching bit-perfect or native-rate profiles)",
+            )
+        }
         val reported = bitPerfectCandidates
             .take(6)
             .joinToString(", ") { candidate ->
@@ -434,7 +518,7 @@ internal class AudioRouteAndMixerManager(
         val targetEnc = encodingNameResolver(androidEncoding)
         return MixerNegotiationResult(
             behavior = NegotiatedMixerBehavior.DEFAULT_MIXER_FALLBACK,
-            summary = "Default System Mixer (No exact bit-perfect match for $targetRate / $targetEnc; HAL supports: $reported)",
+            summary = "Default System Mixer (No matching USB profile for $targetRate / $targetEnc; HAL bit-perfect: $reported)",
         )
     }
 
@@ -474,11 +558,59 @@ internal class AudioRouteAndMixerManager(
         }
     }
 
-    private fun fallbackApi34MixerError(usbDevice: AudioDeviceInfo, error: RuntimeException): MixerNegotiationResult {
-        clearPreferredMixerAttributesOnApi34(usbDevice)
-        return MixerNegotiationResult(
-            behavior = NegotiatedMixerBehavior.DEFAULT_MIXER_FALLBACK,
-            summary = "Default System Mixer (API 34 negotiation error: ${error.javaClass.simpleName})",
+    @RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+    private fun applyAndVerifyDefaultNativeRateAttribute(
+        usbDevice: AudioDeviceInfo,
+        attribute: AudioMixerAttributes,
+        targetSampleRateHz: Int,
+        safetyMode: AudioOutputMode,
+        encodingNameResolver: (Int) -> String,
+    ): MixerNegotiationResult? {
+        // Hard safety guard: never accidentally apply MIXER_BEHAVIOR_BIT_PERFECT through the default-rate helper.
+        if (attribute.mixerBehavior != AudioMixerAttributes.MIXER_BEHAVIOR_DEFAULT) return null
+        val applied = audioManager.setPreferredMixerAttributes(
+            playbackAudioAttributes,
+            usbDevice,
+            attribute,
         )
+        if (!applied) return null
+
+        val verified = audioManager.getPreferredMixerAttributes(playbackAudioAttributes, usbDevice)
+        val confirmedDefaultNativeRate = verified != null &&
+            verified.mixerBehavior == AudioMixerAttributes.MIXER_BEHAVIOR_DEFAULT &&
+            verified.format.sampleRate == targetSampleRateHz
+        return if (confirmedDefaultNativeRate) {
+            lastConfiguredMixerDevice = usbDevice
+            val verifiedRate = AudioFormatFormatter.formatSampleRateHz(verified.format.sampleRate)
+            val verifiedEnc = encodingNameResolver(verified.format.encoding)
+            val modeNote = if (safetyMode == AudioOutputMode.SAFE_VOLUME_MODE) {
+                "Native Rate, Safe Mode Volume Active"
+            } else {
+                "Native Rate, Bit-Perfect Unavailable, Volume Active"
+            }
+            MixerNegotiationResult(
+                behavior = NegotiatedMixerBehavior.DEFAULT_NATIVE_RATE,
+                summary = "MIXER_BEHAVIOR_DEFAULT ($verifiedRate, $verifiedEnc — $modeNote)",
+            )
+        } else {
+            clearPreferredMixerAttributesOnApi34(usbDevice)
+            null
+        }
+    }
+
+    private fun fallbackApi34MixerError(
+        safetyMode: AudioOutputMode,
+        usbDevice: AudioDeviceInfo,
+        error: RuntimeException,
+    ): MixerNegotiationResult {
+        clearPreferredMixerAttributesOnApi34(usbDevice)
+        return if (safetyMode == AudioOutputMode.SAFE_VOLUME_MODE) {
+            safeModeDefaultMixerResult()
+        } else {
+            MixerNegotiationResult(
+                behavior = NegotiatedMixerBehavior.DEFAULT_MIXER_FALLBACK,
+                summary = "Default System Mixer (API 34 negotiation error: ${error.javaClass.simpleName})",
+            )
+        }
     }
 }

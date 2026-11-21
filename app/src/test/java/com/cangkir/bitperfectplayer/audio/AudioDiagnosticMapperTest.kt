@@ -205,4 +205,69 @@ class AudioDiagnosticMapperTest {
         assertTrue(bitPerfectBypass.stages[2].summary.contains("ReplayGain: Bypassed (Bit-Perfect Active)"))
         assertTrue(bitPerfectBypass.dspEqVolumeStatusSummary.contains("ReplayGain: Bypassed (Bit-Perfect Active)"))
     }
+
+    @Test
+    fun defaultNativeRateUsbMixer_isReportedHonestlyInBothSafeModeAndBitPerfectFallback_neverClaimingBitPerfect() {
+        // 1. Bit-Perfect requested, HAL reported 0 bit-perfect profiles -> negotiated MIXER_BEHAVIOR_DEFAULT @ 96 kHz
+        val bpFallbackNativeRate = AudioDiagnosticMapper.map(
+            AudioDiagnosticInput(
+                isTrackLoaded = true,
+                sourceContainer = "FLAC",
+                sourceCodec = "FLAC",
+                sourceSampleRateHz = 96_000,
+                sourceBitDepth = 24,
+                sourceHeaderVerified = true,
+                decodedPcmEncodingLabel = "PCM 24-bit Packed",
+                decodedEffectiveBitDepth = 24,
+                decodedSampleRateHz = 96_000,
+                decodedChannelCount = 2,
+                decoderName = "MediaExtractor Direct PCM (PCM 24-bit Packed)",
+                audioTrackSampleRateHz = 96_000,
+                audioTrackEncodingLabel = "PCM_24BIT_PACKED",
+                safetyMode = AudioOutputMode.BIT_PERFECT_OPT_IN,
+                apiLevel = 36,
+                outputDeviceName = "KZ EDX Pro 2 USB-C",
+                outputConnectionType = OutputConnectionType.USB_HEADSET,
+                negotiatedMixerBehavior = NegotiatedMixerBehavior.DEFAULT_NATIVE_RATE,
+                negotiatedMixerSummary =
+                "MIXER_BEHAVIOR_DEFAULT (96,000 Hz, PCM_FLOAT — Native Rate, Bit-Perfect Unavailable, Volume Active)",
+            ),
+        )
+        assertFalse(bpFallbackNativeRate.isBitPerfectMixerActive)
+        assertTrue(bpFallbackNativeRate.isNativeSampleRateMixerActive)
+        assertEquals(AudioDiagnosticMapper.BIT_PERFECT_FALLBACK_NATIVE_RATE_LABEL, bpFallbackNativeRate.pathStatusHeadline)
+        assertEquals(VerificationLevel.VERIFIED, bpFallbackNativeRate.stages[3].verificationLevel)
+        assertTrue(bpFallbackNativeRate.dspEqVolumeStatusSummary.contains("System Volume Active"))
+        assertEquals(VerificationLevel.UNVERIFIABLE, bpFallbackNativeRate.stages[5].verificationLevel)
+
+        // 2. Safe Mode on API 34+ USB with MIXER_BEHAVIOR_DEFAULT @ 96 kHz
+        val safeModeNativeRate = AudioDiagnosticMapper.map(
+            AudioDiagnosticInput(
+                isTrackLoaded = true,
+                sourceContainer = "FLAC",
+                sourceCodec = "FLAC",
+                sourceSampleRateHz = 96_000,
+                sourceBitDepth = 24,
+                sourceHeaderVerified = true,
+                decodedPcmEncodingLabel = "PCM 24-bit Packed",
+                decodedEffectiveBitDepth = 24,
+                decodedSampleRateHz = 96_000,
+                decodedChannelCount = 2,
+                decoderName = "MediaExtractor Direct PCM (PCM 24-bit Packed)",
+                audioTrackSampleRateHz = 96_000,
+                audioTrackEncodingLabel = "PCM_24BIT_PACKED",
+                safetyMode = AudioOutputMode.SAFE_VOLUME_MODE,
+                apiLevel = 36,
+                outputDeviceName = "KZ EDX Pro 2 USB-C",
+                outputConnectionType = OutputConnectionType.USB_HEADSET,
+                negotiatedMixerBehavior = NegotiatedMixerBehavior.DEFAULT_NATIVE_RATE,
+                negotiatedMixerSummary = "MIXER_BEHAVIOR_DEFAULT (96,000 Hz, PCM_FLOAT — Native Rate, Safe Mode Volume Active)",
+            ),
+        )
+        assertFalse(safeModeNativeRate.isBitPerfectMixerActive)
+        assertTrue(safeModeNativeRate.isNativeSampleRateMixerActive)
+        assertEquals(AudioDiagnosticMapper.SAFE_MODE_NATIVE_RATE_LABEL, safeModeNativeRate.pathStatusHeadline)
+        assertEquals(VerificationLevel.VERIFIED, safeModeNativeRate.stages[3].verificationLevel)
+        assertTrue(safeModeNativeRate.dspEqVolumeStatusSummary.contains("Safe Mode (System Volume Active)"))
+    }
 }
