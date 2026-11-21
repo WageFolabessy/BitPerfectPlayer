@@ -197,3 +197,19 @@ Having graduated from the verified MVP baseline, the Full APK roadmap authorizes
    - Explicit `ForegroundServiceStartNotAllowedException` (API 31+) and `SecurityException` guards plus defensive `AUDIOFOCUS_REQUEST_FAILED` revert-to-paused handling.
 4. **Adaptive Large-Screen, Foldable, Tablet, & Multi-Window UI (`D10.5`):**
    - Pure-Kotlin `WindowLayoutMetrics` drives adaptive top-level navigation (`NavigationRail` + right-pane `MiniPlayerBar` at `width >= 600.dp`; bottom `NavigationBar` at `< 600.dp`), a balanced 2-column `NowPlayingScreen` (`46%` scaled `220..316.dp` Vinyl + Radial Spectrum left pane / `54%` scrollable controls right pane) in landscape and tablet viewports, and centered `840.dp` max-width containers on `SettingsScreen`, `DiagnosticsScreen`, `QueueScreen`, and `LyricsScreen`.
+
+---
+
+## 8. Version `1.2` Audio Engine Fixes & Playback / Display UX Upgrades
+
+1. **Direct `audio/raw` (`FLAC (PCM)`) Reader (`D11.1`):**
+   - `RawExtractorPcmDecoder` reads `MediaFormat.MIMETYPE_AUDIO_RAW` streams directly from `MediaExtractor` (eliminating Android 16 / Custom ROM `c2.android.raw.decoder` white-noise corruption on 24-bit/96 kHz FLAC) with API 31+ native integer passthrough and API 26–30 lossless float32 conversion via pure-Kotlin `PcmStreamRules`.
+2. **Live Turntable Post-Paused-Load Scratch Reliability (`D11.2`):**
+   - Cold worker startup ordering, API 31+ `AudioTrack.startThresholdInFrames` scratch headroom, and pure-Kotlin `TurntableFlushHeadTracker` eliminate post-`loadTrack(autoPlay = false) -> play()` silence/deadlock while preserving zero-DSP isolation in `BIT_PERFECT_OPT_IN`.
+3. **API 34+ USB `MIXER_BEHAVIOR_DEFAULT` Native Sample-Rate Negotiation (`D11.3`):**
+   - Pure-Kotlin `UsbMixerProfileSelector` negotiates `MIXER_BEHAVIOR_BIT_PERFECT` -> `MIXER_BEHAVIOR_DEFAULT` (native sample rate) in `BIT_PERFECT_OPT_IN`, and strictly `MIXER_BEHAVIOR_DEFAULT` only in `SAFE_VOLUME_MODE`, with honest Stage 4 diagnostics (`DEFAULT_NATIVE_RATE`, never claiming bit-perfect) and unconditional `clearPreferredMixerAttributes` cleanup.
+4. **Passive Queue Icon, Pure-Compose Drag-and-Drop Reorder, & Full-List `All Songs` Search Playback (`D11.4`–`D11.6`):**
+   - Queue top-bar navigation is strictly passive (read-only) across every screen; `QueueScreen` replaces Up/Down arrows with zero-dependency stationary-coordinate drag-and-drop via `Icons.Rounded.DragHandle` (`48.dp`) + unique `QueueSnapshot.entryIds` + `QueueDragReorderMath`; tapping a searched track in `All Songs` loads the full sorted `allSongs` queue at that track's index.
+5. **Configurable Default Homepage & Full Uncropped Album Artwork (`D11.7`, `D11.8`):**
+   - Pure-Kotlin `DefaultHomepage` (`All Songs`, `Folders`, `Artists`, `Albums`, `Recent`, `Favorites`, `Playlists`) persisted in DataStore and backward-compatible offline `.json` backups (`LocalBackupCodec`), applied strictly once on cold startup without hijacking subsequent navigation.
+   - Pure-Kotlin `AlbumArtworkHelper.computeProportionalTargetDimensions` preserves exact original aspect ratios during decode/cache scaling, and `TrackArtworkThumbnail` renders full uncropped artwork (`ContentScale.Fit` on a matte-obsidian backdrop) across all rectangular/square surfaces while preserving the natural circular Vinyl Disc (`CircleShape`, Option B).

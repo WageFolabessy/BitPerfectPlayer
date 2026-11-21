@@ -306,3 +306,28 @@ This file records autonomous architectural, dependency, and environment decision
   - Previously, tapping a track from a 1-result search created a 1-track queue where Next/Previous/Shuffle could not move to other songs. Loading the full sorted `All Songs` queue at the tapped track's index keeps search fast while preserving full library playback continuity.
 - **Rejected Alternatives:** Queueing only the filtered search hits (breaks Next/Previous/Shuffle whenever a specific title query matches 1 track); appending search results after the current queue (violates direct tap-to-play expectation).
 
+---
+
+## D11.7 — Configurable Default Homepage (`DefaultHomepage`) with One-Shot Startup Latch & Backward-Compatible JSON Backup
+- **Decision:**
+  1. Added pure-Kotlin `DefaultHomepage` enum (`ALL_SONGS`, `FOLDERS`, `ARTISTS`, `ALBUMS`, `RECENT`, `FAVORITES`, `PLAYLISTS`, default `ALL_SONGS`, `0` `android.*` imports) in `PersistenceModels.kt`, persisted under DataStore key `default_homepage` in `UserPreferencesRepository.kt`.
+  2. Included optional top-level `"defaultHomepage"` in `LocalBackupPayload` / `LocalBackupCodec` (`schemaVersion = 1`) and wired `UserPreferencesRepository` into `LocalBackupRepository` so offline `.json` exports save `defaultHomepage` and restores apply it while legacy v1.0/v1.1 backups missing the field safely default to `DefaultHomepage.ALL_SONGS`.
+  3. Latched `MainViewModel.initialStartupHomepage` strictly once in `init` (`compareAndSet(null, loaded)`) and routed startup through `BitPerfectStartupNavHost` (`rememberSaveable` start destination + initial `LibraryTab`) so cold launch lands directly on `Playlists` or the chosen `Library` tab with zero screen flash and never hijacks navigation when the user switches tabs or edits the preference in Settings.
+  4. Added a matte-obsidian `"Default Homepage"` row and `DefaultHomepageBottomSheet` (`ModalBottomSheet` with `>= 48.dp` rows) in `SettingsDisplayAndLibrarySection.kt`.
+- **Rationale:**
+  - Lets users who organize around Albums, Folders, Favorites, or Playlists open directly into their preferred view without breaking navigation restoration, configuration changes, or legacy backup files.
+- **Rejected Alternatives:** Reactive `LaunchedEffect(defaultHomepage)` navigating whenever the preference changes (would kick the user out of Settings immediately upon selecting a new default homepage); bumping `LocalBackupCodec.CURRENT_SCHEMA_VERSION` to `2` (unnecessary breaking change when an optional field preserves 100% forward/backward schema compatibility).
+
+---
+
+## D11.8 — Full Uncropped Album Artwork (`ContentScale.Fit`) & Option B Circular Vinyl Disc + `v1.2` Version Bump
+- **Decision:**
+  1. Extracted pure-Kotlin `ArtworkDimensions` and `AlbumArtworkHelper.computeProportionalTargetDimensions(srcWidth, srcHeight, maxDimensionPx, toleranceScale)` (`Double` scale precision, `0` `android.*` imports) and delegated `AlbumArtworkLoader.constrainMaxDimension` to it so square, landscape (`16:9`, `4:3`), and portrait covers strictly preserve their original aspect ratio during decode and cache generation (never center-cropped).
+  2. Updated `TrackArtworkThumbnail` in `UiComponents.kt` (shared across `LibraryTrackList`, `LibraryGroupViews`, `PlaylistsOverview`, `PlaylistDetailView`, `QueueScreen`, `MiniPlayerBar`, and `SwipeableSquareArtwork`) to render `Image(..., contentScale = ContentScale.Fit)` on a matte-dark `MaterialTheme.colorScheme.surfaceVariant` container backdrop with rounded corners.
+  3. Preserved authentic **Option B** circular vinyl disc framing in `VinylDiscPlayer.kt` (`CircleShape` + uniform, distortion-free `ContentScale.Crop` over the aspect-preserved bitmap).
+  4. Bumped `app/build.gradle.kts` to **`versionName = "1.2"` (`versionCode = 3`)** (and updated `SettingsScreen.kt` fallback version string to `"1.2"`).
+- **Rationale:**
+  - Square `1:1` covers fill rectangular/square containers edge-to-edge seamlessly, while non-square covers (`16:9`, `4:3`, portrait) stay 100% uncropped across every browsing and playback surface without compromising the authentic circular vinyl label aesthetic.
+- **Rejected Alternatives:** Forcing a shrunken square inside the circular vinyl center label (Option A; degrades turntable visual fidelity); mutating container aspect ratios per row in `LazyColumn` (breaks vertical rhythm and hairline divider alignment across track lists).
+
+

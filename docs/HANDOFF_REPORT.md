@@ -2,8 +2,8 @@
 
 - **Project:** `com.cangkir.bitperfectplayer` (Kotlin + Jetpack Compose, 100% Offline Android Music Player)
 - **Active Branch:** `feat/v1.2` *(branched from `main` at `b157c4b`)*
-- **Overall Status:** **`feat/v1.2` Audio Engine + Queue/Library UX Upgrades Complete & Software-Verified** *(217 / 217 automated tests passing across 35 suites with `ktlintCheck`, `detekt`, Android Lint, Debug APK, and R8 Release APK clean; physical POCO F4 + Android 16 / USB-C DAC hardware verification pending)*
-- **Tasks Completed:** **17 / 17** (`T0.1` through `T5.4` in `docs/TASKS.md`) + `v1.1` release + `v1.2` audio engine & queue/library UX upgrades
+- **Overall Status:** **`feat/v1.2` Complete & Software-Verified (`versionName = "1.2"`, `versionCode = 3`)** *(222 / 222 automated tests passing across 35 suites with `ktlintCheck`, `detekt`, Android Lint, Debug APK, and R8 Release APK clean; physical POCO F4 + Android 16 / USB-C DAC hardware verification pending)*
+- **Tasks Completed:** **17 / 17** (`T0.1` through `T5.4` in `docs/TASKS.md`) + `v1.1` release + complete `v1.2` release upgrades
 - **Active Blockers:** None (`BLOCKED.md` not required)
 
 ---
@@ -925,4 +925,50 @@ Split the 4 oversized Compose screen files (`LibraryScreen.kt`, `PlaylistsScreen
 
 ### Physical Hardware Verification Pending (Not Executed in Cloud)
 - **Touch Ergonomics & 120 Hz Drag-and-Drop Feel:** Verify tactile haptic feedback, smooth row elevation/swapping across multi-track drags (including top/bottom edge auto-scrolling on 50+ track queues), and unaffected normal vertical scrolling on physical POCO F4 120 Hz display.
+
+---
+
+## 30. `v1.2` Release Finalization — Default Homepage, Uncropped Artwork (Option B), & Version `1.2` (`D11.7`–`D11.8`)
+
+### Delivered Features & Release Metadata
+1. **Configurable Default Homepage ([`PersistenceModels.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/data/PersistenceModels.kt), [`UserPreferencesRepository.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/data/UserPreferencesRepository.kt), [`LocalBackupCodec.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/data/LocalBackupCodec.kt), [`LocalBackupRepository.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/data/LocalBackupRepository.kt), [`MainViewModel.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/MainViewModel.kt), [`BitPerfectAppNav.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/BitPerfectAppNav.kt), [`LibraryTab.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/LibraryTab.kt), [`LibraryScreen.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/library/LibraryScreen.kt), [`SettingsScreen.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/settings/SettingsScreen.kt), [`SettingsDisplayAndLibrarySection.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/settings/SettingsDisplayAndLibrarySection.kt)):**
+   - Added pure-Kotlin `DefaultHomepage` (`ALL_SONGS`, `FOLDERS`, `ARTISTS`, `ALBUMS`, `RECENT`, `FAVORITES`, `PLAYLISTS`; default `ALL_SONGS`) persisted in Jetpack DataStore and backward-compatible offline `.json` backups (`LocalBackupCodec` `schemaVersion = 1`; legacy v1.0/v1.1 backups missing `"defaultHomepage"` safely default to `ALL_SONGS`).
+   - Latched `MainViewModel.initialStartupHomepage` strictly once at startup and routed through `BitPerfectStartupNavHost` (`rememberSaveable` start destination and initial `LibraryTab`) so cold launch lands directly on `Playlists` or the chosen `Library` tab with zero flicker and never hijacks subsequent user tab switches or Settings edits.
+   - Added a matte-obsidian `"Default Homepage"` selector row and `DefaultHomepageBottomSheet` (`ModalBottomSheet` with `>= 48.dp` rows) inside `SettingsDisplaySection`.
+2. **Full Uncropped Album Artwork — Option B ([`AlbumArtworkHelper.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/library/AlbumArtworkHelper.kt), [`AlbumArtworkLoader.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/library/AlbumArtworkLoader.kt), [`UiComponents.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/UiComponents.kt), [`VinylDiscPlayer.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/VinylDiscPlayer.kt)):**
+   - Extracted pure-Kotlin `ArtworkDimensions` and `AlbumArtworkHelper.computeProportionalTargetDimensions(...)` (`Double`-precision proportional max-bound scaling; never center-crops non-square covers during decode or disk-cache generation) and delegated `AlbumArtworkLoader.constrainMaxDimension` to it.
+   - Switched `TrackArtworkThumbnail` (shared across `LibraryTrackList`, `LibraryGroupViews`, `PlaylistsOverview`, `PlaylistDetailView`, `QueueScreen`, `MiniPlayerBar`, and `SwipeableSquareArtwork`) to `ContentScale.Fit` on a rounded matte-dark `surfaceVariant` container backdrop so `1:1` covers fill seamlessly while `16:9`, `4:3`, and portrait covers display 100% intact with zero cropped edges.
+   - Preserved the authentic circular Vinyl Disc center label (`CircleShape` + uniform distortion-free `ContentScale.Crop` over the aspect-preserved bitmap — Option B).
+3. **Version Bump & Documentation Alignment:**
+   - Updated [`app/build.gradle.kts`](../app/build.gradle.kts) to **`versionCode = 3`, `versionName = "1.2"`** (and updated `SettingsScreen.kt` fallback version to `"1.2"`).
+   - Synchronized [`README.md`](../README.md), [`SPEC.md`](../SPEC.md), [`DECISIONS.md`](../DECISIONS.md), and [`docs/HANDOFF_REPORT.md`](HANDOFF_REPORT.md).
+
+### Final `v1.2` Software Verification (`./gradlew clean ktlintCheck detekt testDebugUnitTest lintDebug` + `assembleDebug assembleRelease`)
+- **Kotlin Formatting (`ktlintCheck`):** **PASS — 0 violations** across `main`, `test`, and Kotlin Gradle scripts.
+- **Static Analysis (`detekt`):** **PASS — 0 issues** (0 baseline files).
+- **Automated JVM Unit + Room Migration + Robolectric Compose UI Tests (`testDebugUnitTest`):** **222 / 222 passed** across **35 test suites** (`0` failed, `0` errors, `0` skipped, `0` `@Ignore`), including:
+  - [`PersistenceAndPreferencesTest.kt`](../app/src/test/java/com/cangkir/bitperfectplayer/data/PersistenceAndPreferencesTest.kt): `4 / 4` (verifying `DefaultHomepage.ALL_SONGS` fresh default, DataStore round-trip, and `fromStoredName` fallbacks).
+  - [`LocalBackupCodecTest.kt`](../app/src/test/java/com/cangkir/bitperfectplayer/data/LocalBackupCodecTest.kt): `4 / 4` (+1 verifying `defaultHomepage` JSON round-trip and legacy v1.0/v1.1 backward compatibility).
+  - [`AlbumArtworkHelperTest.kt`](../app/src/test/java/com/cangkir/bitperfectplayer/library/AlbumArtworkHelperTest.kt): `8 / 8` (+1 verifying square `1000x1000 -> 512x512`, landscape `1600x900 -> 512x288`, portrait `900x1600 -> 288x512`, 4:3, tolerance band, and extreme banner aspect preservation).
+  - [`BitPerfectUiBehaviorTest.kt`](../app/src/test/java/com/cangkir/bitperfectplayer/ui/BitPerfectUiBehaviorTest.kt): `27 / 27` (+3 verifying Settings Default Homepage modal picker, `DefaultHomepage.PLAYLISTS` cold start with zero navigation hijack on later pref changes, and `DefaultHomepage.ALBUMS` cold start with manual tab switching).
+- **Compiler, KSP, & R8 Warnings:** **0** Kotlin compiler warnings, **0** KSP warnings, **0** R8 warnings.
+- **Android Lint (`lintDebug` & `lintVitalRelease`):** **0 errors**, **0 warnings across all `/app/src/` Kotlin, manifest, and resource files**.
+- **Merged Release Manifest Version:** Verified `android:versionCode="3"` and `android:versionName="1.2"`.
+- **Debug APK (`assembleDebug`):** `app/build/outputs/apk/debug/app-debug.apk` (`20.24 MB` / `21,224,150 bytes`).
+- **Release APK (`assembleRelease` with R8 optimization):** `app/build/outputs/apk/release/app-release-unsigned.apk` (`2.65 MB` / `2,778,776 bytes`).
+- **Pure-Kotlin Domain Boundary (`PersistenceModels.kt`, `LocalBackupCodec.kt`, `AlbumArtworkHelper.kt`, `LibraryTab.kt` + all core domain modules):** **PASS — 0 `android.*` / `androidx.*` imports**.
+- **Strict Offline & Zero-Permission Audit (Source + All 6 Generated Debug, Release, & UnitTest Manifests):** **PASS — 0 `INTERNET`, 0 `RECORD_AUDIO`, 0 `MANAGE_EXTERNAL_STORAGE`**.
+
+### Complete `v1.2` Physical Hardware Verification Checklist (Not Executed in Cloud)
+1. **POCO F4 (HyperOS / Android 14) + KZ EDX Pro 2 USB-C:**
+   - [ ] **Safe Mode Live Turntable After Auto-Pause:** Trigger a real USB plug-in or route-change `AUTO_PAUSE` (leaving the track loaded via `autoPlay = false`), press Play, and immediately grab/scrub forward (`2x–4x`), hold (`0x`), and reverse (`-2x`) without seeking first; confirm immediate audible scratch response and smooth delta HUD updates.
+   - [ ] **USB-C DAC `MIXER_BEHAVIOR_DEFAULT` Native Sample-Rate Lock:** Play 44.1 kHz and 96 kHz lossless tracks in both Safe Mode and Bit-Perfect Opt-In on a USB DAC / HAL with 0 bit-perfect profiles; verify Stage 4 reports `MIXER_BEHAVIOR_DEFAULT` locked to the native track Hz with system volume working normally, and verify `clearPreferredMixerAttributes` cleanly resets on stop/unplug.
+   - [ ] **Drag-and-Drop Queue Reordering (120 Hz):** Drag queue rows up/down via the leading `48.dp` handle, including multi-row drags and edge auto-scrolling on 50+ track queues; verify haptic feedback, smooth row elevation, active-track highlight staying anchored to the playing song, and normal vertical scrolling across the rest of each row.
+   - [ ] **Passive Queue Top-Bar Icon:** While playing an album or playlist, browse to other Library tabs, Artist/Album/Folder details, and Playlists detail, tapping the top-bar Queue icon each time; verify playback never pauses and the active queue is never overwritten.
+   - [ ] **Full-List `All Songs` Search Playback:** Search in `All Songs` until 1 result remains, tap it, and confirm Next/Previous/Shuffle traverse the entire sorted `All Songs` library seamlessly.
+   - [ ] **Default Homepage Cold Launch & Backup Round-Trip:** Set Default Homepage to `Playlists` (and then `Albums` / `Favorites`) in Settings, confirm Settings does not hijack navigation immediately, force-close & cold-launch the app to confirm direct startup on the chosen view, and verify SAF `.json` backup export/restore preserves `defaultHomepage`.
+   - [ ] **Full Uncropped Non-Square Album Cover Artwork (Option B):** Inspect tracks with `16:9` landscape and portrait cover art across `All Songs`, `Albums`, `Playlists`, `Queue`, `MiniPlayer`, and `Now Playing` Square Cover mode (confirm 100% uncropped `ContentScale.Fit` on matte-obsidian backdrop), and switch to Vinyl Disc mode to confirm distortion-free circular vinyl center framing.
+2. **Android 16 (API 36) / Custom ROM:**
+   - [ ] **`audio/raw` 24-bit/96 kHz FLAC Playback:** Play a 24-bit/96 kHz FLAC file where `MediaExtractor` exposes `audio/raw`; confirm clean noise-free audio via `RawExtractorPcmDecoder` and verify Stages 1–2 diagnostics report `FLAC` + `MediaExtractor Direct PCM (...)`.
+
 
