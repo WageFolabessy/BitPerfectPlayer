@@ -56,6 +56,7 @@ class PlaybackController(
     private val preferencesRepository: UserPreferencesRepository,
     private val persistenceRepository: LocalPersistenceRepository,
     private val fingerprintProvider: AndroidContentFingerprintProvider,
+    private val foregroundPlaybackGate: ForegroundPlaybackGate = ForegroundPlaybackGate(initialAppInForeground = true),
 ) {
     private val appContext = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -96,6 +97,7 @@ class PlaybackController(
 
     private var positionPersistenceJob: Job? = null
     private var fingerprintJob: Job? = null
+    private var foregroundHandshakeJob: Job? = null
     private var hasRestoredInitialSession = false
     private var isRestoreInFlight = false
     private var hasRecordedHistoryForActiveTrack = false
@@ -260,6 +262,8 @@ class PlaybackController(
         _state.update { it.copy(queue = snapshot, activeTrack = newActive) }
 
         if (snapshot.isEmpty) {
+            foregroundHandshakeJob?.cancel()
+            foregroundPlaybackGate.cancelPendingHandshake()
             hasRecordedHistoryForActiveTrack = false
             playCountTracker.clearSession()?.let { persistPlayCountFlush(it) }
             engine.setNextTrack(null)
@@ -287,20 +291,51 @@ class PlaybackController(
             loadActiveTrack(active, startPositionMs = playbackPositionMs.value, autoPlay = true)
             return
         }
+        foregroundHandshakeJob?.cancel()
         val wasCompleted = engine.state.value.status == PlaybackStatus.COMPLETED
         if (wasCompleted) {
             playCountTracker.resetSessionForReplay()?.let { persistPlayCountFlush(it) }
         }
-        if (!hasRecordedHistoryForActiveTrack || wasCompleted) {
-            hasRecordedHistoryForActiveTrack = true
-            resolveFingerprintAndRecordHistory(active, recordHistory = true)
+        if (!foregroundPlaybackGate.needsForegroundServiceHandshake()) {
+            foregroundPlaybackGate.cancelPendingHandshake()
+            if (!hasRecordedHistoryForActiveTrack || wasCompleted) {
+                hasRecordedHistoryForActiveTrack = true
+                resolveFingerprintAndRecordHistory(active, recordHistory = true)
+            }
+            syncNextTrackToEngine()
+            PlaybackForegroundService.startService(appContext, foregroundPlaybackGate)
+            engine.play()
+            return
         }
-        syncNextTrackToEngine()
-        PlaybackForegroundService.startService(appContext)
-        engine.play()
+        val token = foregroundPlaybackGate.beginHandshake()
+        PlaybackForegroundService.startService(appContext, foregroundPlaybackGate)
+        foregroundHandshakeJob = scope.launch {
+            when (foregroundPlaybackGate.awaitServicePromotion(token = token)) {
+                ForegroundHandshakeResult.READY_IMMEDIATELY,
+                ForegroundHandshakeResult.PROMOTED,
+                -> {
+                    if (!hasRecordedHistoryForActiveTrack || wasCompleted) {
+                        hasRecordedHistoryForActiveTrack = true
+                        resolveFingerprintAndRecordHistory(active, recordHistory = true)
+                    }
+                    syncNextTrackToEngine()
+                    engine.play()
+                }
+                ForegroundHandshakeResult.FAILED_START_NOT_ALLOWED,
+                ForegroundHandshakeResult.TIMED_OUT,
+                -> {
+                    engine.notifyBackgroundStartBlocked(
+                        ForegroundPlaybackGate.BACKGROUND_START_BLOCKED_NOTICE,
+                    )
+                }
+                ForegroundHandshakeResult.CANCELLED -> Unit
+            }
+        }
     }
 
     fun pause() {
+        foregroundHandshakeJob?.cancel()
+        foregroundPlaybackGate.cancelPendingHandshake()
         flushPendingPlayCountTime()
         engine.pause()
         persistCurrentPositionAsync()
@@ -384,6 +419,8 @@ class PlaybackController(
     fun sampleCurrentSpectrumWindow(outMonoSamples: FloatArray): Int = engine.sampleCurrentSpectrumWindow(outMonoSamples)
 
     fun stop() {
+        foregroundHandshakeJob?.cancel()
+        foregroundPlaybackGate.cancelPendingHandshake()
         playCountTracker.clearSession()?.let { persistPlayCountFlush(it) }
         persistCurrentPositionAsync()
         engine.setNextTrack(null)
@@ -567,6 +604,8 @@ class PlaybackController(
     }
 
     fun release() {
+        foregroundHandshakeJob?.cancel()
+        foregroundPlaybackGate.cancelPendingHandshake()
         sleepTimerController.release()
         playCountTracker.clearSession()?.let { persistPlayCountFlush(it) }
         persistCurrentPositionAsync()
@@ -716,24 +755,59 @@ class PlaybackController(
     }
 
     private fun loadActiveTrack(track: PlaybackTrack, startPositionMs: Long, autoPlay: Boolean) {
-        hasRecordedHistoryForActiveTrack = autoPlay
+        foregroundHandshakeJob?.cancel()
         trackedTracksByUri[track.uriString] = track
         playCountTracker.startSession(track.uriString, track.durationMs)?.let { persistPlayCountFlush(it) }
-        if (autoPlay) {
-            PlaybackForegroundService.startService(appContext)
-        }
-        val uri = track.uriString.toUri()
-        engine.loadTrack(
-            EngineTrackRequest(
-                uri = uri,
-                fileName = track.fileName,
-                mimeType = track.mimeType,
-                startPositionMs = startPositionMs,
-                autoPlay = autoPlay,
-            ),
+        val request = EngineTrackRequest(
+            uri = track.uriString.toUri(),
+            fileName = track.fileName,
+            mimeType = track.mimeType,
+            startPositionMs = startPositionMs,
+            autoPlay = autoPlay,
         )
-        syncNextTrackToEngine()
-        resolveFingerprintAndRecordHistory(track, autoPlay)
+        if (!autoPlay) {
+            foregroundPlaybackGate.cancelPendingHandshake()
+            hasRecordedHistoryForActiveTrack = false
+            engine.loadTrack(request)
+            syncNextTrackToEngine()
+            resolveFingerprintAndRecordHistory(track, recordHistory = false)
+            return
+        }
+        if (!foregroundPlaybackGate.needsForegroundServiceHandshake()) {
+            foregroundPlaybackGate.cancelPendingHandshake()
+            hasRecordedHistoryForActiveTrack = true
+            PlaybackForegroundService.startService(appContext, foregroundPlaybackGate)
+            engine.loadTrack(request)
+            syncNextTrackToEngine()
+            resolveFingerprintAndRecordHistory(track, recordHistory = true)
+            return
+        }
+        hasRecordedHistoryForActiveTrack = false
+        val token = foregroundPlaybackGate.beginHandshake()
+        PlaybackForegroundService.startService(appContext, foregroundPlaybackGate)
+        foregroundHandshakeJob = scope.launch {
+            when (foregroundPlaybackGate.awaitServicePromotion(token = token)) {
+                ForegroundHandshakeResult.READY_IMMEDIATELY,
+                ForegroundHandshakeResult.PROMOTED,
+                -> {
+                    hasRecordedHistoryForActiveTrack = true
+                    engine.loadTrack(request)
+                    syncNextTrackToEngine()
+                    resolveFingerprintAndRecordHistory(track, recordHistory = true)
+                }
+                ForegroundHandshakeResult.FAILED_START_NOT_ALLOWED,
+                ForegroundHandshakeResult.TIMED_OUT,
+                -> {
+                    engine.loadTrack(request.copy(autoPlay = false))
+                    engine.notifyBackgroundStartBlocked(
+                        ForegroundPlaybackGate.BACKGROUND_START_BLOCKED_NOTICE,
+                    )
+                    syncNextTrackToEngine()
+                    resolveFingerprintAndRecordHistory(track, recordHistory = false)
+                }
+                ForegroundHandshakeResult.CANCELLED -> Unit
+            }
+        }
     }
 
     private fun resolveFingerprintAndRecordHistory(track: PlaybackTrack, recordHistory: Boolean) {

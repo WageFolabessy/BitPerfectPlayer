@@ -173,6 +173,8 @@ class AudioOutputEngine(
                 }
                 val track = activeAudioTrack ?: return@withLock
                 if (!routeAndMixerManager.requestAudioFocusLocked()) {
+                    isPausedFlag.set(true)
+                    trackWriter.safePause(track)
                     _state.update { it.copy(status = PlaybackStatus.PAUSED, errorMessage = "Audio focus unavailable") }
                     return@withLock
                 }
@@ -203,6 +205,28 @@ class AudioOutputEngine(
     fun pause() {
         routeAndMixerManager.resumeAfterTransientFocusLoss = false
         pauseInternal(clearFocus = true, notice = null)
+    }
+
+    fun notifyBackgroundStartBlocked(notice: String) {
+        routeAndMixerManager.resumeAfterTransientFocusLoss = false
+        pauseInternal(clearFocus = true, notice = notice)
+        _state.update { current ->
+            current.copy(
+                status = PlaybackStatus.PAUSED,
+                errorMessage = null,
+                lastAutoPauseNotice = notice,
+            )
+        }
+        enqueueControlTask {
+            if (releasedFlag.get()) return@enqueueControlTask
+            _state.update { current ->
+                current.copy(
+                    status = PlaybackStatus.PAUSED,
+                    errorMessage = null,
+                    lastAutoPauseNotice = notice,
+                )
+            }
+        }
     }
 
     fun beginTurntableScratch(): Boolean =
@@ -489,6 +513,8 @@ class AudioOutputEngine(
         val decoder = activeDecoder ?: return
         val track = activeAudioTrack ?: return
         if (!routeAndMixerManager.requestAudioFocusLocked()) {
+            isPausedFlag.set(true)
+            trackWriter.safePause(track)
             _state.update { it.copy(status = PlaybackStatus.PAUSED, errorMessage = "Audio focus denied") }
             return
         }

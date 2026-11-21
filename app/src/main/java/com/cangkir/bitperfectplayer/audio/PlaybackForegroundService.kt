@@ -1,6 +1,7 @@
 package com.cangkir.bitperfectplayer.audio
 
 import android.Manifest
+import android.app.ForegroundServiceStartNotAllowedException
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -18,6 +19,7 @@ import android.media.session.PlaybackState
 import android.os.Build
 import android.os.IBinder
 import android.os.SystemClock
+import android.util.Log
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import com.cangkir.bitperfectplayer.BitPerfectApplication
@@ -41,6 +43,7 @@ class PlaybackForegroundService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     private lateinit var playbackController: PlaybackController
+    private lateinit var foregroundPlaybackGate: ForegroundPlaybackGate
     private lateinit var albumArtworkLoader: AlbumArtworkLoader
     private lateinit var notificationManager: NotificationManager
     private lateinit var mediaSession: MediaSession
@@ -58,6 +61,7 @@ class PlaybackForegroundService : Service() {
         super.onCreate()
         val app = application as BitPerfectApplication
         playbackController = app.container.playbackController
+        foregroundPlaybackGate = app.container.foregroundPlaybackGate
         albumArtworkLoader = app.container.albumArtworkLoader
         notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
@@ -68,9 +72,23 @@ class PlaybackForegroundService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_PLAY_PAUSE -> playbackController.togglePlayPause()
-            ACTION_NEXT -> playbackController.next(userInitiated = true)
-            ACTION_PREVIOUS -> playbackController.previous()
+            ACTION_PLAY_PAUSE -> {
+                if (playbackController.state.value.isPlaying) {
+                    playbackController.togglePlayPause()
+                } else if (ensurePromotedToForeground()) {
+                    playbackController.togglePlayPause()
+                }
+            }
+            ACTION_NEXT -> {
+                if (ensurePromotedToForeground()) {
+                    playbackController.next(userInitiated = true)
+                }
+            }
+            ACTION_PREVIOUS -> {
+                if (ensurePromotedToForeground()) {
+                    playbackController.previous()
+                }
+            }
             ACTION_STOP -> {
                 playbackController.pause()
                 playbackController.persistCurrentPositionNow()
@@ -79,13 +97,8 @@ class PlaybackForegroundService : Service() {
                 return START_NOT_STICKY
             }
             ACTION_START, null -> {
-                val state = playbackController.state.value
-                syncArtworkForTrack(state.activeTrack)
-                val key = buildNotificationKey(state, resolveArtworkToken(state.activeTrack))
-                if (!isForegroundActive || lastNotificationKey != key) {
-                    promoteToForeground(state, key)
-                }
-                syncMediaSessionOnly(state)
+                ensurePromotedToForeground()
+                syncMediaSessionOnly(playbackController.state.value)
             }
         }
         return START_STICKY
@@ -103,6 +116,8 @@ class PlaybackForegroundService : Service() {
     }
 
     override fun onDestroy() {
+        isForegroundActive = false
+        foregroundPlaybackGate.markServiceStopped()
         playbackController.persistCurrentPositionNow()
         artworkLoadJob?.cancel()
         serviceScope.cancel()
@@ -312,18 +327,44 @@ class PlaybackForegroundService : Service() {
         artworkToken = artworkToken,
     )
 
-    private fun promoteToForeground(state: PlaybackControllerState, notificationKey: NotificationContentKey) {
+    private fun ensurePromotedToForeground(): Boolean {
+        val state = playbackController.state.value
+        syncArtworkForTrack(state.activeTrack)
+        val key = buildNotificationKey(state, resolveArtworkToken(state.activeTrack))
+        return if (!isForegroundActive || lastNotificationKey != key) {
+            promoteToForeground(state, key)
+        } else {
+            foregroundPlaybackGate.markServicePromoted()
+            true
+        }
+    }
+
+    private fun promoteToForeground(state: PlaybackControllerState, notificationKey: NotificationContentKey): Boolean {
         val notification = buildNotification(state)
         val serviceType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
         } else {
             0
         }
-        runCatching {
+        return try {
             ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, serviceType)
             isForegroundActive = true
             lastNotificationKey = notificationKey
+            foregroundPlaybackGate.markServicePromoted()
+            true
+        } catch (e: SecurityException) {
+            handleForegroundStartFailure("SecurityException: ${e.message}", e)
+            false
+        } catch (e: IllegalStateException) {
+            handleForegroundStartFailure(formatIllegalStateStartFailure(e), e)
+            false
         }
+    }
+
+    private fun handleForegroundStartFailure(reason: String, throwable: Throwable) {
+        Log.w(TAG, "Foreground service promotion blocked ($reason)", throwable)
+        isForegroundActive = false
+        foregroundPlaybackGate.markServiceStartFailed(reason)
     }
 
     private fun updateNotification(state: PlaybackControllerState, notificationKey: NotificationContentKey) {
@@ -343,6 +384,7 @@ class PlaybackForegroundService : Service() {
     private fun stopForegroundCompat() {
         isForegroundActive = false
         lastNotificationKey = null
+        foregroundPlaybackGate.markServiceStopped()
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
     }
 
@@ -440,6 +482,7 @@ class PlaybackForegroundService : Service() {
     }
 
     companion object {
+        private const val TAG = "PlaybackForegroundSvc"
         private const val CHANNEL_ID = "bitperfect_playback_channel"
         private const val NOTIFICATION_ID = 1001
 
@@ -455,18 +498,42 @@ class PlaybackForegroundService : Service() {
         private const val REQ_NEXT = 13
         private const val REQ_STOP = 14
 
-        fun startService(context: Context) {
-            val intent = Intent(context, PlaybackForegroundService::class.java).setAction(ACTION_START)
-            runCatching {
-                ContextCompat.startForegroundService(context.applicationContext, intent)
+        fun startService(context: Context, foregroundPlaybackGate: ForegroundPlaybackGate? = null): Boolean {
+            val appContext = context.applicationContext
+            val gate = foregroundPlaybackGate
+                ?: (appContext as? BitPerfectApplication)?.container?.foregroundPlaybackGate
+            val intent = Intent(appContext, PlaybackForegroundService::class.java).setAction(ACTION_START)
+            return try {
+                ContextCompat.startForegroundService(appContext, intent)
+                true
+            } catch (e: SecurityException) {
+                val reason = "SecurityException: ${e.message}"
+                Log.w(TAG, "Blocked from starting PlaybackForegroundService ($reason)", e)
+                gate?.markServiceStartFailed(reason)
+                false
+            } catch (e: IllegalStateException) {
+                val reason = formatIllegalStateStartFailure(e)
+                Log.w(TAG, "Blocked from starting PlaybackForegroundService ($reason)", e)
+                gate?.markServiceStartFailed(reason)
+                false
             }
         }
 
         fun stopService(context: Context) {
-            val intent = Intent(context, PlaybackForegroundService::class.java).setAction(ACTION_STOP)
+            val appContext = context.applicationContext
+            (appContext as? BitPerfectApplication)?.container?.foregroundPlaybackGate?.markServiceStopped()
+            val intent = Intent(appContext, PlaybackForegroundService::class.java).setAction(ACTION_STOP)
             runCatching {
-                context.applicationContext.stopService(intent)
+                appContext.stopService(intent)
             }
+        }
+
+        private fun formatIllegalStateStartFailure(e: IllegalStateException): String = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            e is ForegroundServiceStartNotAllowedException
+        ) {
+            "ForegroundServiceStartNotAllowedException: ${e.message}"
+        } else {
+            "IllegalStateException: ${e.message}"
         }
     }
 }

@@ -1,8 +1,11 @@
 package com.cangkir.bitperfectplayer
 
+import android.app.Activity
 import android.app.Application
 import android.content.Context
+import android.os.Bundle
 import com.cangkir.bitperfectplayer.audio.AudioMetadataReader
+import com.cangkir.bitperfectplayer.audio.ForegroundPlaybackGate
 import com.cangkir.bitperfectplayer.audio.PlaybackController
 import com.cangkir.bitperfectplayer.data.BitPerfectDatabase
 import com.cangkir.bitperfectplayer.data.LocalBackupRepository
@@ -21,6 +24,7 @@ import com.cangkir.bitperfectplayer.lyrics.LyricsRepository
 class AppContainer(context: Context) {
     private val appContext = context.applicationContext
 
+    val foregroundPlaybackGate: ForegroundPlaybackGate = ForegroundPlaybackGate()
     val database: BitPerfectDatabase by lazy { BitPerfectDatabase.getInstance(appContext) }
     val persistenceRepository: LocalPersistenceRepository by lazy { LocalPersistenceRepository(database) }
     val preferencesRepository: UserPreferencesRepository by lazy { UserPreferencesRepository.fromContext(appContext) }
@@ -72,6 +76,7 @@ class AppContainer(context: Context) {
             preferencesRepository = preferencesRepository,
             persistenceRepository = persistenceRepository,
             fingerprintProvider = fingerprintProvider,
+            foregroundPlaybackGate = foregroundPlaybackGate,
         )
     }
 }
@@ -80,8 +85,33 @@ class BitPerfectApplication : Application() {
     lateinit var container: AppContainer
         private set
 
+    private var startedActivityCount: Int = 0
+
     override fun onCreate() {
         super.onCreate()
         container = AppContainer(this)
+        registerActivityLifecycleCallbacks(
+            object : ActivityLifecycleCallbacks {
+                override fun onActivityStarted(activity: Activity) {
+                    startedActivityCount += 1
+                    container.foregroundPlaybackGate.setAppInForeground(startedActivityCount > 0)
+                }
+
+                override fun onActivityStopped(activity: Activity) {
+                    startedActivityCount = (startedActivityCount - 1).coerceAtLeast(0)
+                    container.foregroundPlaybackGate.setAppInForeground(startedActivityCount > 0)
+                }
+
+                override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
+
+                override fun onActivityResumed(activity: Activity) = Unit
+
+                override fun onActivityPaused(activity: Activity) = Unit
+
+                override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
+
+                override fun onActivityDestroyed(activity: Activity) = Unit
+            },
+        )
     }
 }
