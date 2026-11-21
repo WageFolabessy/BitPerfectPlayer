@@ -187,7 +187,7 @@ Having graduated from the verified MVP baseline, the Full APK roadmap authorizes
 ## 7. Version `1.1` Architectural Hardening & Android 17 (`targetSdk = 37`) Readiness
 
 1. **Late-2026 Toolchain & Build-Time Static Analysis (`D10.1`):**
-   - Kotlin `2.4.21` + Jetpack Compose BOM `2026.09.00` (with `AGP 9.5.1`, `KSP 2.3.14`, `JDK 25`, `compileSdk = 37`, `targetSdk = 37`).
+   - Kotlin `2.4.21` + Jetpack Compose BOM `2026.09.00` (with `AGP 9.5.2`, `KSP 2.3.14`, `JDK 25`, `compileSdk = 37`, `targetSdk = 37`).
    - Build-time `ktlint` (`14.2.0`, `.editorconfig`) and `detekt` (`2.0.0-alpha.6`, `config/detekt/detekt.yml`) enforced in Gradle and GitHub Actions CI with `0` violations and `0` baseline suppression files.
 2. **Modular Audio Engine & Feature UI Sub-Packages (`D10.2`, `D10.3`):**
    - `AudioOutputEngine.kt` decomposed into 4 focused `internal` collaborators (`AudioRouteAndMixerManager`, `AudioTrackWriter`, `GaplessPreloadController`, `TurntableScratchRunner`) with every method verified well below ART's `16,384` instruction JIT/AOT ceiling (`max <= 457` DEX code units).

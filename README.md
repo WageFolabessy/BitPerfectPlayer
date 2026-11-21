@@ -151,7 +151,7 @@ Preferences (Safe Mode default, shuffle, repeat, gapless toggle, ReplayGain sett
 - **Application ID / Namespace:** `com.cangkir.bitperfectplayer` (`versionName = "1.1"`, `versionCode = 2`)
 - **SDK Levels:** `minSdk = 26` (Android 8.0), `compileSdk = 37`, `targetSdk = 37`
 - **Toolchain:** Gradle Wrapper `9.9.1`, Gradle Daemon JVM `25`, Java Compatibility `JavaVersion.VERSION_11`
-- **Core Stack:** Android Gradle Plugin `9.5.1`, Kotlin `2.4.21`, KSP `2.3.14`
+- **Core Stack:** Android Gradle Plugin `9.5.2`, Kotlin `2.4.21`, KSP `2.3.14`
 - **Code Quality & Static Analysis (Build-Time Only):** `ktlint` Gradle plugin `14.2.0` (MIT, [`.editorconfig`](.editorconfig)) and `detekt` `2.0.0-alpha.6` (Apache 2.0, [`config/detekt/detekt.yml`](config/detekt/detekt.yml))
 - **AndroidX & Libraries (all permissive Apache 2.0 / MIT dependencies; no FFmpeg, NDK, or GPL/LGPL libraries):**
   - Jetpack Compose BOM `2026.09.00` (Material 3, UI, Material Icons Extended)

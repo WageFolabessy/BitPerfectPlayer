@@ -8,7 +8,7 @@ Thank you for your interest in contributing to **BitPerfectPlayer** (`com.cangki
 
 - **JDK:** 25 (configured in `gradle/gradle-daemon-jvm.properties`)
 - **Android SDK:** `compileSdk = 37`, `targetSdk = 37`, `minSdk = 26`
-- **Build System:** Gradle Wrapper (`9.9.1`), Android Gradle Plugin `9.5.1`, Kotlin `2.4.21`, KSP `2.3.14`
+- **Build System:** Gradle Wrapper (`9.9.1`), Android Gradle Plugin `9.5.2`, Kotlin `2.4.21`, KSP `2.3.14`
 - **Code Quality & Static Analysis (Build-Time Only):** `ktlint` Gradle plugin `14.2.0` (configured via [`.editorconfig`](.editorconfig)) and `detekt` `2.0.0-alpha.6` (configured via [`config/detekt/detekt.yml`](config/detekt/detekt.yml))
 - **Local SDK Config:** Set `ANDROID_HOME` / `ANDROID_SDK_ROOT`, or keep an untracked `local.properties` file pointing to your local Android SDK. Never commit `local.properties` or `.idea/` IDE state.
 
@@ -32,7 +32,7 @@ Thank you for your interest in contributing to **BitPerfectPlayer** (`com.cangki
    - Never claim bit-perfect output on fallback paths, non-USB routes, or API < 34, and preserve the internal DAC firmware verification boundary notice.
 
 4. **Pure-Kotlin Domain Boundary and Database Safety:**
-   - Keep core domain modules (content fingerprinting, `.lrc` parsing, WAV header/PCM parsing, playback queue, safety state machine, diagnostics mapping, ReplayGain, sleep timer, sort policy, backup JSON codec, `.m3u8` codec, turntable DSP, FFT spectrum DSP) free of `android.*` imports so they remain fast and deterministic under JVM unit tests.
+   - Keep core domain modules (content fingerprinting, `.lrc` parsing, WAV header/PCM parsing, playback queue, safety state machine, diagnostics mapping, ReplayGain, sleep timer, sort policy, backup JSON codec, `.m3u8` codec, turntable DSP, FFT spectrum DSP, foreground playback gate, adaptive layout metrics) free of `android.*` imports so they remain fast and deterministic under JVM unit tests.
    - Any Room schema changes in `BitPerfectDatabase` must include explicit non-destructive SQLite `Migration` objects and migration unit tests (never use `fallbackToDestructiveMigration()`).
 
 5. **120 Hz Compose UI Hygiene:**

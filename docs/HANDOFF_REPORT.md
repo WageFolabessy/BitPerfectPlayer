@@ -1,8 +1,8 @@
 # BitPerfectPlayer MVP — Autonomous Build Handoff Report
 
 - **Project:** `com.cangkir.bitperfectplayer` (Kotlin + Jetpack Compose, 100% Offline Android Music Player)
-- **Active Branch:** `feat/v1.1` *(branched from `main` after `v1.0` release)*
-- **Overall Status:** **`v1.0` Released on `main`; `feat/v1.1` Repository Hygiene Complete** *(180 / 180 automated tests passing across 32 suites after removing leftover Android Studio template tests; core playback, safety, and release APK verified on POCO F4 + KZ EDX Pro 2 USB-C, with final Section 18–19 ART/visual polish pending follow-up on-device check)*
+- **Active Branch:** `main` *(merged from `feat/v1.1`; release tag `v1.1` published)*
+- **Overall Status:** **Complete — `v1.1` Released on `main`** *(197 / 197 automated tests passing across 34 suites with `ktlintCheck`, `detekt`, and Android Lint clean; signed `v1.1` Release APK verified, with on-device `v1.1` adaptive layout & Android 17 hardening re-checks pending physical hardware testing)*
 - **Tasks Completed:** **17 / 17** (`T0.1` through `T5.4` in `docs/TASKS.md`)
 - **Active Blockers:** None (`BLOCKED.md` not required)
 
@@ -840,4 +840,20 @@ Split the 4 oversized Compose screen files (`LibraryScreen.kt`, `PlaylistsScreen
 - **Strict Offline & Zero-Permission Audit (Source + All 8 Generated Debug, Release, & UnitTest Manifests):** **PASS — 0 `INTERNET`, 0 `RECORD_AUDIO`, 0 `MANAGE_EXTERNAL_STORAGE`**.
 - **Physical Hardware Verification Pending (Not Executed in Cloud):** Real POCO F4 (Android 14 / HyperOS) + KZ EDX Pro 2 USB-C portrait/landscape/split-screen runtime testing and Android 17 (`API 37`) `adb shell cmd audio set-enable-hardening throw` verification remain unverified in this software-only environment.
 
+---
 
+## 27. Release `v1.1` Finalization, `AGP 9.5.2` Patch, Merge to `main`, & Signed APK Publication
+
+### Delivered Repository & Release Actions
+1. **Toolchain Patch & Documentation Synchronization (`feat/v1.1`):**
+   - Committed and pushed [`gradle/libs.versions.toml`](../gradle/libs.versions.toml) (`agp = "9.5.1"` -> `"9.5.2"`, `e7e4843`).
+   - Synchronized [`README.md`](../README.md), [`CONTRIBUTING.md`](../CONTRIBUTING.md), [`SPEC.md`](../SPEC.md), [`DECISIONS.md`](../DECISIONS.md), and [`docs/HANDOFF_REPORT.md`](HANDOFF_REPORT.md) with `AGP 9.5.2`, `versionName = "1.1"` (`versionCode = 2`), `197` automated tests across `34` suites, and the `v1.1` pure-Kotlin domain additions (`ForegroundPlaybackGate`, `WindowLayoutMetrics`).
+2. **Branch Merge (`feat/v1.1` -> `main`):**
+   - Fast-forward merged `feat/v1.1` into `main` (retaining `feat/v1.1`) and pushed `main` to `origin`.
+3. **Annotated Tag & GitHub Release Publication (`v1.1`):**
+   - Created and pushed annotated Git tag `v1.1` matching `versionName = "1.1"`, `versionCode = 2`.
+   - Published GitHub Release **`BitPerfectPlayer v1.1`** (`Latest`) at `https://github.com/WageFolabessy/BitPerfectPlayer/releases/tag/v1.1` attaching `BitPerfectPlayer-v1.1-release.apk` (`2,754,192` bytes).
+   - **Verified Signed Release APK Integrity & Privacy:**
+     - **APK SHA-256:** `87590aa8095269aae9dd02df3220c297c8ed1647529f51da34d7783e3b0a370e`
+     - **Signing Scheme:** `Verifies` via APK Signature Scheme v2 (`CN=Endricho Folabessy`, Cert SHA-256: `c4dd7e0c9f5b883f56b268e54bd02361788fc9d8f52c313075c4f0447eef89d4`, matching `v1.0` for seamless in-place upgrade)
+     - **Compiled APK Manifest Privacy Check:** Zero `INTERNET`, `RECORD_AUDIO`, or `MANAGE_EXTERNAL_STORAGE` permissions.

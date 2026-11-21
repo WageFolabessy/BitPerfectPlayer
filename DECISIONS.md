@@ -6,7 +6,7 @@ This file records autonomous architectural, dependency, and environment decision
 
 ## D0.1 — Build Environment Provisioning & `gradlew` Executable Bit (`T0.1`)
 - **Decision:** Provisioned Temurin JDK 25 (`25.0.3+9`, matching `gradle/gradle-daemon-jvm.properties` `toolchainVersion=25`) and Android SDK 37 (`platforms;android-37.0`, `build-tools;37.0.0`, `platform-tools`) outside the repository in `/home/antigravity/`, pointed untracked/gitignored `local.properties` at the local SDK directory, and set the executable mode (`+x`) on `gradlew`.
-- **Rationale:** Preserves the exact Android Studio project baseline (`compileSdk { version = release(37) }`, `targetSdk = 37`, `minSdk = 26`, AGP `9.4.1`, Kotlin `2.2.10`, Gradle `9.6.0`) *(baseline later upgraded to AGP `9.5.1` and Gradle `9.9.1`)* without downgrading SDK levels or modifying Gradle wrapper/daemon files. Marking `gradlew` executable allows `./gradlew` invocations to succeed directly on Linux/CI hosts.
+- **Rationale:** Preserves the exact Android Studio project baseline (`compileSdk { version = release(37) }`, `targetSdk = 37`, `minSdk = 26`, AGP `9.4.1`, Kotlin `2.2.10`, Gradle `9.6.0`) *(baseline later upgraded to AGP `9.5.2`, Kotlin `2.4.21`, and Gradle `9.9.1`)* without downgrading SDK levels or modifying Gradle wrapper/daemon files. Marking `gradlew` executable allows `./gradlew` invocations to succeed directly on Linux/CI hosts.
 - **Rejected Alternatives:** Downgrading `compileSdk` or `toolchainVersion` (prohibited by workspace invariants); committing `local.properties` (prohibited by Git hygiene rules).
 
 ---
@@ -151,7 +151,7 @@ This file records autonomous architectural, dependency, and environment decision
 
 ## D10.1 — Late-2026 Kotlin/Compose Toolchain Upgrade & Build-Time `ktlint` + `detekt` Integration
 - **Decision:**
-  1. Upgraded Kotlin from `2.2.10` to **`2.4.21`** while preserving `AGP 9.5.1` (built-in Kotlin), `KSP 2.3.14`, `JDK 25`, `Gradle 9.9.1`, `compileSdk = 37`, `targetSdk = 37`, and `minSdk = 26`.
+  1. Upgraded Kotlin from `2.2.10` to **`2.4.21`** while preserving `AGP 9.5.1` (built-in Kotlin) *(patch-upgraded to `AGP 9.5.2` prior to `v1.1` release)*, `KSP 2.3.14`, `JDK 25`, `Gradle 9.9.1`, `compileSdk = 37`, `targetSdk = 37`, and `minSdk = 26`.
   2. Upgraded Jetpack Compose BOM from `2026.02.01` to **`2026.09.00`** (Compose `1.12.1` + Material 3 `1.4.0`), and migrated `BitPerfectUiBehaviorTest` from deprecated `androidx.compose.ui.test.junit4.createComposeRule` to `androidx.compose.ui.test.junit4.v2.createComposeRule`.
   3. Integrated two strictly build-time-only Gradle plugins (permissive open-source licenses, `0` runtime bytes, `0` permissions):
      - **`org.jlleitschuh.gradle.ktlint` `14.2.0`** (MIT) with root `.editorconfig` (`ktlint_code_style = android_studio`, `max_line_length = 140`, trailing commas enabled, `@Composable` PascalCase naming exception).
