@@ -149,4 +149,57 @@ class PlaybackQueueManagerTest {
         assertEquals(listOf("Same", "Other", "Same"), restored.items)
         assertEquals(2, restored.currentIndex)
     }
+
+    @Test
+    fun moveItem_preservesActiveTrackIdentityAndEntryIdsAcrossAllDragDirectionsAndGuardsBounds() {
+        val manager = PlaybackQueueManager<String>()
+        val initial = manager.setQueue(listOf("T0", "T1", "T2", "T3", "T4"), startIndex = 2) // Active = T2
+        val originalEntryIds = initial.entryIds
+        assertEquals(5, originalEntryIds.size)
+        assertEquals(5, originalEntryIds.toSet().size)
+
+        // 1. Move active track UP (2 -> 0): active index follows T2 to 0, entryId moves with T2
+        assertTrue(manager.moveItem(2, 0))
+        val afterActiveUp = manager.snapshot()
+        assertEquals(listOf("T2", "T0", "T1", "T3", "T4"), afterActiveUp.items)
+        assertEquals(0, afterActiveUp.currentIndex)
+        assertEquals("T2", afterActiveUp.currentItem)
+        assertEquals(originalEntryIds[2], afterActiveUp.entryIds[0])
+
+        // 2. Move active track DOWN (0 -> 3): active index follows T2 to 3
+        assertTrue(manager.moveItem(0, 3))
+        val afterActiveDown = manager.snapshot()
+        assertEquals(listOf("T0", "T1", "T3", "T2", "T4"), afterActiveDown.items)
+        assertEquals(3, afterActiveDown.currentIndex)
+        assertEquals("T2", afterActiveDown.currentItem)
+        assertEquals(originalEntryIds[2], afterActiveDown.entryIds[3])
+
+        // 3. Move track from ABOVE active (index 0: T0) to BELOW active (index 4) -> currentIndex shifts 3 -> 2
+        assertTrue(manager.moveItem(0, 4))
+        val afterAboveToBelow = manager.snapshot()
+        assertEquals(listOf("T1", "T3", "T2", "T4", "T0"), afterAboveToBelow.items)
+        assertEquals(2, afterAboveToBelow.currentIndex)
+        assertEquals("T2", afterAboveToBelow.currentItem)
+
+        // 4. Move track from BELOW active (index 4: T0) to ABOVE active (index 1) -> currentIndex shifts 2 -> 3
+        assertTrue(manager.moveItem(4, 1))
+        val afterBelowToAbove = manager.snapshot()
+        assertEquals(listOf("T1", "T0", "T3", "T2", "T4"), afterBelowToAbove.items)
+        assertEquals(3, afterBelowToAbove.currentIndex)
+        assertEquals("T2", afterBelowToAbove.currentItem)
+
+        // 5. Move within same side above active (0 -> 1) -> currentIndex stays 3
+        assertTrue(manager.moveItem(0, 1))
+        assertEquals(3, manager.snapshot().currentIndex)
+        assertEquals("T2", manager.currentItem)
+
+        // 6. Same-index no-op and out-of-bounds guards
+        assertTrue(manager.moveItem(3, 3))
+        assertEquals(3, manager.snapshot().currentIndex)
+        assertFalse(manager.moveItem(-1, 2))
+        assertFalse(manager.moveItem(2, -1))
+        assertFalse(manager.moveItem(0, 5))
+        assertFalse(manager.moveItem(5, 0))
+        assertEquals("T2", manager.currentItem)
+    }
 }

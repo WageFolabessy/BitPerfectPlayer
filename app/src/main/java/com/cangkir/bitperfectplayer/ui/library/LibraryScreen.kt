@@ -32,10 +32,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.cangkir.bitperfectplayer.audio.AudioOutputMode
-import com.cangkir.bitperfectplayer.audio.BrowsingQueueContext
 import com.cangkir.bitperfectplayer.audio.PlaybackControllerState
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
 import com.cangkir.bitperfectplayer.audio.QueueContext
+import com.cangkir.bitperfectplayer.audio.QueueContextResolver
 import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
 import com.cangkir.bitperfectplayer.library.GroupSortScope
 import com.cangkir.bitperfectplayer.library.GroupSortSpec
@@ -68,7 +68,7 @@ fun LibraryScreen(
     onAddToPlaylist: (PlaybackTrack) -> Unit,
     onShowTrackInfo: (PlaybackTrack) -> Unit,
     onToggleFavorite: (PlaybackTrack) -> Unit,
-    onOpenQueue: (BrowsingQueueContext?) -> Unit,
+    onOpenQueue: () -> Unit,
     onOpenDiagnostics: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -137,24 +137,6 @@ fun LibraryScreen(
         else -> null
     }
 
-    val currentBrowsingContext: BrowsingQueueContext? = remember(
-        openedGroup,
-        openedGroupContext,
-        selectedTab,
-        libraryState.recentlyPlayed,
-        libraryState.favorites,
-    ) {
-        when {
-            openedGroup != null && openedGroupContext != null && openedGroup.tracks.isNotEmpty() ->
-                BrowsingQueueContext(context = openedGroupContext, tracks = openedGroup.tracks)
-            selectedTab == LibraryTab.RECENT && libraryState.recentlyPlayed.isNotEmpty() ->
-                BrowsingQueueContext(context = QueueContext.recent(), tracks = libraryState.recentlyPlayed)
-            selectedTab == LibraryTab.FAVORITES && libraryState.favorites.isNotEmpty() ->
-                BrowsingQueueContext(context = QueueContext.favorites(), tracks = libraryState.favorites)
-            else -> null
-        }
-    }
-
     val sortPrefs = libraryState.sortPreferences
 
     activeTrackSortSheet?.let { scope ->
@@ -209,7 +191,7 @@ fun LibraryScreen(
                 isBitPerfectActive = isBitPerfectActive,
                 onCloseGroup = { openedGroupName = null },
                 onImportFolder = launchImportFolder,
-                onOpenQueue = { onOpenQueue(currentBrowsingContext) },
+                onOpenQueue = onOpenQueue,
                 onOpenDiagnostics = onOpenDiagnostics,
             )
         },
@@ -315,7 +297,20 @@ fun LibraryScreen(
                             activeTrackUri = playbackState.activeTrack?.uriString,
                             favoriteTrackUris = favoriteTrackUris,
                             favoriteFingerprints = libraryState.favoriteFingerprints,
-                            onPlayTracks = { tracks, index -> onPlayTracks(tracks, index, QueueContext.allSongs()) },
+                            onPlayTracks = { displayedTracks, displayedIndex ->
+                                val tappedTrack = displayedTracks.getOrNull(displayedIndex)
+                                if (tappedTrack != null && searchQuery.isNotBlank()) {
+                                    val (fullQueue, fullIndex) = QueueContextResolver.resolveFullListPlaybackSelection(
+                                        fullTrackList = libraryState.allSongs,
+                                        tappedTrack = tappedTrack,
+                                        fallbackTracks = displayedTracks,
+                                        fallbackIndex = displayedIndex,
+                                    )
+                                    onPlayTracks(fullQueue, fullIndex, QueueContext.allSongs())
+                                } else {
+                                    onPlayTracks(displayedTracks, displayedIndex, QueueContext.allSongs())
+                                }
+                            },
                             onEnqueueTrack = onEnqueueTrack,
                             onEnqueueNext = onEnqueueNext,
                             onAddToPlaylist = onAddToPlaylist,

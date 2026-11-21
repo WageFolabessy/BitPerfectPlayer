@@ -32,70 +32,88 @@ class QueueContextTest {
     }
 
     @Test
-    fun shouldSwitchToBrowsingContext_switchesForDifferentScopedContextAndPreservesSameOrNull() {
-        val albumATracks = listOf(track(1, "A1", album = "Album A"), track(2, "A2", album = "Album A"))
-        val albumBTracks = listOf(track(3, "B1", album = "Album B"), track(4, "B2", album = "Album B"))
+    fun resolveFullListPlaybackSelection_locatesSearchedTrackInFullSortedListAndFallsBackSafely() {
+        val t1 = track(1, "Alpha")
+        val t2 = track(2, "Beta")
+        val t3 = track(3, "Peacemaker")
+        val t4 = track(4, "Zulu")
+        val fullAllSongs = listOf(t1, t2, t3, t4)
+        val filteredSingle = listOf(t3)
 
-        // Opening Queue while viewing Album B while Album A is active -> switch immediately
-        assertTrue(
-            QueueContextResolver.shouldSwitchToBrowsingContext(
-                activeContext = QueueContext.album("Album A"),
-                isActiveQueueEmpty = false,
-                browsingContext = BrowsingQueueContext(QueueContext.album("Album B"), albumBTracks),
-            ),
+        // Searching "Peacemaker" in All Songs returns a 1-item filtered list, but playback loads fullAllSongs @ index 2
+        val (resolvedTracks, resolvedIndex) = QueueContextResolver.resolveFullListPlaybackSelection(
+            fullTrackList = fullAllSongs,
+            tappedTrack = t3,
+            fallbackTracks = filteredSingle,
+            fallbackIndex = 0,
         )
+        assertEquals(fullAllSongs, resolvedTracks)
+        assertEquals(2, resolvedIndex)
 
-        // Opening Queue while viewing Album A while All Songs is active -> switch immediately
-        assertTrue(
-            QueueContextResolver.shouldSwitchToBrowsingContext(
-                activeContext = QueueContext.allSongs(),
-                isActiveQueueEmpty = false,
-                browsingContext = BrowsingQueueContext(QueueContext.album("Album A"), albumATracks),
-            ),
+        // Safe fallback when tapped track is unexpectedly absent from fullTrackList
+        val orphan = track(99, "Orphan")
+        val (fallbackTracks, fallbackIdx) = QueueContextResolver.resolveFullListPlaybackSelection(
+            fullTrackList = fullAllSongs,
+            tappedTrack = orphan,
+            fallbackTracks = listOf(orphan),
+            fallbackIndex = 0,
         )
+        assertEquals(listOf(orphan), fallbackTracks)
+        assertEquals(0, fallbackIdx)
+    }
 
-        // Opening Queue while viewing the SAME active Album (case-insensitive) -> preserve active playback
-        assertFalse(
-            QueueContextResolver.shouldSwitchToBrowsingContext(
-                activeContext = QueueContext.album("Album A"),
-                isActiveQueueEmpty = false,
-                browsingContext = BrowsingQueueContext(QueueContext.album("album a"), albumATracks),
-            ),
-        )
-
-        // Opening Queue from NowPlaying or All Songs (null browsingContext) -> preserve active playback
-        assertFalse(
-            QueueContextResolver.shouldSwitchToBrowsingContext(
-                activeContext = QueueContext.album("Album A"),
-                isActiveQueueEmpty = false,
-                browsingContext = null,
-            ),
+    @Test
+    fun queueDragReorderMath_swapsAcrossNeighborMidpointsWithHysteresisAndComputesEdgeScroll() {
+        val visible = listOf(
+            VisibleQueueItemMetric(index = 0, offsetPx = 0, sizePx = 100),
+            VisibleQueueItemMetric(index = 1, offsetPx = 100, sizePx = 100),
+            VisibleQueueItemMetric(index = 2, offsetPx = 200, sizePx = 100),
         )
 
-        // Never auto-switch for ALL_SONGS or empty browsing track lists
-        assertFalse(
-            QueueContextResolver.shouldSwitchToBrowsingContext(
-                activeContext = QueueContext.album("Album A"),
-                isActiveQueueEmpty = false,
-                browsingContext = BrowsingQueueContext(QueueContext.allSongs(), albumBTracks),
-            ),
-        )
-        assertFalse(
-            QueueContextResolver.shouldSwitchToBrowsingContext(
-                activeContext = QueueContext.album("Album A"),
-                isActiveQueueEmpty = false,
-                browsingContext = BrowsingQueueContext(QueueContext.album("Album B"), emptyList()),
-            ),
-        )
+        // Dragging row 0 down by 40 px does not yet cross row 1 midpoint (150 px)
+        assertNull(QueueDragReorderMath.computeDragSwap(visible[0], draggedDistanceY = 40f, visibleItems = visible))
 
-        // If active queue was emptied, opening Queue from the same album repopulates it paused
-        assertTrue(
-            QueueContextResolver.shouldSwitchToBrowsingContext(
-                activeContext = QueueContext.album("Album A"),
-                isActiveQueueEmpty = true,
-                browsingContext = BrowsingQueueContext(QueueContext.album("Album A"), albumATracks),
-            ),
+        // Dragging row 0 down by 60 px (bottom = 160 > 152) swaps 0 -> 1 with exact -100 px offset adjustment
+        val downSwap = QueueDragReorderMath.computeDragSwap(visible[0], draggedDistanceY = 60f, visibleItems = visible)
+        assertNotNull(downSwap)
+        assertEquals(0, downSwap!!.fromIndex)
+        assertEquals(1, downSwap.toIndex)
+        assertEquals(-100f, downSwap.offsetAdjustmentPx, 0.001f)
+
+        // After applying -100 px adjustment (remaining distance = -40 px at index 1), row does NOT bounce back up
+        assertNull(QueueDragReorderMath.computeDragSwap(visible[1], draggedDistanceY = -40f, visibleItems = visible))
+
+        // Dragging row 1 up by -60 px (top = 40 < 48) swaps 1 -> 0 with exact +100 px offset adjustment
+        val upSwap = QueueDragReorderMath.computeDragSwap(visible[1], draggedDistanceY = -60f, visibleItems = visible)
+        assertNotNull(upSwap)
+        assertEquals(1, upSwap!!.fromIndex)
+        assertEquals(0, upSwap.toIndex)
+        assertEquals(100f, upSwap.offsetAdjustmentPx, 0.001f)
+
+        // Edge auto-scroll triggers gently near viewport edges only when list can scroll in that direction
+        val scrollDown = QueueDragReorderMath.computeEdgeAutoScrollPx(
+            draggedTop = 520f,
+            draggedBottom = 600f,
+            viewportStart = 0,
+            viewportEnd = 600,
+            edgeZonePx = 80f,
+            maxSpeedPx = 12f,
+            canScrollBackward = true,
+            canScrollForward = true,
         )
+        assertTrue(scrollDown > 0f && scrollDown <= 12f)
+
+        val scrollUpBlocked = QueueDragReorderMath.computeEdgeAutoScrollPx(
+            draggedTop = 0f,
+            draggedBottom = 80f,
+            viewportStart = 0,
+            viewportEnd = 600,
+            edgeZonePx = 80f,
+            maxSpeedPx = 12f,
+            canScrollBackward = false,
+            canScrollForward = true,
+        )
+        assertEquals(0f, scrollUpBlocked, 0.001f)
     }
 
     @Test

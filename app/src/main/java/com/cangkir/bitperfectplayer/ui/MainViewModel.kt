@@ -5,11 +5,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.cangkir.bitperfectplayer.AppContainer
-import com.cangkir.bitperfectplayer.audio.BrowsingQueueContext
 import com.cangkir.bitperfectplayer.audio.PlaybackControllerState
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
 import com.cangkir.bitperfectplayer.audio.QueueContext
-import com.cangkir.bitperfectplayer.audio.QueueContextResolver
 import com.cangkir.bitperfectplayer.audio.ReplayGainMode
 import com.cangkir.bitperfectplayer.audio.SleepTimerPreset
 import com.cangkir.bitperfectplayer.audio.SleepTimerState
@@ -202,32 +200,6 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
             autoPlay = true,
             context = context,
         )
-    }
-
-    /**
-     * Synchronizes the active playback queue in real time with the Album/Artist/Folder/Playlist/
-     * Recent/Favorites/Most Played view currently open when navigating to `QueueScreen`:
-     * - When viewing a different non-empty scoped context (never `All Songs`), immediately replaces
-     *   the active queue paused (`autoPlay = false`, safely halting prior audio without auto-blast).
-     * - When opened from `NowPlayingScreen`, `All Songs`, or the same already-active context,
-     *   preserves the active queue and active playback untouched.
-     */
-    fun prepareQueueScreenContext(browsingContext: BrowsingQueueContext?) {
-        val currentState = playbackState.value
-        if (
-            browsingContext != null &&
-            QueueContextResolver.shouldSwitchToBrowsingContext(
-                activeContext = currentState.queueContext,
-                isActiveQueueEmpty = currentState.queue.isEmpty,
-                browsingContext = browsingContext,
-            )
-        ) {
-            container.playbackController.loadContextQueue(
-                tracks = browsingContext.tracks,
-                context = browsingContext.context,
-                autoPlay = false,
-            )
-        }
     }
 
     fun playTrackAtQueueIndex(index: Int) {

@@ -39,7 +39,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.cangkir.bitperfectplayer.audio.BrowsingQueueContext
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
 import com.cangkir.bitperfectplayer.audio.QueueContext
 import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
@@ -63,7 +62,7 @@ fun PlaylistsScreen(
     onEnqueueTracks: (List<PlaybackTrack>, QueueContext) -> Unit,
     onEnqueueTracksNext: (List<PlaybackTrack>, QueueContext) -> Unit,
     onSetPlaylistSort: (TrackSortScope, TrackSortSpec) -> Unit,
-    onOpenQueue: (BrowsingQueueContext?) -> Unit,
+    onOpenQueue: () -> Unit,
     onCreatePlaylist: (String) -> Unit,
     onRenamePlaylist: (Long, String) -> Unit,
     onDeletePlaylist: (Long, String) -> Unit,
@@ -258,27 +257,17 @@ fun PlaylistsScreen(
                     }
                 },
                 actions = {
+                    IconButton(
+                        onClick = onOpenQueue,
+                        modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.QueueMusic,
+                            contentDescription = "Open playback queue",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                     if (openedPlaylist != null) {
-                        IconButton(
-                            onClick = {
-                                val ctx = if (openedPlaylist.tracks.isNotEmpty()) {
-                                    BrowsingQueueContext(
-                                        context = QueueContext.playlist(openedPlaylist.id, openedPlaylist.name),
-                                        tracks = openedPlaylist.tracks,
-                                    )
-                                } else {
-                                    null
-                                }
-                                onOpenQueue(ctx)
-                            },
-                            modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
-                        ) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.QueueMusic,
-                                contentDescription = "Open playback queue",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
                         IconButton(
                             onClick = { launchExport(openedPlaylist) },
                             modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
@@ -289,29 +278,7 @@ fun PlaylistsScreen(
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
-                    } else if (showMostPlayedDetail) {
-                        IconButton(
-                            onClick = {
-                                val tracks = playlistsState.mostPlayed.map { it.track }
-                                val ctx = if (tracks.isNotEmpty()) {
-                                    BrowsingQueueContext(
-                                        context = QueueContext.mostPlayed(),
-                                        tracks = tracks,
-                                    )
-                                } else {
-                                    null
-                                }
-                                onOpenQueue(ctx)
-                            },
-                            modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
-                        ) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.QueueMusic,
-                                contentDescription = "Open playback queue",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    } else {
+                    } else if (!showMostPlayedDetail) {
                         IconButton(
                             onClick = launchImport,
                             modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),

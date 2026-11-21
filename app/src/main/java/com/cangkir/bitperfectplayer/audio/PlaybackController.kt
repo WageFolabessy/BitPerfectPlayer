@@ -163,21 +163,6 @@ class PlaybackController(
         loadActiveTrack(active, startPositionMs = startPositionMs, autoPlay = autoPlay)
     }
 
-    /**
-     * Switches the active queue immediately to [context]'s ordered tracks (prepared paused at index
-     * 0 by default for hearing safety unless [autoPlay] is requested).
-     */
-    fun loadContextQueue(tracks: List<PlaybackTrack>, context: QueueContext, autoPlay: Boolean = false) {
-        if (tracks.isEmpty()) return
-        playQueue(
-            tracks = tracks,
-            startIndex = 0,
-            startPositionMs = 0L,
-            autoPlay = autoPlay,
-            context = context,
-        )
-    }
-
     fun playTrackAt(queueIndex: Int) {
         val selected = queueManager.selectIndex(queueIndex) ?: return
         _state.update { it.copy(queue = queueManager.snapshot(), activeTrack = selected) }

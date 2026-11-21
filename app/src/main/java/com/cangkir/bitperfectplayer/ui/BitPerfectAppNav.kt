@@ -47,7 +47,6 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
-import com.cangkir.bitperfectplayer.audio.BrowsingQueueContext
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
 import com.cangkir.bitperfectplayer.audio.QueueSourceType
 import com.cangkir.bitperfectplayer.ui.library.LibraryScreen
@@ -118,14 +117,8 @@ fun BitPerfectAppRoot(viewModel: MainViewModel) {
     val openNowPlaying = remember(navController) {
         { navController.navigate(Routes.NOW_PLAYING) { launchSingleTop = true } }
     }
-    val openQueueWithContext = remember(navController, viewModel) {
-        { browsingContext: BrowsingQueueContext? ->
-            viewModel.prepareQueueScreenContext(browsingContext)
-            navController.navigate(Routes.QUEUE) { launchSingleTop = true }
-        }
-    }
-    val openQueueDefault = remember(openQueueWithContext) {
-        { openQueueWithContext(null) }
+    val openQueue = remember(navController) {
+        { navController.navigate(Routes.QUEUE) { launchSingleTop = true } }
     }
     val openDiagnostics = remember(navController) {
         { navController.navigate(Routes.DIAGNOSTICS) { launchSingleTop = true } }
@@ -211,7 +204,7 @@ fun BitPerfectAppRoot(viewModel: MainViewModel) {
                     onAddToPlaylist = openAddToPlaylist,
                     onShowTrackInfo = viewModel::openTrackInfo,
                     onToggleFavorite = viewModel::toggleFavorite,
-                    onOpenQueue = openQueueWithContext,
+                    onOpenQueue = openQueue,
                     onOpenDiagnostics = openDiagnostics,
                 )
             }
@@ -227,7 +220,7 @@ fun BitPerfectAppRoot(viewModel: MainViewModel) {
                     onEnqueueTracks = viewModel::enqueueTracks,
                     onEnqueueTracksNext = viewModel::enqueueTracksNext,
                     onSetPlaylistSort = viewModel::setTrackSort,
-                    onOpenQueue = openQueueWithContext,
+                    onOpenQueue = openQueue,
                     onCreatePlaylist = viewModel::createPlaylist,
                     onRenamePlaylist = viewModel::renamePlaylist,
                     onDeletePlaylist = viewModel::deletePlaylist,
@@ -315,7 +308,7 @@ fun BitPerfectAppRoot(viewModel: MainViewModel) {
                     onDismissSafetyWarning = viewModel::dismissSafetyWarning,
                     onSwitchToSafeMode = viewModel::switchToSafeMode,
                     onClearAutoPauseNotice = viewModel::clearAutoPauseNotice,
-                    onOpenQueue = openQueueDefault,
+                    onOpenQueue = openQueue,
                     onOpenLyrics = {
                         navController.navigate(Routes.LYRICS) { launchSingleTop = true }
                     },

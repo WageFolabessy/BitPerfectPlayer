@@ -2,7 +2,11 @@ package com.cangkir.bitperfectplayer.ui
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,20 +23,22 @@ import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListItemInfo
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ArrowDownward
-import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Shuffle
+import androidx.compose.material.icons.rounded.DragHandle
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -46,25 +52,130 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import com.cangkir.bitperfectplayer.audio.PlaybackControllerState
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
+import com.cangkir.bitperfectplayer.audio.QueueDragReorderMath
 import com.cangkir.bitperfectplayer.audio.QueueSourceType
 import com.cangkir.bitperfectplayer.audio.RepeatMode
+import com.cangkir.bitperfectplayer.audio.VisibleQueueItemMetric
 import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
+import com.cangkir.bitperfectplayer.ui.theme.IcePrimary
 import com.cangkir.bitperfectplayer.ui.theme.IcePrimaryContainer
 import com.cangkir.bitperfectplayer.ui.theme.TextMuted
+import kotlin.math.abs
+
+private class QueueDragDropState(val listState: LazyListState) {
+    var onMove: (Int, Int) -> Unit = { _, _ -> }
+    var draggedItemKey by mutableStateOf<Any?>(null)
+        private set
+    var draggedDistanceY by mutableFloatStateOf(0f)
+        private set
+
+    private var pendingExpectedIndex: Int = -1
+
+    val isDragging: Boolean
+        get() = draggedItemKey != null
+
+    val hasPendingSwap: Boolean
+        get() = pendingExpectedIndex >= 0
+
+    fun findVisibleItemAtY(yPx: Float): LazyListItemInfo? {
+        val layoutInfo = listState.layoutInfo
+        if (layoutInfo.totalItemsCount <= 1) return null
+        val contentY = yPx.toInt() - layoutInfo.beforeContentPadding
+        return layoutInfo.visibleItemsInfo.firstOrNull { info ->
+            contentY in info.offset until (info.offset + info.size)
+        }
+    }
+
+    fun onDragStart(itemKey: Any) {
+        draggedItemKey = itemKey
+        draggedDistanceY = 0f
+        pendingExpectedIndex = -1
+    }
+
+    fun onDragBy(deltaY: Float) {
+        if (draggedItemKey == null) return
+        draggedDistanceY += deltaY
+        checkForSwap()
+    }
+
+    fun reset() {
+        draggedItemKey = null
+        draggedDistanceY = 0f
+        pendingExpectedIndex = -1
+    }
+
+    fun checkForSwap() {
+        val activeKey = draggedItemKey ?: return
+        val visibleInfos = listState.layoutInfo.visibleItemsInfo
+        val current = visibleInfos.firstOrNull { it.key == activeKey } ?: return
+        if (pendingExpectedIndex >= 0) {
+            if (current.index != pendingExpectedIndex) return
+            pendingExpectedIndex = -1
+        }
+        val metrics = visibleInfos.map { VisibleQueueItemMetric(it.index, it.offset, it.size) }
+        val decision = QueueDragReorderMath.computeDragSwap(
+            draggedItem = VisibleQueueItemMetric(current.index, current.offset, current.size),
+            draggedDistanceY = draggedDistanceY,
+            visibleItems = metrics,
+        ) ?: return
+
+        val firstIdx = listState.firstVisibleItemIndex
+        val firstOffset = listState.firstVisibleItemScrollOffset
+        pendingExpectedIndex = decision.toIndex
+        draggedDistanceY += decision.offsetAdjustmentPx
+        onMove(decision.fromIndex, decision.toIndex)
+        if (decision.fromIndex == firstIdx || decision.toIndex == firstIdx) {
+            listState.requestScrollToItem(firstIdx, firstOffset)
+        }
+    }
+
+    fun computeOverscrollDeltaPx(edgeZonePx: Float, maxSpeedPx: Float): Float {
+        val activeKey = draggedItemKey ?: return 0f
+        val layoutInfo = listState.layoutInfo
+        val current = layoutInfo.visibleItemsInfo.firstOrNull { it.key == activeKey } ?: return 0f
+        val draggedTop = current.offset + draggedDistanceY
+        val draggedBottom = draggedTop + current.size
+        return QueueDragReorderMath.computeEdgeAutoScrollPx(
+            draggedTop = draggedTop,
+            draggedBottom = draggedBottom,
+            viewportStart = layoutInfo.viewportStartOffset,
+            viewportEnd = layoutInfo.viewportEndOffset,
+            edgeZonePx = edgeZonePx,
+            maxSpeedPx = maxSpeedPx,
+            canScrollBackward = listState.canScrollBackward,
+            canScrollForward = listState.canScrollForward,
+        )
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -107,6 +218,63 @@ fun QueueScreen(
             },
             onDismiss = { showAddDialog = false },
         )
+    }
+
+    val listState = rememberLazyListState()
+    val dragState = remember(listState) { QueueDragDropState(listState) }
+    val haptic = LocalHapticFeedback.current
+    val isRtl = LocalLayoutDirection.current == LayoutDirection.Rtl
+    SideEffect {
+        dragState.onMove = onMoveQueueItem
+    }
+
+    val rowKeys = remember(queue.items, queue.entryIds) {
+        if (queue.entryIds.size == queue.items.size) {
+            queue.entryIds.map { it as Any }
+        } else {
+            val seen = HashMap<String, Int>(queue.items.size)
+            queue.items.map { track ->
+                val count = (seen[track.uriString] ?: 0) + 1
+                seen[track.uriString] = count
+                "${track.uriString}#$count"
+            }
+        }
+    }
+
+    LaunchedEffect(queue.items.size) {
+        if (queue.items.size <= 1 && dragState.isDragging) {
+            dragState.reset()
+        }
+    }
+    LaunchedEffect(rowKeys) {
+        if (dragState.isDragging) {
+            dragState.checkForSwap()
+        }
+    }
+    DisposableEffect(Unit) {
+        onDispose { dragState.reset() }
+    }
+
+    val density = LocalDensity.current
+    val handleColumnWidthPx = with(density) { 56.dp.toPx() }
+    val dragStartSlopPx = with(density) { 4.dp.toPx() }
+    val edgeZonePx = with(density) { 64.dp.toPx() }
+    val maxAutoScrollPxPerFrame = with(density) { 10.dp.toPx() }
+    LaunchedEffect(dragState.isDragging) {
+        if (!dragState.isDragging) return@LaunchedEffect
+        while (dragState.isDragging) {
+            withFrameNanos { }
+            if (dragState.hasPendingSwap) {
+                dragState.checkForSwap()
+            }
+            val scrollDelta = dragState.computeOverscrollDeltaPx(edgeZonePx, maxAutoScrollPxPerFrame)
+            if (scrollDelta != 0f) {
+                val consumed = listState.scrollBy(scrollDelta)
+                if (consumed != 0f) {
+                    dragState.checkForSwap()
+                }
+            }
+        }
     }
 
     Scaffold(
@@ -205,91 +373,188 @@ fun QueueScreen(
                     return@Column
                 }
 
+                // Stationary drag-handle gesture detector scoped strictly to the leading 56.dp
+                // DragHandle column so graphicsLayer translation never shifts pointer coordinates
+                // and normal vertical list scrolling across the rest of each row stays untouched.
                 LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
+                    state = listState,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .pointerInput(dragState, isRtl, handleColumnWidthPx, dragStartSlopPx) {
+                            awaitEachGesture {
+                                val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                                val inHandleColumn = if (isRtl) {
+                                    down.position.x >= size.width - handleColumnWidthPx
+                                } else {
+                                    down.position.x <= handleColumnWidthPx
+                                }
+                                if (!inHandleColumn) return@awaitEachGesture
+                                val hitItem = dragState.findVisibleItemAtY(down.position.y) ?: return@awaitEachGesture
+                                down.consume()
+                                var prevY = down.position.y
+                                var started = false
+                                try {
+                                    while (true) {
+                                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                        if (!change.pressed) {
+                                            change.consume()
+                                            break
+                                        }
+                                        val dy = change.position.y - prevY
+                                        prevY = change.position.y
+                                        val totalDeltaY = change.position.y - down.position.y
+                                        if (!started && abs(totalDeltaY) >= dragStartSlopPx) {
+                                            started = true
+                                            dragState.onDragStart(hitItem.key)
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            dragState.onDragBy(totalDeltaY)
+                                        } else if (started && dy != 0f) {
+                                            dragState.onDragBy(dy)
+                                        }
+                                        change.consume()
+                                    }
+                                } finally {
+                                    dragState.reset()
+                                }
+                            }
+                        },
                     contentPadding = PaddingValues(vertical = 4.dp),
                 ) {
                     itemsIndexed(
                         items = queue.items,
-                        key = { index, track -> "${index}_${track.uriString}" },
+                        key = { index, _ -> rowKeys[index] },
                         contentType = { _, _ -> "queue_row" },
                     ) { index, track ->
+                        val rowKey = rowKeys[index]
                         val isCurrent = index == queue.currentIndex
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(
-                                    if (isCurrent) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent,
-                                )
-                                .clickable { onSelectQueueIndex(index) }
-                                .padding(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            TrackArtworkThumbnail(
-                                track = track,
-                                artworkLoader = albumArtworkLoader,
-                                size = 40.dp,
-                                cornerRadius = 6.dp,
-                                targetSizePx = AlbumArtworkLoader.THUMBNAIL_SIZE_PX,
-                            )
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = track.title,
-                                    style = MaterialTheme.typography.titleSmall,
-                                    color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                                Text(
-                                    text = "${track.artist} · ${track.formatBadge}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
-
-                            IconButton(
-                                onClick = { onMoveQueueItem(index, index - 1) },
-                                enabled = index > 0,
-                                modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.ArrowUpward,
-                                    contentDescription = "Move ${track.title} up in queue",
-                                )
-                            }
-
-                            IconButton(
-                                onClick = { onMoveQueueItem(index, index + 1) },
-                                enabled = index < queue.items.lastIndex,
-                                modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.ArrowDownward,
-                                    contentDescription = "Move ${track.title} down in queue",
-                                )
-                            }
-
-                            IconButton(
-                                onClick = { onRemoveQueueItem(index) },
-                                modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.Close,
-                                    contentDescription = "Remove ${track.title} from queue",
-                                )
-                            }
-                        }
-                        HorizontalDivider(
-                            thickness = 0.5.dp,
-                            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f),
-                            modifier = Modifier.padding(start = 68.dp, end = 16.dp),
+                        val isDragged = dragState.draggedItemKey == rowKey
+                        QueueTrackRow(
+                            track = track,
+                            isCurrent = isCurrent,
+                            isDragged = isDragged,
+                            dragState = dragState,
+                            albumArtworkLoader = albumArtworkLoader,
+                            onSelect = { onSelectQueueIndex(index) },
+                            onRemove = { onRemoveQueueItem(index) },
                         )
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun QueueTrackRow(
+    track: PlaybackTrack,
+    isCurrent: Boolean,
+    isDragged: Boolean,
+    dragState: QueueDragDropState,
+    albumArtworkLoader: AlbumArtworkLoader,
+    onSelect: () -> Unit,
+    onRemove: () -> Unit,
+) {
+    val rowBg = when {
+        isDragged -> MaterialTheme.colorScheme.surfaceContainerHighest
+        isCurrent -> MaterialTheme.colorScheme.surfaceVariant
+        else -> Color.Transparent
+    }
+    val dragBorderModifier = if (isDragged) {
+        Modifier.border(
+            width = 0.75.dp,
+            color = IcePrimary.copy(alpha = 0.55f),
+            shape = RoundedCornerShape(10.dp),
+        )
+    } else {
+        Modifier
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .zIndex(if (isDragged) 1f else 0f)
+            .graphicsLayer {
+                translationY = if (isDragged) dragState.draggedDistanceY else 0f
+                scaleX = if (isDragged) 1.01f else 1f
+                scaleY = if (isDragged) 1.01f else 1f
+                shadowElevation = if (isDragged) 10f else 0f
+            },
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = if (isDragged) 6.dp else 0.dp)
+                .clip(if (isDragged) RoundedCornerShape(10.dp) else RoundedCornerShape(0.dp))
+                .background(rowBg)
+                .then(dragBorderModifier)
+                .padding(start = 4.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                    .semantics(mergeDescendants = true) {},
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.DragHandle,
+                    contentDescription = "Reorder track",
+                    tint = if (isDragged) MaterialTheme.colorScheme.primary else TextMuted,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .clickable(enabled = !dragState.isDragging, onClick = onSelect)
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TrackArtworkThumbnail(
+                    track = track,
+                    artworkLoader = albumArtworkLoader,
+                    size = 40.dp,
+                    cornerRadius = 6.dp,
+                    targetSizePx = AlbumArtworkLoader.THUMBNAIL_SIZE_PX,
+                )
+                Spacer(modifier = Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = track.title,
+                        style = MaterialTheme.typography.titleSmall,
+                        color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = "${track.artist} · ${track.formatBadge}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+
+            IconButton(
+                onClick = onRemove,
+                enabled = !dragState.isDragging,
+                modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Close,
+                    contentDescription = "Remove ${track.title} from queue",
+                )
+            }
+        }
+        if (!isDragged) {
+            HorizontalDivider(
+                thickness = 0.5.dp,
+                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f),
+                modifier = Modifier.padding(start = 104.dp, end = 16.dp),
+            )
         }
     }
 }

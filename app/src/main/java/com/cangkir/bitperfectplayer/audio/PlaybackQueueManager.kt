@@ -27,6 +27,7 @@ data class QueueSnapshot<T>(
     val currentIndex: Int = -1,
     val shuffleEnabled: Boolean = false,
     val repeatMode: RepeatMode = RepeatMode.OFF,
+    val entryIds: List<Long> = emptyList(),
 ) {
     val currentItem: T?
         get() = items.getOrNull(currentIndex)
@@ -60,6 +61,7 @@ class PlaybackQueueManager<T : Any>(private val defaultRandom: Random = Random.D
         currentIndex = currentIndex,
         shuffleEnabled = shuffleEnabled,
         repeatMode = repeatMode,
+        entryIds = activeOrder.map { it.id },
     )
 
     val currentItem: T?
