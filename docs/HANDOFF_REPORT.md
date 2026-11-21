@@ -732,3 +732,39 @@ Refactored the monolithic `AudioOutputEngine.kt` (`2,754` lines at `5e33ebe`) in
 - **Pure-Kotlin Domain Boundary (`35` pure-Kotlin source files, including all `30` core domain files):** **PASS — 0 `android.*` / `androidx.*` imports**.
 - **Strict Offline & Zero-Permission Audit (Source + All 8 Generated Debug, Release, & UnitTest Manifests):** **PASS — 0 `INTERNET`, 0 `RECORD_AUDIO`, 0 `MANAGE_EXTERNAL_STORAGE`**.
 - **Physical Hardware Verification Pending (Not Executed in Cloud):** Real POCO F4 (Android 14 / HyperOS) + KZ EDX Pro 2 USB-C runtime testing (including bit-perfect mixer negotiation, audible playback, live Safe-Mode turntable scratch, and physical USB plug/unplug auto-pause) remains unverified in this software-only environment.
+
+---
+
+## 24. Compose UI Feature Sub-Package Decomposition (`D10.3`)
+
+### Delivered Sub-Package Architecture & Before/After LOC Breakdown
+Split the 4 oversized Compose screen files (`LibraryScreen.kt`, `PlaylistsScreen.kt`, `NowPlayingScreen.kt`, and `SettingsScreen.kt` — `957` to `1,393` lines each) into 15 focused files (`132` to `463` lines each) under 4 cohesive feature sub-packages (`ui/library/`, `ui/playlists/`, `ui/nowplaying/`, `ui/settings/`) while preserving `MainViewModel.kt`, `VinylDiscPlayer.kt`, `RadialSpectrumRing.kt`, all visual styling, `>= 48.dp` touch targets, hairline divider padding alignments, and strict 120 Hz recomposition isolation:
+
+| Feature Sub-Package | Before (`6a5e29b`) | New Cohesive Files (`D10.3`) | After LOC | Key Composables & Responsibilities |
+| :--- | :--- | :--- | :---: | :--- |
+| **`ui/library/`** | `ui/LibraryScreen.kt` (`1,338` lines) | [`ui/library/LibraryScreen.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/library/LibraryScreen.kt) | **`427` lines** | Screen coordinator, runtime permission & SAF folder launchers, sort bottom sheets, and tab content routing. |
+| | | [`ui/library/LibraryHeaderControls.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/library/LibraryHeaderControls.kt) | **`369` lines** | `LibraryTopAppBar`, `LibraryTabRow`, `SubtleListSortHeaderRow`, `PermissionRequestBanner`, and `CompactSearchBarRow`. |
+| | | [`ui/library/LibraryTrackList.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/library/LibraryTrackList.kt) | **`327` lines** | `TrackListView` (with auto-scroll-to-top guard on sort/query changes) and `TrackListRow` (conditional `DropdownMenu`). |
+| | | [`ui/library/LibraryGroupViews.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/library/LibraryGroupViews.kt) | **`301` lines** | `GroupListView` (Folders, Artists, Albums with auto-scroll-to-top guard) and `GroupDetailTrackList`. |
+| **`ui/playlists/`** | `ui/PlaylistsScreen.kt` (`1,393` lines) | [`ui/playlists/PlaylistsScreen.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/playlists/PlaylistsScreen.kt) | **`405` lines** | Screen coordinator, TopAppBar, SAF `.m3u8` export/import launchers, delete confirmation dialog, and view routing. |
+| | | [`ui/playlists/PlaylistsOverview.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/playlists/PlaylistsOverview.kt) | **`455` lines** | `PlaylistsOverviewList`, `MostPlayedTrackRow`, `MostPlayedDetailView`, and `PlaylistSummaryRow`. |
+| | | [`ui/playlists/PlaylistDetailView.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/playlists/PlaylistDetailView.kt) | **`327` lines** | `PlaylistDetailView` (with auto-scroll-to-top guard) and `PlaylistEntryRow` (manual up/down reorder & remove controls). |
+| | | [`ui/playlists/PlaylistDialogs.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/playlists/PlaylistDialogs.kt) | **`212` lines** | `PlaylistNameDialog` (Create / Rename) and shared `AddToPlaylistDialog`. |
+| **`ui/nowplaying/`** | `ui/NowPlayingScreen.kt` (`1,136` lines) | [`ui/nowplaying/NowPlayingScreen.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/nowplaying/NowPlayingScreen.kt) | **`463` lines** | Screen coordinator, `ON_START`/`ON_STOP` spectrum tap lifecycle gate, off-thread album palette extraction, TopAppBar, and portrait layout assembly. |
+| | | [`ui/nowplaying/NowPlayingControls.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/nowplaying/NowPlayingControls.kt) | **`406` lines** | `SwipeableSquareArtwork`, isolated 20 Hz `NowPlayingSeekSection` leaf, `NowPlayingTransportRow`, `NowPlayingAudioModeStrip`, `NowPlayingUtilityStrip`, and `extractAlbumPaletteFromBitmap`. |
+| | | [`ui/nowplaying/NowPlayingSheetsAndDialogs.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/nowplaying/NowPlayingSheetsAndDialogs.kt) | **`373` lines** | `NowPlayingOverflowMenuButton`, `AudioModeSheetContent`, `SafetyAlertBanner`, and mandatory `HearingSafetyWarningDialog`. |
+| **`ui/settings/`** | `ui/SettingsScreen.kt` (`957` lines) | [`ui/settings/SettingsScreen.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/settings/SettingsScreen.kt) | **`298` lines** | Screen coordinator, SAF folder & JSON backup launchers, and shared `SettingsSectionHeader`, `SettingsGroupCard`, `SettingsHairline`, `SettingsKeyValueRow`. |
+| | | [`ui/settings/SettingsAudioSection.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/settings/SettingsAudioSection.kt) | **`327` lines** | `SettingsAudioEngineSection` (Gapless Playback, ReplayGain mode/pre-amp/clipping, isolated `SleepTimerSettingsValueLeaf` row, 6-Stage Diagnostics row). |
+| | | [`ui/settings/SettingsDisplayAndLibrarySection.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/settings/SettingsDisplayAndLibrarySection.kt) | **`357` lines** | `SettingsDisplaySection` (Now Playing Artwork style, Spectrum Visualizer toggle/style/Kinetic Sparks) and `SettingsLibraryStorageSection` (SAF folders & refresh). |
+| | | [`ui/settings/SettingsBackupAndAboutSection.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/settings/SettingsBackupAndAboutSection.kt) | **`132` lines** | `SettingsLocalBackupSection` (Export/Restore `.json` via SAF) and `SettingsAboutPrivacySection` (100% Offline badge, App Version, Indexed Local Tracks, Supported Formats). |
+
+### Software Verification (`./gradlew clean ktlintCheck detekt testDebugUnitTest lintDebug assembleDebug assembleRelease`)
+- **Kotlin Formatting (`ktlintCheck`):** **PASS — 0 violations** across `main`, `test`, and Kotlin Gradle scripts (every new file matches its sub-package directory path).
+- **Static Analysis (`detekt`):** **PASS — 0 issues** (0 baseline files).
+- **Automated JVM Unit + Robolectric SQLite Migration + Headless Compose UI Tests (`testDebugUnitTest`):** **183 / 183 passed** across **32 test suites** (`0` failed, `0` errors, `0` skipped, `0` `@Ignore`), including all 14 Robolectric Compose UI behavioral tests in [`BitPerfectUiBehaviorTest.kt`](../app/src/test/java/com/cangkir/bitperfectplayer/ui/BitPerfectUiBehaviorTest.kt) with zero assertion changes.
+- **Compiler, KSP, & R8 Warnings:** **0** Kotlin compiler warnings (production + test), **0** KSP warnings, **0** R8 warnings.
+- **Android Lint (`lintDebug` & `lintVitalRelease`):** **0 errors**, **0 warnings across all `/app/src/` Kotlin, manifest, and resource files**.
+- **Debug APK (`assembleDebug`):** `app/build/outputs/apk/debug/app-debug.apk` (`20.16 MB` / `21,142,230 bytes`).
+- **Release APK (`assembleRelease` with R8 optimization):** `app/build/outputs/apk/release/app-release-unsigned.apk` (`2.59 MB` / `2,713,232 bytes`).
+- **Strict Offline & Zero-Permission Audit (Source + All 8 Generated Debug, Release, & UnitTest Manifests):** **PASS — 0 `INTERNET`, 0 `RECORD_AUDIO`, 0 `MANAGE_EXTERNAL_STORAGE`**.
+- **Physical Hardware Verification Pending (Not Executed in Cloud):** Real POCO F4 (Android 14 / HyperOS) + KZ EDX Pro 2 USB-C runtime testing remains unverified in this software-only environment.

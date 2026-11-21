@@ -177,3 +177,17 @@ This file records autonomous architectural, dependency, and environment decision
   - Eliminates hot-path allocations by wiring shared `AtomicBoolean`/`AtomicLong` flags and transition callbacks at construction time rather than allocating per-chunk lambdas or `Pair` wrappers.
   - Improves ART JIT/AOT compilation headroom: `dexdump` verifies the largest method across `AudioOutputEngine` and all 4 collaborators is now **`457` DEX code units (Debug)** / **`410` DEX code units (Release)** (`TurntableScratchRunner.processTurntableScratchStep`), down from `807` / `756` and ~39x below ART's `16,384` instruction limit.
 - **Rejected Alternatives:** Exposing internal collaborators as public APIs or changing `PlaybackController` contracts (unnecessary coupling); passing per-chunk lambda closures into `AudioTrackWriter.writeAlignedPcmFully` (risks heap allocations on `BitPerfectAudioThread`).
+
+---
+
+## D10.3 — Compose UI Feature Sub-Package Decomposition (`ui/library`, `ui/playlists`, `ui/nowplaying`, `ui/settings`)
+- **Decision:**
+  1. Split the 4 oversized root Compose screen files (`LibraryScreen.kt` `1,338` lines, `PlaylistsScreen.kt` `1,393` lines, `NowPlayingScreen.kt` `1,136` lines, and `SettingsScreen.kt` `957` lines) into 15 focused, cohesive files across 4 feature sub-packages matching their exact directory structure:
+     - **`com.cangkir.bitperfectplayer.ui.library`:** `LibraryScreen.kt` (`427` lines), `LibraryHeaderControls.kt` (`369` lines), `LibraryTrackList.kt` (`327` lines), and `LibraryGroupViews.kt` (`301` lines).
+     - **`com.cangkir.bitperfectplayer.ui.playlists`:** `PlaylistsScreen.kt` (`405` lines), `PlaylistsOverview.kt` (`455` lines), `PlaylistDetailView.kt` (`327` lines), and `PlaylistDialogs.kt` (`212` lines).
+     - **`com.cangkir.bitperfectplayer.ui.nowplaying`:** `NowPlayingScreen.kt` (`463` lines), `NowPlayingControls.kt` (`406` lines), and `NowPlayingSheetsAndDialogs.kt` (`373` lines).
+     - **`com.cangkir.bitperfectplayer.ui.settings`:** `SettingsScreen.kt` (`298` lines), `SettingsAudioSection.kt` (`327` lines), `SettingsDisplayAndLibrarySection.kt` (`357` lines), and `SettingsBackupAndAboutSection.kt` (`132` lines).
+  2. Kept `VinylDiscPlayer.kt` and `RadialSpectrumRing.kt` in `com.cangkir.bitperfectplayer.ui` so `ui.nowplaying` depends unidirectionally on `ui` without circular package imports or changes to direct component unit tests in `BitPerfectUiBehaviorTest.kt`.
+- **Rationale:**
+  - Keeps every UI file focused (`132–463` lines) while preserving 100% of visual styling, `>= 48.dp` touch targets, hairline divider alignments, and 120 Hz recomposition isolation (`playbackPositionMs`, `sleepTimerState`, and `vinylScrubPreviewMs` remain collected/read strictly inside narrow leaf composables; `DropdownMenu` popups remain conditionally mounted only when `expanded == true`).
+- **Rejected Alternatives:** Splitting `MainViewModel.kt` into per-screen ViewModels (rejected to preserve the single shared manual-DI ViewModel architecture); moving `VinylDiscPlayer.kt` / `RadialSpectrumRing.kt` into `ui/nowplaying/` while keeping shared primitives in `ui/` (Keeping them in `ui/` avoids cross-package visibility churn).
