@@ -1,0 +1,74 @@
+config:
+  validation: true
+  warningsAsErrors: false
+
+complexity:
+  CyclomaticComplexMethod:
+    active: true
+    allowedComplexity: 25
+    ignoreAnnotated:
+      - 'Composable'
+  LargeClass:
+    active: false
+  LongMethod:
+    active: true
+    allowedLines: 120
+    ignoreAnnotated:
+      - 'Composable'
+  LongParameterList:
+    active: true
+    allowedFunctionParameters: 8
+    allowedConstructorParameters: 12
+    ignoreDefaultParameters: true
+    ignoreDataClasses: true
+    ignoreAnnotated:
+      - 'Composable'
+  NestedBlockDepth:
+    active: true
+    allowedDepth: 5
+  TooManyFunctions:
+    active: true
+    allowedFunctionsPerFile: 40
+    allowedFunctionsPerClass: 65
+    allowedFunctionsPerInterface: 20
+    allowedFunctionsPerObject: 25
+    allowedFunctionsPerEnum: 15
+    ignoreDeprecated: true
+    ignorePrivate: true
+    ignoreOverridden: true
+    ignoreAnnotatedFunctions:
+      - 'Preview'
+
+naming:
+  FunctionNaming:
+    active: true
+    ignoreAnnotated:
+      - 'Composable'
+    excludes:
+      - '**/test/**'
+      - '**/androidTest/**'
+
+style:
+  LoopWithTooManyJumpStatements:
+    active: true
+    maxJumpCount: 3
+  MagicNumber:
+    active: false
+  MaxLineLength:
+    active: true
+    maxLineLength: 140
+    excludePackageStatements: true
+    excludeImportStatements: true
+    excludeCommentStatements: true
+    excludeRawStrings: true
+  ReturnCount:
+    active: true
+    max: 5
+    excludeGuardClauses: true
+  ThrowsCount:
+    active: true
+    max: 5
+  UnusedPrivateFunction:
+    active: true
+    ignoreAnnotated:
+      - 'Preview'

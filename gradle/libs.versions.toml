@@ -6,8 +6,8 @@ junitVersion = "1.1.5"
 espressoCore = "3.5.1"
 lifecycleRuntimeKtx = "2.9.4"
 activityCompose = "1.10.1"
-kotlin = "2.2.10"
-composeBom = "2026.02.01"
+kotlin = "2.4.21"
+composeBom = "2026.09.00"
 navigationCompose = "2.9.8"
 coroutines = "1.10.2"
 documentfile = "1.1.0"
@@ -15,6 +15,8 @@ datastore = "1.1.7"
 room = "2.8.5"
 ksp = "2.3.14"
 robolectric = "4.18.1"
+ktlintPlugin = "14.2.0"
+detekt = "2.0.0-alpha.6"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -48,3 +50,5 @@ robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
+ktlint = { id = "org.jlleitschuh.gradle.ktlint", version.ref = "ktlintPlugin" }
+detekt = { id = "dev.detekt", version.ref = "detekt" }

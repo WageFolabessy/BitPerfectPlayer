@@ -2,6 +2,8 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.ksp)
+    alias(libs.plugins.ktlint)
+    alias(libs.plugins.detekt)
 }
 
 android {
@@ -40,6 +42,20 @@ android {
             isIncludeAndroidResources = true
         }
     }
+}
+
+ktlint {
+    android.set(true)
+    ignoreFailures.set(false)
+    filter {
+        exclude { entry -> entry.file.path.contains("generated") }
+    }
+}
+
+detekt {
+    buildUponDefaultConfig.set(true)
+    config.setFrom(rootProject.file("config/detekt/detekt.yml"))
+    parallel.set(true)
 }
 
 dependencies {
