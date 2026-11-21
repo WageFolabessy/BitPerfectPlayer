@@ -233,3 +233,43 @@ This file records autonomous architectural, dependency, and environment decision
   - Android 17 (`targetSdk = 37`) mandates adaptive layouts across large screens (`sw >= 600dp`), foldables, landscape rotation, and multi-window split-screen.
   - Using Compose's built-in `BoxWithConstraints` + Material 3 `NavigationRail` + pure-Kotlin `WindowLayoutMetrics` adds **0 external dependencies** (keeping the R8 Release APK lean at `2.62 MB` / `2,746,000 bytes`) and enables fast, deterministic JVM unit tests (`WindowLayoutMetricsTest`) plus Robolectric headless Compose UI tests (`BitPerfectUiBehaviorTest`).
 - **Rejected Alternatives:** Pulling in `androidx.compose.material3.adaptive:*` + `androidx.window:window` artifacts (adds extra AAR footprint and transitive complexity for simple `600.dp` / `840.dp` breakpoint rules that `BoxWithConstraints` + `WindowLayoutMetrics` handle in ~100 lines of pure Kotlin).
+
+---
+
+## D11.1 — Direct `MediaExtractor` PCM Reader (`RawExtractorPcmDecoder`) for `audio/raw` (`FLAC (PCM)`) Streams
+- **Decision:**
+  1. Added pure-Kotlin **`RawSourcePcmEncoding`** and helpers in `PcmStreamRules.kt` (`ANDROID_ENCODING_PCM_8BIT = 3`, `resolveRawExtractorSourceEncoding`, `selectRawOutputEncoding`, `requiresRawPcmConversion`, `buildRawExtractorDecoderLabel`, plus zero-allocation offset-aware `convertPcm24LeToFloat32Bytes`, `convertPcm32LeToFloat32Bytes`, and `convertPcm8UnsignedToPcm16LeBytes`).
+  2. Created **`RawExtractorPcmDecoder`** (`com.cangkir.bitperfectplayer.audio.RawExtractorPcmDecoder`) implementing `PcmAudioDecoder` directly on top of `MediaExtractor` whenever `MediaFormat.KEY_MIME == MediaFormat.MIMETYPE_AUDIO_RAW` (`audio/raw`), wired into `MediaCodecAudioDecoder.openMediaCodecDecoder(...)` **before** touching `KEY_PCM_ENCODING` or calling `MediaCodec.createDecoderByType(...)`.
+  3. On API 31+ (`Build.VERSION_CODES.S`), verified native integer support via `AudioTrack.getMinBufferSize(...) > 0` before enabling bit-identical `PCM_24BIT_PACKED` / `PCM_32BIT` passthrough; on API 26–30 (or whenever `getMinBufferSize <= 0`), losslessly converts 24-bit/32-bit signed little-endian integer PCM to `PCM_FLOAT` (or unsigned 8-bit to `PCM_16BIT`) using reusable zero-allocation buffers.
+  4. Resolved `sourceCodec` cleanly from verified FLAC headers (`"FLAC"` instead of redundant `"FLAC (PCM)"`) and reported exact Stage 2 decoder/encoding labels.
+- **Rationale:**
+  - On Android 16 (API 36) and several Custom ROMs, `MediaExtractor`'s `FlacExtractor` decodes 24-bit/96 kHz FLAC internally and exposes `audio/raw` integer PCM instead of compressed `audio/flac`. Previously, setting `KEY_PCM_ENCODING = ENCODING_PCM_FLOAT` and instantiating `c2.android.raw.decoder` caused the passthrough codec to emit unmodified integer PCM bytes tagged as IEEE-754 float32, producing full-scale white noise.
+  - Reading `audio/raw` directly from `MediaExtractor` eliminates `c2.android.raw.decoder` completely, preserves bit-for-bit integer PCM on API 31+ (making 24-bit/96 kHz FLAC eligible for native integer USB mixer profiles), and guarantees lossless playback across API 26–37.
+- **Rejected Alternatives:** Passing `audio/raw` through `c2.android.raw.decoder` without mutating `KEY_PCM_ENCODING` (adds unnecessary Codec2 IPC/copy overhead and still fails on API 26–30 when `FlacExtractor` emits 24-bit packed integer PCM that `AudioTrack` cannot play natively without float conversion).
+
+---
+
+## D11.2 — Live Turntable Post-Paused-Load Startup Ordering, Start-Threshold Headroom, & `TurntableFlushHeadTracker`
+- **Decision:**
+  1. Ordered cold worker startup in `AudioOutputEngine.play()` and `activateLoadedTrackLocked()` so `startPlaybackWorkerLocked(...)` (returning `Boolean`) requests focus, clears `stopWorkerFlag = false`, sets `isPausedFlag = false`, calls `safePlay(track)`, and spawns `BitPerfectAudioThread` **before** `_state` publishes `PlaybackStatus.PLAYING` (eliminating the race where `beginTurntableScratch()` observed `stopWorkerFlag == true` immediately after `loadTrack(autoPlay = false) -> play()`).
+  2. Added pure-Kotlin **`TurntableScratchPolicy.computeEffectiveScratchMaxAheadFrames(...)`** and **`TurntableFlushHeadTracker`** in `TurntableAudioDsp.kt`:
+     - On API 31+, `AudioTrackWriter.configureScratchStartThreshold(...)` lowers `AudioTrack.startThresholdInFrames` to `~65 ms` (`sampleRate / 15`) on scratch entry (and `restoreDefaultStartThreshold(...)` restores full-buffer threshold on exit), while `computeEffectiveScratchMaxAheadFrames` guarantees `maxAheadFrames > actualStartThreshold` across all API 26–37 devices so AudioFlinger never deadlocks waiting for `startThresholdInFrames` while the scratch loop waits for `playbackHeadPosition` to advance.
+     - `TurntableFlushHeadTracker` tracks a dynamic `headOrigin` + `framesWrittenSinceOrigin` and rebases cleanly whenever an asynchronous `AudioTrack.flush()` drops `playbackHeadPosition` back to `0` after `play()`, eliminating the stale pre-flush head fill-throttle deadlock (silence + frozen `+00:00` delta).
+  3. Added `PlaybackLoopState.ensureSafeModeScratchBuffers(...)` (strictly Safe-Mode-only), `reconcileAsyncFlushReset(...)` for seek flushes, and bounded transient 0-byte retry (`<= 3` reads) in `decodeAheadForForwardScratch(...)` for freshly seeked codecs.
+- **Rationale:**
+  - Directly resolves both hardware/HAL deadlock mechanisms behind post-`loadTrack(autoPlay = false) -> play()` turntable silence (stale pre-flush `playbackHeadPosition` + `startThresholdInFrames > maxAheadFrames`) while preserving strict zero-DSP isolation in `BIT_PERFECT_OPT_IN`.
+- **Rejected Alternatives:** Removing the scratch fill-throttle completely (causes AudioTrack's full 150–250 ms buffer to fill, adding sluggish tactile scratch lag); unconditionally forcing `AudioTrack.startThresholdInFrames = 1` during normal playback (risks startup underruns on Bluetooth/USB routes).
+
+---
+
+## D11.3 — Android 14+ (`API 34+`) USB `MIXER_BEHAVIOR_DEFAULT` Preferred Sample-Rate Negotiation (`UsbMixerProfileSelector`)
+- **Decision:**
+  1. Created pure-Kotlin **`UsbMixerProfileSelector`** (`com.cangkir.bitperfectplayer.audio.UsbMixerProfileSelector`, `0` `android.*` / `androidx.*` imports) computing an ordered `UsbMixerNegotiationPlan` (`BIT_PERFECT` -> `DEFAULT_NATIVE_RATE` -> `NONE`):
+     - In `BIT_PERFECT_OPT_IN`: selects exact `MIXER_BEHAVIOR_BIT_PERFECT` match first; if 0 matching bit-perfect profiles exist (or applying/confirming bit-perfect fails), falls back to `MIXER_BEHAVIOR_DEFAULT` matching the track's native sample rate and channel count (preferring exact encoding -> `PCM_FLOAT` -> `PCM_32BIT` -> `PCM_24BIT_PACKED` -> `PCM_16BIT`).
+     - In `SAFE_VOLUME_MODE`: **strictly never selects `MIXER_BEHAVIOR_BIT_PERFECT`**, negotiating `MIXER_BEHAVIOR_DEFAULT` solely to lock native USB sample rate while keeping Safe Mode system volume control 100% intact.
+  2. Extended `NegotiatedMixerBehavior` with `DEFAULT_NATIVE_RATE` and `AudioDiagnosticSnapshot` with `isNativeSampleRateMixerActive: Boolean = false` (keeping `isBitPerfectMixerActive == false` so neither Diagnostics, Settings, nor Media Notification ever falsely claims Bit-Perfect when `MIXER_BEHAVIOR_DEFAULT` is active).
+  3. Wired `AudioRouteAndMixerManager` to execute the API 34+ negotiation plan, verify via `getPreferredMixerAttributes(...)`, and unconditionally clear preferred attributes via `clearPreferredMixerAttributesOnApi34(...)` on stop, release, route change, mode switch, and track reload.
+- **Rationale:**
+  - On USB-C dongles/ROMs whose Android 14–16 HAL exposes 0 `MIXER_BEHAVIOR_BIT_PERFECT` profiles yet advertises `MIXER_BEHAVIOR_DEFAULT` at `44.1 / 48 / 96 / 192 kHz`, negotiating preferred `MIXER_BEHAVIOR_DEFAULT` at the track's native sample rate avoids unnecessary OS resampling to 48 kHz while preserving full volume safety and honest 6-stage diagnostics.
+- **Rejected Alternatives:** Leaving `SAFE_VOLUME_MODE` and 0-bit-perfect HALs locked to default 48 kHz mixing without requesting the USB HAL's native sample-rate default mixer profile; labeling `DEFAULT_NATIVE_RATE` as "Bit-Perfect" (strictly rejected per honesty invariants).
+

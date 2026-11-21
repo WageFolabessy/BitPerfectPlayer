@@ -1,9 +1,9 @@
 # BitPerfectPlayer MVP — Autonomous Build Handoff Report
 
 - **Project:** `com.cangkir.bitperfectplayer` (Kotlin + Jetpack Compose, 100% Offline Android Music Player)
-- **Active Branch:** `main` *(merged from `feat/v1.1`; release tag `v1.1` published)*
-- **Overall Status:** **Complete — `v1.1` Released on `main`** *(197 / 197 automated tests passing across 34 suites with `ktlintCheck`, `detekt`, and Android Lint clean; signed `v1.1` Release APK verified, with on-device `v1.1` adaptive layout & Android 17 hardening re-checks pending physical hardware testing)*
-- **Tasks Completed:** **17 / 17** (`T0.1` through `T5.4` in `docs/TASKS.md`)
+- **Active Branch:** `feat/v1.2` *(branched from `main` at `b157c4b`)*
+- **Overall Status:** **`feat/v1.2` Audio Engine Fixes Complete & Software-Verified** *(211 / 211 automated tests passing across 35 suites with `ktlintCheck`, `detekt`, Android Lint, Debug APK, and R8 Release APK clean; physical POCO F4 + Android 16 / USB-C DAC hardware verification pending)*
+- **Tasks Completed:** **17 / 17** (`T0.1` through `T5.4` in `docs/TASKS.md`) + `v1.1` release + `v1.2` 3-fix audio engine upgrade
 - **Active Blockers:** None (`BLOCKED.md` not required)
 
 ---
@@ -857,3 +857,39 @@ Split the 4 oversized Compose screen files (`LibraryScreen.kt`, `PlaylistsScreen
      - **APK SHA-256:** `87590aa8095269aae9dd02df3220c297c8ed1647529f51da34d7783e3b0a370e`
      - **Signing Scheme:** `Verifies` via APK Signature Scheme v2 (`CN=Endricho Folabessy`, Cert SHA-256: `c4dd7e0c9f5b883f56b268e54bd02361788fc9d8f52c313075c4f0447eef89d4`, matching `v1.0` for seamless in-place upgrade)
      - **Compiled APK Manifest Privacy Check:** Zero `INTERNET`, `RECORD_AUDIO`, or `MANAGE_EXTERNAL_STORAGE` permissions.
+
+---
+
+## 28. `feat/v1.2` Audio Engine Fixes & USB Native Sample-Rate Upgrade (`D11.1`–`D11.3`)
+
+### Delivered Audio Engine Fixes
+1. **Fix 1 — `audio/raw` (`FLAC (PCM)`) White-Noise Elimination ([`PcmStreamRules.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/PcmStreamRules.kt), [`RawExtractorPcmDecoder.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/RawExtractorPcmDecoder.kt), [`MediaCodecAudioDecoder.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/MediaCodecAudioDecoder.kt)):**
+   - Added pure-Kotlin `RawSourcePcmEncoding`, `resolveRawExtractorSourceEncoding(...)`, `selectRawOutputEncoding(...)`, `buildRawExtractorDecoderLabel(...)`, and zero-allocation offset-aware `convertPcm24LeToFloat32Bytes`, `convertPcm32LeToFloat32Bytes`, and `convertPcm8UnsignedToPcm16LeBytes`.
+   - Delegated `MediaFormat.MIMETYPE_AUDIO_RAW` (`audio/raw`) directly to `RawExtractorPcmDecoder` before modifying `KEY_PCM_ENCODING` or creating `MediaCodec` (`c2.android.raw.decoder`), preventing raw integer PCM bytes from being mislabeled as IEEE-754 float32 on Android 16 (API 36) / Custom ROMs.
+   - Uses bit-identical native `PCM_24BIT_PACKED` / `PCM_32BIT` passthrough on API 31+ when confirmed by `AudioTrack.getMinBufferSize(...) > 0`, falling back losslessly to `PCM_FLOAT` on API 26–30 or unsupported HALs, and reports verified FLAC/PCM source & decoder telemetry cleanly in Stages 1–2.
+2. **Fix 2 — Live Turntable Post-Paused-Load (`loadTrack(autoPlay = false) -> play()`) Silence & Deadlock Fix ([`TurntableAudioDsp.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/TurntableAudioDsp.kt), [`AudioTrackWriter.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/AudioTrackWriter.kt), [`AudioOutputEngine.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/AudioOutputEngine.kt), [`TurntableScratchRunner.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/TurntableScratchRunner.kt)):**
+   - Ordered `AudioOutputEngine.play()` and `activateLoadedTrackLocked()` so `startPlaybackWorkerLocked(...)` clears `stopWorkerFlag`, starts `AudioTrack`, and spawns `BitPerfectAudioThread` before `_state` publishes `PlaybackStatus.PLAYING`.
+   - Added pure-Kotlin `TurntableFlushHeadTracker` (dynamic `headOrigin` rebasing on async `AudioTrack.flush()` reset-to-`0`) and `TurntableScratchPolicy.computeEffectiveScratchMaxAheadFrames(...)` (coupled with API 31+ `AudioTrack.startThresholdInFrames` lowering on scratch entry and full-buffer restoration on exit) so post-flush stale head readings and `startThresholdInFrames > maxAheadFrames` can never deadlock scratch rendering into silence / frozen `+00:00` delta.
+   - Added Safe-Mode-only lazy buffer verification (`ensureSafeModeLoopScratchReady`), seek async-flush reconciliation (`reconcileAsyncFlushReset`), and bounded transient 0-byte codec warmup retries in `decodeAheadForForwardScratch`. Zero DSP allocation or interception in `BIT_PERFECT_OPT_IN`.
+3. **Fix 3 — Android 14+ (`API 34+`) USB `MIXER_BEHAVIOR_DEFAULT` Preferred Sample-Rate Negotiation ([`UsbMixerProfileSelector.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/UsbMixerProfileSelector.kt), [`AudioRouteAndMixerManager.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/AudioRouteAndMixerManager.kt), [`AudioDiagnosticMapper.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/AudioDiagnosticMapper.kt), [`DiagnosticsScreen.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/DiagnosticsScreen.kt)):**
+   - Added pure-Kotlin `UsbMixerProfileSelector` (`BIT_PERFECT` > `DEFAULT_NATIVE_RATE` > `NONE` in `BIT_PERFECT_OPT_IN`; strictly `DEFAULT_NATIVE_RATE` only — never `BIT_PERFECT` — in `SAFE_VOLUME_MODE`).
+   - Added `NegotiatedMixerBehavior.DEFAULT_NATIVE_RATE` and `AudioDiagnosticSnapshot.isNativeSampleRateMixerActive` (keeping `isBitPerfectMixerActive == false`), updating Stage 4 (`VERIFIED` on API 34+ confirmation) and `DiagnosticsScreen` badges (`"BIT-PERFECT HAL ACTIVE"` vs `"SAFE MODE · NATIVE RATE USB"` vs `"NATIVE RATE USB MIXER"` vs `"CLEAN NATIVE FALLBACK"`).
+   - Preserved mandatory `clearPreferredMixerAttributesOnApi34(...)` cleanup on track switch, Safe Mode switch, stop, release, and USB disconnect.
+
+### Software Verification (`./gradlew clean ktlintCheck detekt testDebugUnitTest lintDebug assembleDebug assembleRelease`)
+- **Kotlin Formatting (`ktlintCheck`):** **PASS — 0 violations** across `main`, `test`, and Kotlin Gradle scripts.
+- **Static Analysis (`detekt`):** **PASS — 0 issues** (0 baseline files).
+- **Automated JVM Unit + Robolectric Tests (`testDebugUnitTest`):** **211 / 211 passed** across **35 test suites** (`0` failed, `0` errors, `0` skipped, `0` `@Ignore`), including new pure-Kotlin tests in [`PcmStreamRulesTest.kt`](../app/src/test/java/com/cangkir/bitperfectplayer/audio/PcmStreamRulesTest.kt) (+5), [`TurntableAudioDspTest.kt`](../app/src/test/java/com/cangkir/bitperfectplayer/audio/TurntableAudioDspTest.kt) (+3), [`UsbMixerProfileSelectorTest.kt`](../app/src/test/java/com/cangkir/bitperfectplayer/audio/UsbMixerProfileSelectorTest.kt) (5/5), and [`AudioDiagnosticMapperTest.kt`](../app/src/test/java/com/cangkir/bitperfectplayer/audio/AudioDiagnosticMapperTest.kt) (+1).
+- **Compiler, KSP, & R8 Warnings:** **0** Kotlin compiler warnings, **0** KSP warnings, **0** R8 warnings.
+- **Android Lint (`lintDebug` & `lintVitalRelease`):** **0 errors**, **0 warnings across all `/app/src/` files**.
+- **Debug APK (`assembleDebug`):** `app/build/outputs/apk/debug/app-debug.apk` (`20.21 MB` / `21,191,390 bytes`).
+- **Release APK (`assembleRelease` with R8 optimization):** `app/build/outputs/apk/release/app-release-unsigned.apk` (`2.62 MB` / `2,746,000 bytes`).
+- **ART JIT/AOT DEX Instruction Spot-Check (`dexdump`):** Largest method across `AudioOutputEngine`, `TurntableScratchRunner`, `RawExtractorPcmDecoder`, `AudioRouteAndMixerManager`, and `MediaCodecAudioDecoder` is **`645` DEX instructions** (25× below ART's `16,384` instruction JIT ceiling).
+- **Pure-Kotlin Domain Boundary (`PcmStreamRules.kt`, `TurntableAudioDsp.kt`, `UsbMixerProfileSelector.kt`, `AudioDiagnosticMapper.kt`):** **PASS — 0 `android.*` / `androidx.*` imports**.
+- **Strict Offline & Zero-Permission Audit (Source + All 8 Generated Debug, Release, & UnitTest Manifests):** **PASS — 0 `INTERNET`, 0 `RECORD_AUDIO`, 0 `MANAGE_EXTERNAL_STORAGE`**.
+
+### Physical Hardware Verification Pending (Not Executed in Cloud)
+- **Android 16 (API 36) / Custom ROM 24-bit/96 kHz FLAC (`audio/raw`):** Confirm crisp, noise-free playback via `RawExtractorPcmDecoder` and verify Stage 1–2 diagnostics show `FLAC` + `MediaExtractor Direct PCM (...)`.
+- **Live Turntable Post-Auto-Pause Scratch:** Trigger a real USB plug-in or screen-recorder `AUTO_PAUSE` event (forcing `loadTrack(..., autoPlay = false)`), tap Play, and immediately touch/scrub forward (`2x–4x`), hold (`0x`), and reverse (`-2x`) without seeking first; confirm immediate audible scratch response and live delta movement.
+- **API 34+ USB `MIXER_BEHAVIOR_DEFAULT` Native Sample-Rate Negotiation:** Play 44.1 kHz and 96 kHz lossless tracks on a USB-C DAC (KZ EDX Pro 2 USB-C) in both Safe Mode and Bit-Perfect Opt-In on a HAL with 0 bit-perfect profiles; verify Stage 4 reports `MIXER_BEHAVIOR_DEFAULT` locked to native track Hz with volume active, and verify clean `clearPreferredMixerAttributes` teardown on stop/unplug.
+
