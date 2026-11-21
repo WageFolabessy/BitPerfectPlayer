@@ -93,6 +93,7 @@ internal fun SwipeableSquareArtwork(
     albumArtworkLoader: AlbumArtworkLoader,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
+    artworkSize: androidx.compose.ui.unit.Dp = 272.dp,
 ) {
     val swipeThresholdPx = with(LocalDensity.current) { 76.dp.toPx() }
     var artworkDragOffsetPx by remember(track.uriString) { mutableFloatStateOf(0f) }
@@ -125,7 +126,7 @@ internal fun SwipeableSquareArtwork(
         TrackArtworkThumbnail(
             track = track,
             artworkLoader = albumArtworkLoader,
-            size = 272.dp,
+            size = artworkSize,
             cornerRadius = 16.dp,
             targetSizePx = AlbumArtworkLoader.HERO_SIZE_PX,
         )

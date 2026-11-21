@@ -257,6 +257,8 @@ fun RadialSpectrumRing(
     isPlaying: Boolean,
     sampleSpectrumWindow: (FloatArray) -> Int,
     modifier: Modifier = Modifier,
+    containerDiameter: Dp = RADIAL_SPECTRUM_CONTAINER_DIAMETER,
+    vinylDiameter: Dp = RADIAL_SPECTRUM_VINYL_DIAMETER,
     colorStyle: SpectrumColorStyle = SpectrumColorStyle.PRISM,
     sparksEnabled: Boolean = true,
     albumPalette: IntArray = AlbumPaletteExtractor.FALLBACK_STUDIO_PALETTE,
@@ -276,7 +278,7 @@ fun RadialSpectrumRing(
     val latestPalette = rememberUpdatedState(albumPalette)
 
     Box(
-        modifier = modifier.size(RADIAL_SPECTRUM_CONTAINER_DIAMETER),
+        modifier = modifier.size(containerDiameter),
         contentAlignment = Alignment.Center,
     ) {
         if (isEnabled) {
@@ -294,7 +296,7 @@ fun RadialSpectrumRing(
                 val palette = latestPalette.value
                 val cx = size.width * 0.5f
                 val cy = size.height * 0.5f
-                val vinylRadiusPx = (RADIAL_SPECTRUM_VINYL_DIAMETER / 2f).toPx()
+                val vinylRadiusPx = (vinylDiameter / 2f).toPx()
                 val startRadiusPx = vinylRadiusPx + 5.dp.toPx()
                 val minTickPx = 2.5.dp.toPx()
                 val maxTickPx = 18.dp.toPx()
@@ -412,6 +414,7 @@ fun CompactSpectrumBarStrip(
     isPlaying: Boolean,
     sampleSpectrumWindow: (FloatArray) -> Int,
     modifier: Modifier = Modifier,
+    barWidth: Dp = 272.dp,
     colorStyle: SpectrumColorStyle = SpectrumColorStyle.PRISM,
     sparksEnabled: Boolean = true,
     albumPalette: IntArray = AlbumPaletteExtractor.FALLBACK_STUDIO_PALETTE,
@@ -432,7 +435,7 @@ fun CompactSpectrumBarStrip(
 
     Canvas(
         modifier = modifier
-            .width(272.dp)
+            .width(barWidth)
             .height(42.dp)
             .semantics {
                 contentDescription = "Audio spectrum visualizer bar strip"

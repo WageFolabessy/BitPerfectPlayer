@@ -971,4 +971,187 @@ class BitPerfectUiBehaviorTest {
         composeRule.onNodeWithText("Enable Sparks").assertIsDisplayed().performClick()
         assertEquals(true, sparks)
     }
+
+    @Test
+    @Config(qualifiers = "w840dp-h480dp")
+    fun adaptiveTopLevelFrame_wideLandscapeViewportRendersNavigationRailAndDocksMiniPlayer() {
+        var selectedRoute by mutableStateOf("library")
+        val snapshot = LibrarySnapshot(allSongs = listOf(hiResFlacTrack))
+        val playbackState = PlaybackControllerState(
+            activeTrack = hiResFlacTrack,
+            engineState = EnginePlaybackState(
+                status = PlaybackStatus.PAUSED,
+                durationMs = hiResFlacTrack.durationMs,
+            ),
+        )
+
+        composeRule.setContent {
+            BitPerfectPlayerTheme {
+                BitPerfectAdaptiveTopLevelFrame(
+                    isTopLevelRoute = true,
+                    currentRoute = selectedRoute,
+                    snackbarHostState = remember { androidx.compose.material3.SnackbarHostState() },
+                    onSelectTab = { selectedRoute = it },
+                    miniPlayerContent = {
+                        MiniPlayerBar(
+                            playbackState = playbackState,
+                            playbackPositionMsFlow = MutableStateFlow(15_000L),
+                            artworkLoader = artworkLoader,
+                            onOpenNowPlaying = {},
+                            onTogglePlayPause = {},
+                            onNext = {},
+                        )
+                    },
+                ) { contentModifier ->
+                    androidx.compose.foundation.layout.Box(modifier = contentModifier) {
+                        LibraryScreen(
+                            libraryState = snapshot,
+                            favoriteTrackUris = emptySet(),
+                            playbackState = playbackState,
+                            albumArtworkLoader = artworkLoader,
+                            onRefreshLibrary = {},
+                            onImportFolder = {},
+                            onPlayTracks = { _, _, _ -> },
+                            onEnqueueTrack = {},
+                            onEnqueueNext = {},
+                            onEnqueueTracks = { _, _ -> },
+                            onEnqueueTracksNext = { _, _ -> },
+                            onSetTrackSort = { _, _ -> },
+                            onSetGroupSort = { _, _ -> },
+                            onAddToPlaylist = {},
+                            onShowTrackInfo = {},
+                            onToggleFavorite = {},
+                            onOpenQueue = {},
+                            onOpenDiagnostics = {},
+                        )
+                    }
+                }
+            }
+        }
+
+        // Wide viewport (>= 600.dp) renders side NavigationRail and 0 bottom NavigationBars
+        composeRule.onNodeWithContentDescription("Side navigation rail").assertIsDisplayed()
+        assertEquals(
+            0,
+            composeRule.onAllNodesWithContentDescription("Bottom navigation bar").fetchSemanticsNodes().size,
+        )
+
+        // Switching tabs via NavigationRail works cleanly
+        composeRule.onNodeWithContentDescription("Playlists").assertIsDisplayed().performClick()
+        assertEquals("playlists", selectedRoute)
+    }
+
+    @Test
+    @Config(qualifiers = "w840dp-h480dp")
+    fun nowPlayingScreen_wideLandscapeViewportRendersTwoColumnVinylSeekAndTransportControls() {
+        var playPauseClicks = 0
+        val committedSeeks = mutableListOf<Long>()
+        val pausedState = PlaybackControllerState(
+            activeTrack = hiResFlacTrack,
+            queue = QueueSnapshot(items = listOf(hiResFlacTrack), currentIndex = 0),
+            queueContext = QueueContext.album("21st Century Breakdown"),
+            engineState = EnginePlaybackState(
+                status = PlaybackStatus.PAUSED,
+                durationMs = hiResFlacTrack.durationMs,
+            ),
+        )
+
+        composeRule.setContent {
+            BitPerfectPlayerTheme {
+                NowPlayingScreen(
+                    playbackState = pausedState,
+                    playbackPositionMsFlow = MutableStateFlow(60_000L),
+                    sleepTimerStateFlow = MutableStateFlow(SleepTimerState()),
+                    albumArtworkLoader = artworkLoader,
+                    isFavorite = true,
+                    spectrumVisualizerEnabled = true,
+                    onBack = {},
+                    onToggleFavorite = {},
+                    onAddToPlaylist = {},
+                    onShowTrackInfo = {},
+                    onSelectSleepTimerPreset = {},
+                    onTogglePlayPause = { playPauseClicks++ },
+                    onPrevious = {},
+                    onNext = {},
+                    onSeekTo = { committedSeeks.add(it) },
+                    onToggleShuffle = {},
+                    onCycleRepeatMode = {},
+                    onRequestBitPerfectMode = {},
+                    onConfirmBitPerfectWarning = {},
+                    onDismissSafetyWarning = {},
+                    onSwitchToSafeMode = {},
+                    onClearAutoPauseNotice = {},
+                    onOpenQueue = {},
+                    onOpenLyrics = {},
+                    onOpenDiagnostics = {},
+                )
+            }
+        }
+
+        // Left pane renders Vinyl Disc + Radial Spectrum Ring
+        val vinylDesc = "Vinyl disc turntable for Peacemaker. Drag circularly to seek."
+        composeRule.onNodeWithContentDescription("Audio spectrum visualizer ring").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription(vinylDesc).assertIsDisplayed()
+
+        // Right pane renders track title, exact Hz spec, seek timestamps, transport controls, and utility row
+        composeRule.onNodeWithText("Peacemaker").assertIsDisplayed()
+        composeRule.onNodeWithText("01:00").assertIsDisplayed()
+        composeRule.onNodeWithText("03:24").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Play audio").assertIsDisplayed().performClick()
+        assertEquals(1, playPauseClicks)
+        composeRule.onNodeWithText("Queue (1)").assertIsDisplayed()
+        composeRule.onNodeWithText("Lyrics").assertIsDisplayed()
+        composeRule.onNodeWithText("Audio Path").assertIsDisplayed()
+
+        // Verify rotational scrubbing on the left-pane vinyl disc works identically in 2-column landscape mode
+        composeRule.onNodeWithContentDescription(vinylDesc).performTouchInput {
+            down(Offset(width * 0.85f, height * 0.50f))
+            advanceEventTime(40L)
+            moveTo(Offset(width * 0.50f, height * 0.85f))
+            advanceEventTime(100L)
+            up()
+        }
+        assertEquals(1, committedSeeks.size)
+        assertTrue("Expected forward rotational seek past 60,000 ms in 2-pane mode", committedSeeks.single() > 60_000L)
+    }
+
+    @Test
+    @Config(qualifiers = "w392dp-h800dp")
+    fun adaptiveTopLevelFrame_compactPortraitViewportRendersBottomNavigationBar() {
+        var selectedRoute by mutableStateOf("library")
+        val playbackState = PlaybackControllerState(activeTrack = hiResFlacTrack)
+
+        composeRule.setContent {
+            BitPerfectPlayerTheme {
+                BitPerfectAdaptiveTopLevelFrame(
+                    isTopLevelRoute = true,
+                    currentRoute = selectedRoute,
+                    snackbarHostState = remember { androidx.compose.material3.SnackbarHostState() },
+                    onSelectTab = { selectedRoute = it },
+                    miniPlayerContent = {
+                        MiniPlayerBar(
+                            playbackState = playbackState,
+                            playbackPositionMsFlow = MutableStateFlow(10_000L),
+                            artworkLoader = artworkLoader,
+                            onOpenNowPlaying = {},
+                            onTogglePlayPause = {},
+                            onNext = {},
+                        )
+                    },
+                ) { contentModifier ->
+                    androidx.compose.foundation.layout.Box(modifier = contentModifier)
+                }
+            }
+        }
+
+        // Compact phone portrait (< 600.dp) renders bottom NavigationBar and 0 side NavigationRails
+        composeRule.onNodeWithContentDescription("Bottom navigation bar").assertIsDisplayed()
+        assertEquals(
+            0,
+            composeRule.onAllNodesWithContentDescription("Side navigation rail").fetchSemanticsNodes().size,
+        )
+
+        composeRule.onNodeWithContentDescription("Settings").assertIsDisplayed().performClick()
+        assertEquals("settings", selectedRoute)
+    }
 }

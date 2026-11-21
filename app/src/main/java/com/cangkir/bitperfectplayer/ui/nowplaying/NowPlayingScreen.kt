@@ -2,13 +2,20 @@ package com.cangkir.bitperfectplayer.ui.nowplaying
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -30,6 +37,7 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -38,8 +46,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -55,10 +65,10 @@ import com.cangkir.bitperfectplayer.data.SpectrumColorStyle
 import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
 import com.cangkir.bitperfectplayer.ui.CompactSpectrumBarStrip
 import com.cangkir.bitperfectplayer.ui.InteractiveVinylDisc
-import com.cangkir.bitperfectplayer.ui.RADIAL_SPECTRUM_VINYL_DIAMETER
 import com.cangkir.bitperfectplayer.ui.RadialSpectrumRing
 import com.cangkir.bitperfectplayer.ui.SleepTimerBottomSheet
 import com.cangkir.bitperfectplayer.ui.SleepTimerTopBarButton
+import com.cangkir.bitperfectplayer.ui.WindowLayoutMetrics
 import com.cangkir.bitperfectplayer.ui.theme.AmberIndicated
 import com.cangkir.bitperfectplayer.ui.theme.EmeraldSafe
 import com.cangkir.bitperfectplayer.ui.theme.IcePrimary
@@ -300,164 +310,373 @@ fun NowPlayingScreen(
         // so rotational vinyl scrubbing/coasting updates ONLY the pill leaf and NowPlayingSeekSection.
         val vinylScrubPreviewMs = remember(track.uriString) { mutableStateOf<Long?>(null) }
 
-        Column(
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 24.dp, vertical = 12.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
+                .navigationBarsPadding(),
         ) {
-            playbackState.engineState.lastAutoPauseNotice?.let { notice ->
-                SafetyAlertBanner(message = notice, isError = false, onDismiss = onClearAutoPauseNotice)
-                Spacer(modifier = Modifier.height(12.dp))
+            val widthDp = maxWidth.value.toInt()
+            val heightDp = maxHeight.value.toInt()
+            val useTwoPane = remember(widthDp, heightDp) {
+                WindowLayoutMetrics.useTwoPaneNowPlaying(widthDp, heightDp)
             }
-            playbackState.engineState.errorMessage?.let { err ->
-                SafetyAlertBanner(message = err, isError = true, onDismiss = null)
-                Spacer(modifier = Modifier.height(12.dp))
+            val discContainerDp = remember(widthDp, heightDp, useTwoPane) {
+                WindowLayoutMetrics.computeNowPlayingDiscContainerDp(widthDp, heightDp, isTwoPane = useTwoPane)
+            }
+            val vinylDiameterDp = remember(discContainerDp, spectrumVisualizerEnabled) {
+                WindowLayoutMetrics.computeVinylDiscDiameterDp(discContainerDp, spectrumVisualizerEnabled)
+            }
+            val squareArtworkDp = remember(discContainerDp) {
+                WindowLayoutMetrics.computeSquareArtworkSizeDp(discContainerDp)
             }
 
-            // Hero Artwork Centerpiece: Interactive Spinning Vinyl Disc (wrapped by optional Radial Spectrum)
-            // or Swipeable Square Cover (with optional compact 42.dp bar + sparks spectrum strip).
-            when (artworkStyle) {
-                NowPlayingArtworkStyle.VINYL_DISC -> {
-                    if (spectrumVisualizerEnabled) {
-                        RadialSpectrumRing(
-                            isEnabled = true,
-                            isPlaying = playbackState.isPlaying,
-                            sampleSpectrumWindow = onSampleSpectrumWindow,
-                            colorStyle = spectrumColorStyle,
-                            sparksEnabled = spectrumSparksEnabled,
-                            albumPalette = albumSpectrumPalette,
-                            trackKey = track.uriString,
+            if (useTwoPane) {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .widthIn(max = 1120.dp)
+                            .padding(horizontal = 24.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(24.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .weight(0.46f)
+                                .fillMaxHeight(),
+                            contentAlignment = Alignment.Center,
                         ) {
-                            InteractiveVinylDisc(
+                            NowPlayingHeroCenterpiece(
                                 track = track,
+                                artworkStyle = artworkStyle,
                                 isPlaying = playbackState.isPlaying,
                                 isSafeMode = isSafe,
                                 durationMs = durationMs,
+                                discContainerDiameter = discContainerDp.dp,
+                                vinylDiscDiameter = vinylDiameterDp.dp,
+                                squareArtworkSize = squareArtworkDp.dp,
+                                spectrumVisualizerEnabled = spectrumVisualizerEnabled,
+                                spectrumColorStyle = spectrumColorStyle,
+                                spectrumSparksEnabled = spectrumSparksEnabled,
+                                albumSpectrumPalette = albumSpectrumPalette,
                                 playbackPositionMsFlow = playbackPositionMsFlow,
-                                scrubPreviewMsState = vinylScrubPreviewMs,
+                                vinylScrubPreviewMs = vinylScrubPreviewMs,
                                 albumArtworkLoader = albumArtworkLoader,
+                                onSampleSpectrumWindow = onSampleSpectrumWindow,
                                 onSeekTo = onSeekTo,
-                                discDiameter = RADIAL_SPECTRUM_VINYL_DIAMETER,
+                                onPrevious = onPrevious,
+                                onNext = onNext,
                                 onBeginTurntableScratch = onBeginTurntableScratch,
                                 onUpdateTurntableScratchRate = onUpdateTurntableScratchRate,
                                 onEndTurntableScratch = onEndTurntableScratch,
                             )
                         }
-                    } else {
+                        Column(
+                            modifier = Modifier
+                                .weight(0.54f)
+                                .fillMaxHeight()
+                                .verticalScroll(rememberScrollState()),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center,
+                        ) {
+                            playbackState.engineState.lastAutoPauseNotice?.let { notice ->
+                                SafetyAlertBanner(message = notice, isError = false, onDismiss = onClearAutoPauseNotice)
+                                Spacer(modifier = Modifier.height(12.dp))
+                            }
+                            playbackState.engineState.errorMessage?.let { err ->
+                                SafetyAlertBanner(message = err, isError = true, onDismiss = null)
+                                Spacer(modifier = Modifier.height(12.dp))
+                            }
+                            NowPlayingTrackControlsSection(
+                                track = track,
+                                formatSpecText = formatSpecText,
+                                durationMs = durationMs,
+                                playbackState = playbackState,
+                                playbackPositionMsFlow = playbackPositionMsFlow,
+                                vinylScrubPreviewMs = vinylScrubPreviewMs,
+                                modeDotColor = modeDotColor,
+                                modeShortLabel = modeShortLabel,
+                                compactVerticalSpacing = true,
+                                onSeekTo = onSeekTo,
+                                onToggleShuffle = onToggleShuffle,
+                                onPrevious = onPrevious,
+                                onTogglePlayPause = onTogglePlayPause,
+                                onNext = onNext,
+                                onCycleRepeatMode = onCycleRepeatMode,
+                                onOpenAudioModeSheet = { showAudioModeSheet = true },
+                                onOpenQueue = onOpenQueue,
+                                onOpenLyrics = onOpenLyrics,
+                                onOpenDiagnostics = onOpenDiagnostics,
+                            )
+                        }
+                    }
+                }
+            } else {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 24.dp, vertical = 12.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    playbackState.engineState.lastAutoPauseNotice?.let { notice ->
+                        SafetyAlertBanner(message = notice, isError = false, onDismiss = onClearAutoPauseNotice)
+                        Spacer(modifier = Modifier.height(12.dp))
+                    }
+                    playbackState.engineState.errorMessage?.let { err ->
+                        SafetyAlertBanner(message = err, isError = true, onDismiss = null)
+                        Spacer(modifier = Modifier.height(12.dp))
+                    }
+                    NowPlayingHeroCenterpiece(
+                        track = track,
+                        artworkStyle = artworkStyle,
+                        isPlaying = playbackState.isPlaying,
+                        isSafeMode = isSafe,
+                        durationMs = durationMs,
+                        discContainerDiameter = discContainerDp.dp,
+                        vinylDiscDiameter = vinylDiameterDp.dp,
+                        squareArtworkSize = squareArtworkDp.dp,
+                        spectrumVisualizerEnabled = spectrumVisualizerEnabled,
+                        spectrumColorStyle = spectrumColorStyle,
+                        spectrumSparksEnabled = spectrumSparksEnabled,
+                        albumSpectrumPalette = albumSpectrumPalette,
+                        playbackPositionMsFlow = playbackPositionMsFlow,
+                        vinylScrubPreviewMs = vinylScrubPreviewMs,
+                        albumArtworkLoader = albumArtworkLoader,
+                        onSampleSpectrumWindow = onSampleSpectrumWindow,
+                        onSeekTo = onSeekTo,
+                        onPrevious = onPrevious,
+                        onNext = onNext,
+                        onBeginTurntableScratch = onBeginTurntableScratch,
+                        onUpdateTurntableScratchRate = onUpdateTurntableScratchRate,
+                        onEndTurntableScratch = onEndTurntableScratch,
+                    )
+                    Spacer(modifier = Modifier.height(24.dp))
+                    NowPlayingTrackControlsSection(
+                        track = track,
+                        formatSpecText = formatSpecText,
+                        durationMs = durationMs,
+                        playbackState = playbackState,
+                        playbackPositionMsFlow = playbackPositionMsFlow,
+                        vinylScrubPreviewMs = vinylScrubPreviewMs,
+                        modeDotColor = modeDotColor,
+                        modeShortLabel = modeShortLabel,
+                        compactVerticalSpacing = false,
+                        onSeekTo = onSeekTo,
+                        onToggleShuffle = onToggleShuffle,
+                        onPrevious = onPrevious,
+                        onTogglePlayPause = onTogglePlayPause,
+                        onNext = onNext,
+                        onCycleRepeatMode = onCycleRepeatMode,
+                        onOpenAudioModeSheet = { showAudioModeSheet = true },
+                        onOpenQueue = onOpenQueue,
+                        onOpenLyrics = onOpenLyrics,
+                        onOpenDiagnostics = onOpenDiagnostics,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun NowPlayingHeroCenterpiece(
+    track: PlaybackTrack,
+    artworkStyle: NowPlayingArtworkStyle,
+    isPlaying: Boolean,
+    isSafeMode: Boolean,
+    durationMs: Long,
+    discContainerDiameter: Dp,
+    vinylDiscDiameter: Dp,
+    squareArtworkSize: Dp,
+    spectrumVisualizerEnabled: Boolean,
+    spectrumColorStyle: SpectrumColorStyle,
+    spectrumSparksEnabled: Boolean,
+    albumSpectrumPalette: IntArray,
+    playbackPositionMsFlow: StateFlow<Long>,
+    vinylScrubPreviewMs: MutableState<Long?>,
+    albumArtworkLoader: AlbumArtworkLoader,
+    onSampleSpectrumWindow: (FloatArray) -> Int,
+    onSeekTo: (Long) -> Unit,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
+    onBeginTurntableScratch: () -> Boolean,
+    onUpdateTurntableScratchRate: (Float) -> Unit,
+    onEndTurntableScratch: (Long?) -> Unit,
+) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        when (artworkStyle) {
+            NowPlayingArtworkStyle.VINYL_DISC -> {
+                if (spectrumVisualizerEnabled) {
+                    RadialSpectrumRing(
+                        isEnabled = true,
+                        isPlaying = isPlaying,
+                        sampleSpectrumWindow = onSampleSpectrumWindow,
+                        containerDiameter = discContainerDiameter,
+                        vinylDiameter = vinylDiscDiameter,
+                        colorStyle = spectrumColorStyle,
+                        sparksEnabled = spectrumSparksEnabled,
+                        albumPalette = albumSpectrumPalette,
+                        trackKey = track.uriString,
+                    ) {
                         InteractiveVinylDisc(
                             track = track,
-                            isPlaying = playbackState.isPlaying,
-                            isSafeMode = isSafe,
+                            isPlaying = isPlaying,
+                            isSafeMode = isSafeMode,
                             durationMs = durationMs,
                             playbackPositionMsFlow = playbackPositionMsFlow,
                             scrubPreviewMsState = vinylScrubPreviewMs,
                             albumArtworkLoader = albumArtworkLoader,
                             onSeekTo = onSeekTo,
+                            discDiameter = vinylDiscDiameter,
                             onBeginTurntableScratch = onBeginTurntableScratch,
                             onUpdateTurntableScratchRate = onUpdateTurntableScratchRate,
                             onEndTurntableScratch = onEndTurntableScratch,
                         )
                     }
-                }
-                NowPlayingArtworkStyle.SQUARE_COVER -> {
-                    SwipeableSquareArtwork(
+                } else {
+                    InteractiveVinylDisc(
                         track = track,
+                        isPlaying = isPlaying,
+                        isSafeMode = isSafeMode,
+                        durationMs = durationMs,
+                        playbackPositionMsFlow = playbackPositionMsFlow,
+                        scrubPreviewMsState = vinylScrubPreviewMs,
                         albumArtworkLoader = albumArtworkLoader,
-                        onPrevious = onPrevious,
-                        onNext = onNext,
+                        onSeekTo = onSeekTo,
+                        discDiameter = vinylDiscDiameter,
+                        onBeginTurntableScratch = onBeginTurntableScratch,
+                        onUpdateTurntableScratchRate = onUpdateTurntableScratchRate,
+                        onEndTurntableScratch = onEndTurntableScratch,
                     )
-                    if (spectrumVisualizerEnabled) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        CompactSpectrumBarStrip(
-                            isEnabled = true,
-                            isPlaying = playbackState.isPlaying,
-                            sampleSpectrumWindow = onSampleSpectrumWindow,
-                            colorStyle = spectrumColorStyle,
-                            sparksEnabled = spectrumSparksEnabled,
-                            albumPalette = albumSpectrumPalette,
-                            trackKey = track.uriString,
-                        )
-                    }
                 }
             }
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            // Track Metadata
-            Text(
-                text = track.title,
-                style = MaterialTheme.typography.headlineSmall,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                textAlign = TextAlign.Center,
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = track.artistAlbumLine,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                textAlign = TextAlign.Center,
-            )
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(
-                text = formatSpecText,
-                style = MaterialTheme.typography.labelSmall,
-                color = TextMuted,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                textAlign = TextAlign.Center,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(6.dp))
-                    .clickable(onClick = onOpenDiagnostics)
-                    .padding(horizontal = 8.dp, vertical = 4.dp),
-            )
-
-            Spacer(modifier = Modifier.height(18.dp))
-
-            // Isolated 20 Hz Seekable Progress Leaf (hero art & controls do NOT recompose on ticks)
-            NowPlayingSeekSection(
-                durationMs = durationMs,
-                playbackPositionMsFlow = playbackPositionMsFlow,
-                externalScrubPreviewMsState = vinylScrubPreviewMs,
-                onSeekTo = onSeekTo,
-            )
-
-            Spacer(modifier = Modifier.height(14.dp))
-
-            NowPlayingTransportRow(
-                isPlaying = playbackState.isPlaying,
-                shuffleEnabled = playbackState.queue.shuffleEnabled,
-                repeatMode = playbackState.queue.repeatMode,
-                onToggleShuffle = onToggleShuffle,
-                onPrevious = onPrevious,
-                onTogglePlayPause = onTogglePlayPause,
-                onNext = onNext,
-                onCycleRepeatMode = onCycleRepeatMode,
-            )
-
-            Spacer(modifier = Modifier.height(22.dp))
-
-            NowPlayingAudioModeStrip(
-                modeDotColor = modeDotColor,
-                modeShortLabel = modeShortLabel,
-                activeDeviceName = safetyState.activeDeviceName,
-                onClick = { showAudioModeSheet = true },
-            )
-
-            Spacer(modifier = Modifier.height(14.dp))
-
-            NowPlayingUtilityStrip(
-                queueSize = playbackState.queue.size,
-                onOpenQueue = onOpenQueue,
-                onOpenLyrics = onOpenLyrics,
-                onOpenDiagnostics = onOpenDiagnostics,
-            )
+            NowPlayingArtworkStyle.SQUARE_COVER -> {
+                SwipeableSquareArtwork(
+                    track = track,
+                    albumArtworkLoader = albumArtworkLoader,
+                    onPrevious = onPrevious,
+                    onNext = onNext,
+                    artworkSize = squareArtworkSize,
+                )
+                if (spectrumVisualizerEnabled) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    CompactSpectrumBarStrip(
+                        isEnabled = true,
+                        isPlaying = isPlaying,
+                        sampleSpectrumWindow = onSampleSpectrumWindow,
+                        barWidth = squareArtworkSize,
+                        colorStyle = spectrumColorStyle,
+                        sparksEnabled = spectrumSparksEnabled,
+                        albumPalette = albumSpectrumPalette,
+                        trackKey = track.uriString,
+                    )
+                }
+            }
         }
+    }
+}
+
+@Composable
+private fun NowPlayingTrackControlsSection(
+    track: PlaybackTrack,
+    formatSpecText: String,
+    durationMs: Long,
+    playbackState: PlaybackControllerState,
+    playbackPositionMsFlow: StateFlow<Long>,
+    vinylScrubPreviewMs: MutableState<Long?>,
+    modeDotColor: Color,
+    modeShortLabel: String,
+    compactVerticalSpacing: Boolean,
+    onSeekTo: (Long) -> Unit,
+    onToggleShuffle: () -> Unit,
+    onPrevious: () -> Unit,
+    onTogglePlayPause: () -> Unit,
+    onNext: () -> Unit,
+    onCycleRepeatMode: () -> Unit,
+    onOpenAudioModeSheet: () -> Unit,
+    onOpenQueue: () -> Unit,
+    onOpenLyrics: () -> Unit,
+    onOpenDiagnostics: () -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            text = track.title,
+            style = MaterialTheme.typography.headlineSmall,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+        )
+        Spacer(modifier = Modifier.height(if (compactVerticalSpacing) 2.dp else 4.dp))
+        Text(
+            text = track.artistAlbumLine,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+        )
+        Spacer(modifier = Modifier.height(if (compactVerticalSpacing) 4.dp else 6.dp))
+        Text(
+            text = formatSpecText,
+            style = MaterialTheme.typography.labelSmall,
+            color = TextMuted,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+            modifier = Modifier
+                .clip(RoundedCornerShape(6.dp))
+                .clickable(onClick = onOpenDiagnostics)
+                .padding(horizontal = 8.dp, vertical = 4.dp),
+        )
+
+        Spacer(modifier = Modifier.height(if (compactVerticalSpacing) 6.dp else 18.dp))
+
+        // Isolated 20 Hz Seekable Progress Leaf (hero art & controls do NOT recompose on ticks)
+        NowPlayingSeekSection(
+            durationMs = durationMs,
+            playbackPositionMsFlow = playbackPositionMsFlow,
+            externalScrubPreviewMsState = vinylScrubPreviewMs,
+            onSeekTo = onSeekTo,
+        )
+
+        Spacer(modifier = Modifier.height(if (compactVerticalSpacing) 6.dp else 14.dp))
+
+        NowPlayingTransportRow(
+            isPlaying = playbackState.isPlaying,
+            shuffleEnabled = playbackState.queue.shuffleEnabled,
+            repeatMode = playbackState.queue.repeatMode,
+            onToggleShuffle = onToggleShuffle,
+            onPrevious = onPrevious,
+            onTogglePlayPause = onTogglePlayPause,
+            onNext = onNext,
+            onCycleRepeatMode = onCycleRepeatMode,
+        )
+
+        Spacer(modifier = Modifier.height(if (compactVerticalSpacing) 10.dp else 22.dp))
+
+        NowPlayingAudioModeStrip(
+            modeDotColor = modeDotColor,
+            modeShortLabel = modeShortLabel,
+            activeDeviceName = playbackState.engineState.safetyState.activeDeviceName,
+            onClick = onOpenAudioModeSheet,
+        )
+
+        Spacer(modifier = Modifier.height(if (compactVerticalSpacing) 6.dp else 14.dp))
+
+        NowPlayingUtilityStrip(
+            queueSize = playbackState.queue.size,
+            onOpenQueue = onOpenQueue,
+            onOpenLyrics = onOpenLyrics,
+            onOpenDiagnostics = onOpenDiagnostics,
+        )
     }
 }

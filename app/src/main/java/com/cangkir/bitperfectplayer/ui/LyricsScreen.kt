@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -222,13 +223,24 @@ fun LyricsScreen(
         },
         bottomBar = {
             if (activeTrack != null) {
-                LyricsCompactSeekBar(
-                    isPlaying = playbackState.isPlaying,
-                    durationMs = playbackState.durationMs,
-                    playbackPositionMsFlow = playbackPositionMsFlow,
-                    onTogglePlayPause = onTogglePlayPause,
-                    onSeekTo = onSeekTo,
-                )
+                Box(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .widthIn(max = WindowLayoutMetrics.EXPANDED_CONTENT_MAX_WIDTH_DP.dp),
+                    ) {
+                        LyricsCompactSeekBar(
+                            isPlaying = playbackState.isPlaying,
+                            durationMs = playbackState.durationMs,
+                            playbackPositionMsFlow = playbackPositionMsFlow,
+                            onTogglePlayPause = onTogglePlayPause,
+                            onSeekTo = onSeekTo,
+                        )
+                    }
+                }
             }
         },
     ) { innerPadding ->
@@ -236,59 +248,66 @@ fun LyricsScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding),
+            contentAlignment = Alignment.TopCenter,
         ) {
-            when {
-                activeTrack == null -> {
-                    EmptyLyricsPlaceholder(
-                        title = "No active track",
-                        subtitle = "Play a track from your library to view or attach offline lyrics.",
-                        fingerprint = null,
-                        onImportLrc = null,
-                        onOpenEditor = null,
-                    )
-                }
-                lyricsUiState.isLoading -> {
-                    CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
-                }
-                parsed != null && parsed.isSynced && parsed.lines.isNotEmpty() -> {
-                    SyncedLyricsList(
-                        lines = parsed.lines,
-                        playbackPositionMsFlow = playbackPositionMsFlow,
-                        onSeekTo = onSeekTo,
-                    )
-                }
-                parsed != null && parsed.plainLines.isNotEmpty() -> {
-                    // Static scrollable view for untimestamped manual or plain-text lyrics
-                    LazyColumn(
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(horizontal = 22.dp, vertical = 20.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        itemsIndexed(
-                            items = parsed.plainLines,
-                            contentType = { _, _ -> "plain_lyric_line" },
-                        ) { _, line ->
-                            if (line.isBlank()) {
-                                Spacer(modifier = Modifier.height(10.dp))
-                            } else {
-                                Text(
-                                    text = line,
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                )
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .widthIn(max = WindowLayoutMetrics.EXPANDED_CONTENT_MAX_WIDTH_DP.dp),
+            ) {
+                when {
+                    activeTrack == null -> {
+                        EmptyLyricsPlaceholder(
+                            title = "No active track",
+                            subtitle = "Play a track from your library to view or attach offline lyrics.",
+                            fingerprint = null,
+                            onImportLrc = null,
+                            onOpenEditor = null,
+                        )
+                    }
+                    lyricsUiState.isLoading -> {
+                        CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+                    }
+                    parsed != null && parsed.isSynced && parsed.lines.isNotEmpty() -> {
+                        SyncedLyricsList(
+                            lines = parsed.lines,
+                            playbackPositionMsFlow = playbackPositionMsFlow,
+                            onSeekTo = onSeekTo,
+                        )
+                    }
+                    parsed != null && parsed.plainLines.isNotEmpty() -> {
+                        // Static scrollable view for untimestamped manual or plain-text lyrics
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(horizontal = 22.dp, vertical = 20.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            itemsIndexed(
+                                items = parsed.plainLines,
+                                contentType = { _, _ -> "plain_lyric_line" },
+                            ) { _, line ->
+                                if (line.isBlank()) {
+                                    Spacer(modifier = Modifier.height(10.dp))
+                                } else {
+                                    Text(
+                                        text = line,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                    )
+                                }
                             }
                         }
                     }
-                }
-                else -> {
-                    EmptyLyricsPlaceholder(
-                        title = "No lyrics attached yet",
-                        subtitle = "Import a local .lrc file via SAF or paste/write lyrics manually. " +
-                            "Saved lyrics bind persistently to this track's SHA-256 content fingerprint.",
-                        fingerprint = lyricsState?.contentFingerprint,
-                        onImportLrc = { lrcPickerLauncher.launch(arrayOf("*/*")) },
-                        onOpenEditor = { showManualEditor = true },
-                    )
+                    else -> {
+                        EmptyLyricsPlaceholder(
+                            title = "No lyrics attached yet",
+                            subtitle = "Import a local .lrc file via SAF or paste/write lyrics manually. " +
+                                "Saved lyrics bind persistently to this track's SHA-256 content fingerprint.",
+                            fingerprint = lyricsState?.contentFingerprint,
+                            onImportLrc = { lrcPickerLauncher.launch(arrayOf("*/*")) },
+                            onOpenEditor = { showManualEditor = true },
+                        )
+                    }
                 }
             }
         }

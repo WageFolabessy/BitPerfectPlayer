@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -177,109 +178,116 @@ fun QueueScreen(
             )
         },
     ) { innerPadding ->
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding),
+            contentAlignment = Alignment.TopCenter,
         ) {
-            if (queue.isEmpty) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(24.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        text = "Playback queue is empty. Tap + or select a track from your library.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                return@Column
-            }
-
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(vertical = 4.dp),
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .widthIn(max = WindowLayoutMetrics.EXPANDED_CONTENT_MAX_WIDTH_DP.dp),
             ) {
-                itemsIndexed(
-                    items = queue.items,
-                    key = { index, track -> "${index}_${track.uriString}" },
-                    contentType = { _, _ -> "queue_row" },
-                ) { index, track ->
-                    val isCurrent = index == queue.currentIndex
-                    Row(
+                if (queue.isEmpty) {
+                    Box(
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .background(
-                                if (isCurrent) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent,
-                            )
-                            .clickable { onSelectQueueIndex(index) }
-                            .padding(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
+                            .fillMaxSize()
+                            .padding(24.dp),
+                        contentAlignment = Alignment.Center,
                     ) {
-                        TrackArtworkThumbnail(
-                            track = track,
-                            artworkLoader = albumArtworkLoader,
-                            size = 40.dp,
-                            cornerRadius = 6.dp,
-                            targetSizePx = AlbumArtworkLoader.THUMBNAIL_SIZE_PX,
+                        Text(
+                            text = "Playback queue is empty. Tap + or select a track from your library.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = track.title,
-                                style = MaterialTheme.typography.titleSmall,
-                                color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            Text(
-                                text = "${track.artist} · ${track.formatBadge}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-
-                        IconButton(
-                            onClick = { onMoveQueueItem(index, index - 1) },
-                            enabled = index > 0,
-                            modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.ArrowUpward,
-                                contentDescription = "Move ${track.title} up in queue",
-                            )
-                        }
-
-                        IconButton(
-                            onClick = { onMoveQueueItem(index, index + 1) },
-                            enabled = index < queue.items.lastIndex,
-                            modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.ArrowDownward,
-                                contentDescription = "Move ${track.title} down in queue",
-                            )
-                        }
-
-                        IconButton(
-                            onClick = { onRemoveQueueItem(index) },
-                            modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.Close,
-                                contentDescription = "Remove ${track.title} from queue",
-                            )
-                        }
                     }
-                    HorizontalDivider(
-                        thickness = 0.5.dp,
-                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f),
-                        modifier = Modifier.padding(start = 68.dp, end = 16.dp),
-                    )
+                    return@Column
+                }
+
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(vertical = 4.dp),
+                ) {
+                    itemsIndexed(
+                        items = queue.items,
+                        key = { index, track -> "${index}_${track.uriString}" },
+                        contentType = { _, _ -> "queue_row" },
+                    ) { index, track ->
+                        val isCurrent = index == queue.currentIndex
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(
+                                    if (isCurrent) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent,
+                                )
+                                .clickable { onSelectQueueIndex(index) }
+                                .padding(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            TrackArtworkThumbnail(
+                                track = track,
+                                artworkLoader = albumArtworkLoader,
+                                size = 40.dp,
+                                cornerRadius = 6.dp,
+                                targetSizePx = AlbumArtworkLoader.THUMBNAIL_SIZE_PX,
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = track.title,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    text = "${track.artist} · ${track.formatBadge}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+
+                            IconButton(
+                                onClick = { onMoveQueueItem(index, index - 1) },
+                                enabled = index > 0,
+                                modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.ArrowUpward,
+                                    contentDescription = "Move ${track.title} up in queue",
+                                )
+                            }
+
+                            IconButton(
+                                onClick = { onMoveQueueItem(index, index + 1) },
+                                enabled = index < queue.items.lastIndex,
+                                modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.ArrowDownward,
+                                    contentDescription = "Move ${track.title} down in queue",
+                                )
+                            }
+
+                            IconButton(
+                                onClick = { onRemoveQueueItem(index) },
+                                modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Close,
+                                    contentDescription = "Remove ${track.title} from queue",
+                                )
+                            }
+                        }
+                        HorizontalDivider(
+                            thickness = 0.5.dp,
+                            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f),
+                            modifier = Modifier.padding(start = 68.dp, end = 16.dp),
+                        )
+                    }
                 }
             }
         }

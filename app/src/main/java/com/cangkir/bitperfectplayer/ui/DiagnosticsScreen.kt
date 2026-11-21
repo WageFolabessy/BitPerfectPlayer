@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
@@ -115,168 +116,175 @@ fun DiagnosticsScreen(
             )
         },
     ) { innerPadding ->
-        LazyColumn(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding),
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+            contentAlignment = Alignment.TopCenter,
         ) {
-            // 1. Live Output Status & Mode Switcher (Flat Utilitarian Panel)
-            item(key = "headline", contentType = "diag_headline") {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant,
-                    border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outline),
-                ) {
-                    Column(modifier = Modifier.padding(14.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(
-                                modifier = Modifier
-                                    .size(8.dp)
-                                    .clip(CircleShape)
-                                    .background(statusAccent),
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = when {
-                                    diagnostics.isBitPerfectMixerActive -> "BIT-PERFECT HAL ACTIVE"
-                                    isSafe -> "SAFE MODE ACTIVE"
-                                    else -> "CLEAN NATIVE FALLBACK"
-                                },
-                                style = MaterialTheme.typography.labelSmall,
-                                color = statusAccent,
-                                fontWeight = FontWeight.SemiBold,
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Text(
-                            text = diagnostics.pathStatusHeadline,
-                            style = MaterialTheme.typography.titleSmall,
-                            color = MaterialTheme.colorScheme.onSurface,
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        AudioModeSegmentedSwitch(
-                            mode = safetyState.mode,
-                            isBitPerfectMixerActive = diagnostics.isBitPerfectMixerActive,
-                            onSwitchToSafeMode = onSwitchToSafeMode,
-                            onRequestBitPerfectMode = onRequestBitPerfectMode,
-                        )
-                    }
-                }
-            }
-
-            // 2. Real-Time Signal Summary (SPEC Section 3.5 — Flat Hairline Grouped Table)
-            item(key = "realtime_summary", contentType = "diag_summary") {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        text = "SIGNAL SUMMARY",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = TextMuted,
-                        modifier = Modifier.padding(horizontal = 2.dp),
-                    )
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .widthIn(max = WindowLayoutMetrics.EXPANDED_CONTENT_MAX_WIDTH_DP.dp),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                // 1. Live Output Status & Mode Switcher (Flat Utilitarian Panel)
+                item(key = "headline", contentType = "diag_headline") {
                     Surface(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(12.dp),
-                        color = MaterialTheme.colorScheme.surface,
+                        color = MaterialTheme.colorScheme.surfaceVariant,
                         border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outline),
                     ) {
-                        Column(modifier = Modifier.fillMaxWidth()) {
-                            DiagnosticKeyValueRow(
-                                label = "Source Format",
-                                value = diagnostics.sourceFormatSummary,
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(8.dp)
+                                        .clip(CircleShape)
+                                        .background(statusAccent),
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = when {
+                                        diagnostics.isBitPerfectMixerActive -> "BIT-PERFECT HAL ACTIVE"
+                                        isSafe -> "SAFE MODE ACTIVE"
+                                        else -> "CLEAN NATIVE FALLBACK"
+                                    },
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = statusAccent,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = diagnostics.pathStatusHeadline,
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.onSurface,
                             )
-                            HairlineInsetDivider()
-                            DiagnosticKeyValueRow(
-                                label = "Decoded PCM",
-                                value = diagnostics.decodedPcmSummary,
-                            )
-                            HairlineInsetDivider()
-                            DiagnosticKeyValueRow(
-                                label = "Output Device",
-                                value = diagnostics.activeOutputDeviceSummary,
-                            )
-                            HairlineInsetDivider()
-                            DiagnosticKeyValueRow(
-                                label = "Engine & Mixer",
-                                value = diagnostics.activeEngineAndMixerSummary,
-                            )
-                            HairlineInsetDivider()
-                            DiagnosticKeyValueRow(
-                                label = "DSP / EQ / Volume",
-                                value = diagnostics.dspEqVolumeStatusSummary,
+                            Spacer(modifier = Modifier.height(12.dp))
+                            AudioModeSegmentedSwitch(
+                                mode = safetyState.mode,
+                                isBitPerfectMixerActive = diagnostics.isBitPerfectMixerActive,
+                                onSwitchToSafeMode = onSwitchToSafeMode,
+                                onRequestBitPerfectMode = onRequestBitPerfectMode,
                             )
                         }
                     }
                 }
-            }
 
-            // 3. 6-Stage Header & Confidence Legend
-            item(key = "legend", contentType = "diag_legend") {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        text = "6-STAGE SIGNAL CHAIN",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = TextMuted,
-                        modifier = Modifier.padding(horizontal = 2.dp),
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        VerificationBadge(VerificationLevel.VERIFIED)
-                        VerificationBadge(VerificationLevel.INDICATED)
-                        VerificationBadge(VerificationLevel.UNVERIFIABLE)
+                // 2. Real-Time Signal Summary (SPEC Section 3.5 — Flat Hairline Grouped Table)
+                item(key = "realtime_summary", contentType = "diag_summary") {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = "SIGNAL SUMMARY",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = TextMuted,
+                            modifier = Modifier.padding(horizontal = 2.dp),
+                        )
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.surface,
+                            border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outline),
+                        ) {
+                            Column(modifier = Modifier.fillMaxWidth()) {
+                                DiagnosticKeyValueRow(
+                                    label = "Source Format",
+                                    value = diagnostics.sourceFormatSummary,
+                                )
+                                HairlineInsetDivider()
+                                DiagnosticKeyValueRow(
+                                    label = "Decoded PCM",
+                                    value = diagnostics.decodedPcmSummary,
+                                )
+                                HairlineInsetDivider()
+                                DiagnosticKeyValueRow(
+                                    label = "Output Device",
+                                    value = diagnostics.activeOutputDeviceSummary,
+                                )
+                                HairlineInsetDivider()
+                                DiagnosticKeyValueRow(
+                                    label = "Engine & Mixer",
+                                    value = diagnostics.activeEngineAndMixerSummary,
+                                )
+                                HairlineInsetDivider()
+                                DiagnosticKeyValueRow(
+                                    label = "DSP / EQ / Volume",
+                                    value = diagnostics.dspEqVolumeStatusSummary,
+                                )
+                            }
+                        }
                     }
                 }
-            }
 
-            // 4. All 6 Separated Audio Stages (Flattened — Zero Card-in-Card Nesting)
-            itemsIndexed(
-                items = diagnostics.stages,
-                key = { _, entry -> entry.stage.stageNumber },
-                contentType = { _, _ -> "diag_stage_row" },
-            ) { index, entry ->
-                DiagnosticStageRow(entry = entry)
-                if (index < diagnostics.stages.lastIndex) {
-                    HorizontalDivider(
-                        thickness = 0.5.dp,
-                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.55f),
-                        modifier = Modifier.padding(top = 12.dp),
-                    )
+                // 3. 6-Stage Header & Confidence Legend
+                item(key = "legend", contentType = "diag_legend") {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = "6-STAGE SIGNAL CHAIN",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = TextMuted,
+                            modifier = Modifier.padding(horizontal = 2.dp),
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            VerificationBadge(VerificationLevel.VERIFIED)
+                            VerificationBadge(VerificationLevel.INDICATED)
+                            VerificationBadge(VerificationLevel.UNVERIFIABLE)
+                        }
+                    }
                 }
-            }
 
-            // 5. Mandatory Verbatim Maximum Verification Claim Notice (SPEC Section 3.5)
-            item(key = "claim_notice", contentType = "diag_claim") {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
-                    color = CoralWarningContainer,
-                    border = BorderStroke(0.5.dp, CoralWarning.copy(alpha = 0.45f)),
-                ) {
-                    Column(modifier = Modifier.padding(14.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.HelpOutline,
-                                contentDescription = null,
-                                tint = CoralWarning,
-                                modifier = Modifier.size(18.dp),
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
+                // 4. All 6 Separated Audio Stages (Flattened — Zero Card-in-Card Nesting)
+                itemsIndexed(
+                    items = diagnostics.stages,
+                    key = { _, entry -> entry.stage.stageNumber },
+                    contentType = { _, _ -> "diag_stage_row" },
+                ) { index, entry ->
+                    DiagnosticStageRow(entry = entry)
+                    if (index < diagnostics.stages.lastIndex) {
+                        HorizontalDivider(
+                            thickness = 0.5.dp,
+                            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.55f),
+                            modifier = Modifier.padding(top = 12.dp),
+                        )
+                    }
+                }
+
+                // 5. Mandatory Verbatim Maximum Verification Claim Notice (SPEC Section 3.5)
+                item(key = "claim_notice", contentType = "diag_claim") {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                        color = CoralWarningContainer,
+                        border = BorderStroke(0.5.dp, CoralWarning.copy(alpha = 0.45f)),
+                    ) {
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.HelpOutline,
+                                    contentDescription = null,
+                                    tint = CoralWarning,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "Maximum Verification Claim Boundary",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = OnCoralWarningContainer,
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(6.dp))
                             Text(
-                                text = "Maximum Verification Claim Boundary",
-                                style = MaterialTheme.typography.titleSmall,
+                                text = diagnostics.maximumClaimNotice,
+                                style = MaterialTheme.typography.bodySmall,
                                 color = OnCoralWarningContainer,
                             )
                         }
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Text(
-                            text = diagnostics.maximumClaimNotice,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = OnCoralWarningContainer,
-                        )
                     }
                 }
             }

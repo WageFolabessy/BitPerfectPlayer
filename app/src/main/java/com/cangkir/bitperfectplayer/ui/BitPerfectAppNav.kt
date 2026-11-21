@@ -1,11 +1,17 @@
 package com.cangkir.bitperfectplayer.ui
 
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
 import androidx.compose.material.icons.filled.LibraryMusic
@@ -16,10 +22,14 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
+import androidx.compose.material3.NavigationRail
+import androidx.compose.material3.NavigationRailItem
+import androidx.compose.material3.NavigationRailItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -28,6 +38,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -158,44 +170,26 @@ fun BitPerfectAppRoot(viewModel: MainViewModel) {
         )
     }
 
-    Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
-        contentWindowInsets = WindowInsets(0, 0, 0, 0),
-        snackbarHost = {
-            SnackbarHost(
-                hostState = snackbarHostState,
-                modifier = if (isTopLevelRoute) Modifier else Modifier.navigationBarsPadding(),
+    BitPerfectAdaptiveTopLevelFrame(
+        isTopLevelRoute = isTopLevelRoute,
+        currentRoute = currentRoute ?: Routes.LIBRARY,
+        snackbarHostState = snackbarHostState,
+        onSelectTab = selectTopLevelTab,
+        miniPlayerContent = {
+            MiniPlayerBar(
+                playbackState = playbackState,
+                playbackPositionMsFlow = viewModel.playbackPositionMs,
+                artworkLoader = viewModel.albumArtworkLoader,
+                onOpenNowPlaying = openNowPlaying,
+                onTogglePlayPause = viewModel::togglePlayPause,
+                onNext = viewModel::next,
             )
         },
-        bottomBar = {
-            if (isTopLevelRoute) {
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    MiniPlayerBar(
-                        playbackState = playbackState,
-                        playbackPositionMsFlow = viewModel.playbackPositionMs,
-                        artworkLoader = viewModel.albumArtworkLoader,
-                        onOpenNowPlaying = openNowPlaying,
-                        onTogglePlayPause = viewModel::togglePlayPause,
-                        onNext = viewModel::next,
-                    )
-                    HorizontalDivider(
-                        thickness = 0.5.dp,
-                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.6f),
-                    )
-                    BitPerfectBottomNavBar(
-                        currentRoute = currentRoute ?: Routes.LIBRARY,
-                        onSelectTab = selectTopLevelTab,
-                    )
-                }
-            }
-        },
-    ) { rootInnerPadding ->
+    ) { contentModifier ->
         NavHost(
             navController = navController,
             startDestination = Routes.LIBRARY,
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(bottom = rootInnerPadding.calculateBottomPadding()),
+            modifier = contentModifier,
         ) {
             composable(Routes.LIBRARY) {
                 LibraryScreen(
@@ -392,20 +386,106 @@ fun BitPerfectAppRoot(viewModel: MainViewModel) {
 }
 
 @Composable
-private fun BitPerfectBottomNavBar(currentRoute: String, onSelectTab: (String) -> Unit) {
+internal fun BitPerfectAdaptiveTopLevelFrame(
+    isTopLevelRoute: Boolean,
+    currentRoute: String,
+    snackbarHostState: SnackbarHostState,
+    onSelectTab: (String) -> Unit,
+    miniPlayerContent: @Composable () -> Unit,
+    mainContent: @Composable (Modifier) -> Unit,
+) {
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val useNavigationRail = remember(maxWidth) {
+            WindowLayoutMetrics.useNavigationRail(maxWidth.value.toInt())
+        }
+
+        Scaffold(
+            containerColor = MaterialTheme.colorScheme.background,
+            contentWindowInsets = WindowInsets(0, 0, 0, 0),
+            snackbarHost = {
+                SnackbarHost(
+                    hostState = snackbarHostState,
+                    modifier = if (isTopLevelRoute && !useNavigationRail) Modifier else Modifier.navigationBarsPadding(),
+                )
+            },
+            bottomBar = {
+                if (isTopLevelRoute && !useNavigationRail) {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        miniPlayerContent()
+                        HorizontalDivider(
+                            thickness = 0.5.dp,
+                            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.6f),
+                        )
+                        BitPerfectBottomNavBar(
+                            currentRoute = currentRoute,
+                            onSelectTab = onSelectTab,
+                        )
+                    }
+                }
+            },
+        ) { rootInnerPadding ->
+            Row(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(bottom = rootInnerPadding.calculateBottomPadding()),
+            ) {
+                if (useNavigationRail && isTopLevelRoute) {
+                    BitPerfectNavigationRail(
+                        currentRoute = currentRoute,
+                        onSelectTab = onSelectTab,
+                    )
+                    VerticalDivider(
+                        modifier = Modifier.fillMaxHeight(),
+                        thickness = 0.5.dp,
+                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.6f),
+                    )
+                }
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight(),
+                ) {
+                    mainContent(
+                        Modifier
+                            .weight(1f)
+                            .fillMaxWidth(),
+                    )
+                    if (useNavigationRail && isTopLevelRoute) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .navigationBarsPadding(),
+                        ) {
+                            miniPlayerContent()
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+internal fun BitPerfectBottomNavBar(currentRoute: String, onSelectTab: (String) -> Unit) {
     NavigationBar(
         containerColor = MaterialTheme.colorScheme.surface,
         tonalElevation = 0.dp,
+        modifier = Modifier.semantics {
+            contentDescription = "Bottom navigation bar"
+        },
     ) {
         TOP_LEVEL_TABS.forEach { tab ->
             val selected = currentRoute == tab.route
             NavigationBarItem(
                 selected = selected,
                 onClick = { onSelectTab(tab.route) },
+                modifier = Modifier.semantics {
+                    contentDescription = tab.label
+                },
                 icon = {
                     Icon(
                         imageVector = tab.icon,
-                        contentDescription = tab.label,
+                        contentDescription = null,
                     )
                 },
                 label = {
@@ -424,6 +504,55 @@ private fun BitPerfectBottomNavBar(currentRoute: String, onSelectTab: (String) -
                     unselectedTextColor = TextMuted,
                 ),
             )
+        }
+    }
+}
+
+@Composable
+internal fun BitPerfectNavigationRail(currentRoute: String, onSelectTab: (String) -> Unit) {
+    NavigationRail(
+        containerColor = MaterialTheme.colorScheme.surface,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        modifier = Modifier
+            .fillMaxHeight()
+            .semantics {
+                contentDescription = "Side navigation rail"
+            },
+    ) {
+        Spacer(modifier = Modifier.height(12.dp))
+        TOP_LEVEL_TABS.forEach { tab ->
+            val selected = currentRoute == tab.route
+            NavigationRailItem(
+                selected = selected,
+                onClick = { onSelectTab(tab.route) },
+                modifier = Modifier
+                    .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                    .semantics {
+                        contentDescription = tab.label
+                    },
+                icon = {
+                    Icon(
+                        imageVector = tab.icon,
+                        contentDescription = null,
+                    )
+                },
+                label = {
+                    Text(
+                        text = tab.label,
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 1,
+                        softWrap = false,
+                    )
+                },
+                colors = NavigationRailItemDefaults.colors(
+                    selectedIconColor = MaterialTheme.colorScheme.primary,
+                    selectedTextColor = MaterialTheme.colorScheme.primary,
+                    indicatorColor = IcePrimaryContainer,
+                    unselectedIconColor = TextMuted,
+                    unselectedTextColor = TextMuted,
+                ),
+            )
+            Spacer(modifier = Modifier.height(8.dp))
         }
     }
 }
