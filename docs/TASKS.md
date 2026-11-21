@@ -10,7 +10,7 @@ Execute unchecked `[ ]` items sequentially from top to bottom following `AGENTS.
   - Inspect `gradle/gradle-daemon-jvm.properties`, `gradle.properties`, `gradle/libs.versions.toml`, `settings.gradle.kts`, `build.gradle.kts`, `app/build.gradle.kts`, and `app/src/main/keepRules/rules.keep`.
   - Check available JDK(s) and Android SDK environment (`ANDROID_HOME` / `ANDROID_SDK_ROOT`, installed platforms—specifically checking for SDK 37 matching `compileSdk { version = release(37) }`). If `platforms;android-37` is missing and `sdkmanager` is available, attempt to provision it cleanly without modifying `compileSdk`/`targetSdk`. Ensure `local.properties` is never staged or committed.
   - Run `./gradlew testDebugUnitTest` and `./gradlew assembleDebug` on the untouched baseline project.
-  - **Pass criteria:** Gradle syncs cleanly and both baseline `ExampleUnitTest` and debug APK build succeed without downgrading `compileSdk`/`targetSdk`. *(Foundational Blocker: If Android SDK 37 or the required Gradle JVM is unavailable and cannot be provisioned cleanly within the 3-attempt circuit breaker limit, document exact diagnostics in `BLOCKED.md` and `HANDOFF_REPORT.md`, commit/push them, and halt cleanly).*
+  - **Pass criteria:** Gradle syncs cleanly and both baseline `ExampleUnitTest` and debug APK build succeed without downgrading `compileSdk`/`targetSdk`. *(Foundational Blocker: If Android SDK 37 or the required Gradle JVM is unavailable and cannot be provisioned cleanly within the 3-attempt circuit breaker limit, document exact diagnostics in `BLOCKED.md` and `docs/HANDOFF_REPORT.md`, commit/push them, and halt cleanly).*
 
 - [x] **T0.2 — Configure Dependencies, Manifest Permissions, and Package Structure**
   - Add permissive-licensed (Apache 2.0 / MIT / BSD) dependencies via `gradle/libs.versions.toml` aligned with the existing AGP/Kotlin versions:
@@ -142,8 +142,8 @@ Execute unchecked `[ ]` items sequentially from top to bottom following `AGENTS.
   - Build the real-time Audio Diagnostics screen/sheet displaying all required fields from `SPEC.md` Section 3.5 with clear **Verified**, **Indicated**, and **Unverifiable** badges plus the maximum verification claim notice.
   - **Verification:** `./gradlew assembleDebug` 100% green.
 
-- [x] **T5.4 — Full End-to-End Wiring, Final Audit, & `HANDOFF_REPORT.md`**
+- [x] **T5.4 — Full End-to-End Wiring, Final Audit, & `docs/HANDOFF_REPORT.md`**
   - Wire all layers (Application container/DI, Repositories, `AudioOutputEngine`, `PlaybackForegroundService`, ViewModels, and Compose Navigation) cleanly in `MainActivity.kt` with zero placeholder buttons or dummy flows.
   - Execute the full audit procedure in `.agents/skills/android-audio-verify/SKILL.md` (`testDebugUnitTest`, `lintDebug`, `assembleDebug`, deterministic source & merged manifest privacy audit, and `git status` check).
-  - Write `HANDOFF_REPORT.md` per `.agents/skills/overnight-task-loop/SKILL.md`, check off this task, commit, and push.
+  - Write `docs/HANDOFF_REPORT.md` per `.agents/skills/overnight-task-loop/SKILL.md`, check off this task, commit, and push.
   - **Verification:** All commands succeed cleanly and `app/build/outputs/apk/debug/app-debug.apk` exists.

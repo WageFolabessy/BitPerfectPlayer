@@ -29,8 +29,8 @@ Act as a **Senior Android Engineer, Digital Audio Engineer, and Software Archite
 - **Plugins & Optimization:** Preserve `libs.plugins.android.application`, `libs.plugins.kotlin.compose`, the `release { optimization { ... } }` block in `app/build.gradle.kts`, `app/src/main/keepRules/rules.keep`, `res/xml/backup_rules.xml`, and `res/xml/data_extraction_rules.xml`.
 - **Source & Test Roots:**
   - Production code: `app/src/main/java/com/cangkir/bitperfectplayer/` (already contains `MainActivity.kt` and `ui/theme/{Color.kt, Theme.kt, Type.kt}`)
-  - JVM unit tests: `app/src/test/java/com/cangkir/bitperfectplayer/` (already contains `ExampleUnitTest.kt`)
-  - Instrumented tests: `app/src/androidTest/java/com/cangkir/bitperfectplayer/` (keep intact; do not attempt to execute on device/emulator in cloud)
+  - JVM unit tests: `app/src/test/java/com/cangkir/bitperfectplayer/` (pure-Kotlin JVM unit tests, Room migration tests, and Robolectric Compose UI tests; Android Studio template `ExampleUnitTest.kt` removed in `v1.1`)
+  - Instrumented tests: `app/src/androidTest/java/com/cangkir/bitperfectplayer/` (do not attempt to execute on device/emulator in cloud; Android Studio template `ExampleInstrumentedTest.kt` removed in `v1.1`)
 
 ### Target Hardware Profile (Design Reference Only — Not Directly Testable in Cloud)
 - **Target Smartphone:** POCO F4, 6 GB RAM / 128 GB storage, Xiaomi HyperOS 1.0.9.0.ULMIDXM, **Android 14 (API 34)**, non-root.

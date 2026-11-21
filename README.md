@@ -192,7 +192,7 @@ grep -E "INTERNET|RECORD_AUDIO|MANAGE_EXTERNAL_STORAGE" \
 
 ## Verification Scope and Hardware Safety Notice
 
-- **Automated Software Verification:** Core pure-Kotlin domain logic, Room v1-to-v4 schema migrations, and headless Compose UI behaviors (including the mandatory `HearingSafetyWarningDialog` gate) are covered by 181 automated tests across 33 suites under `./gradlew testDebugUnitTest`, alongside Android Lint and R8 release builds.
+- **Automated Software Verification:** Core pure-Kotlin domain logic, Room v1-to-v4 schema migrations, and headless Compose UI behaviors (including the mandatory `HearingSafetyWarningDialog` gate) are covered by 180 automated tests across 32 suites under `./gradlew testDebugUnitTest`, alongside Android Lint and R8 release builds.
 - **Physical Hardware Limits:** Runtime behavior of `AudioManager.MIXER_BEHAVIOR_BIT_PERFECT`, Qualcomm/OEM `MediaCodec` 24-bit output support, UAC hardware volume attenuation, and internal USB-C DAC firmware processing depend on the target device's Android Audio HAL and DAC hardware. The reference hardware profile used during specification is a POCO F4 (Android 14 / HyperOS) paired with a KZ EDX Pro 2 USB-C IEM (107 dB/mW at 24 ohms).
 - **Safety Warning:** Before toggling **Bit-Perfect Opt-In** on an unfamiliar phone or USB-C DAC, keep high-sensitivity earphones out of your ears until you confirm whether volume buttons attenuate output or the DAC plays at fixed 100% full scale.
 
@@ -202,8 +202,8 @@ grep -E "INTERNET|RECORD_AUDIO|MANAGE_EXTERNAL_STORAGE" \
 
 - [`SPEC.md`](SPEC.md) -- Full product specification, locked audio architecture, and 6-stage verification contract
 - [`DECISIONS.md`](DECISIONS.md) -- Architectural decisions and rationale log
-- [`TASKS.md`](TASKS.md) -- MVP execution checklist
-- [`HANDOFF_REPORT.md`](HANDOFF_REPORT.md) -- Build verification and implementation history report
+- [`docs/TASKS.md`](docs/TASKS.md) -- MVP execution checklist
+- [`docs/HANDOFF_REPORT.md`](docs/HANDOFF_REPORT.md) -- Build verification and implementation history report
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) -- Contribution guidelines, architectural invariants, and local verification steps
 - [`SECURITY.md`](SECURITY.md) -- Security, privacy, and hearing-safety vulnerability reporting policy
 

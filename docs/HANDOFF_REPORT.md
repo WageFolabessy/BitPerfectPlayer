@@ -1,16 +1,16 @@
 # BitPerfectPlayer MVP — Autonomous Build Handoff Report
 
 - **Project:** `com.cangkir.bitperfectplayer` (Kotlin + Jetpack Compose, 100% Offline Android Music Player)
-- **Active Branch:** `main` *(merged from `feat/mvp-overnight`, feature branch deleted locally and on `origin`; release tag `v1.0` published)*
-- **Overall Status:** **Complete — `v1.0` Released on `main`** *(181 / 181 automated tests passing across 33 suites; core playback, safety, and release APK verified on POCO F4 + KZ EDX Pro 2 USB-C, with final Section 18–19 ART/visual polish pending follow-up on-device check)*
-- **Tasks Completed:** **17 / 17** (`T0.1` through `T5.4` in `TASKS.md`)
+- **Active Branch:** `feat/v1.1` *(branched from `main` after `v1.0` release)*
+- **Overall Status:** **`v1.0` Released on `main`; `feat/v1.1` Repository Hygiene Complete** *(180 / 180 automated tests passing across 32 suites after removing leftover Android Studio template tests; core playback, safety, and release APK verified on POCO F4 + KZ EDX Pro 2 USB-C, with final Section 18–19 ART/visual polish pending follow-up on-device check)*
+- **Tasks Completed:** **17 / 17** (`T0.1` through `T5.4` in `docs/TASKS.md`)
 - **Active Blockers:** None (`BLOCKED.md` not required)
 
 ---
 
 ## 1. Implementation Summary
 
-All 5 milestones from `TASKS.md` were implemented sequentially in production Kotlin with zero mock playback engines, zero placeholder buttons, and zero `TODO()` stubs:
+All 5 milestones from `docs/TASKS.md` were implemented sequentially in production Kotlin with zero mock playback engines, zero placeholder buttons, and zero `TODO()` stubs:
 
 | Milestone | Task | Commit | Key Modules Delivered |
 | :--- | :--- | :--- | :--- |
@@ -30,7 +30,7 @@ All 5 milestones from `TASKS.md` were implemented sequentially in production Kot
 | **M5: Compose Dark UI** | `T5.1` | `8fb3eb3` | Evolved `ui/theme/{Color.kt, Theme.kt, Type.kt}` into consistent audiophile Material 3 Dark Theme, `MainViewModel`, `LibraryScreen` (6 tabs, search, SAF import, runtime permissions), and persistent `MiniPlayerBar` (`>= 48.dp` targets). |
 | **M5: Compose Dark UI** | `T5.2` | `a8bc867` | `NowPlayingScreen` (format badges, seekbar, transport controls, quick Pause, Safe Mode vs Bit-Perfect Opt-In controls), mandatory `HearingSafetyWarningDialog`, and `QueueScreen` (add, remove, reorder, jump). |
 | **M5: Compose Dark UI** | `T5.3` | `09b27d6` | `LyricsScreen` (`AudioOutputEngine.currentPositionMs`-clocked synced `.lrc` view with auto-scroll & tap-to-seek, static view, SAF `.lrc` import, manual editor) and 6-stage real-time `DiagnosticsScreen`. |
-| **M5: Final Wiring & Audit** | `T5.4` | `404352e` | `BitPerfectAppNav.kt` & `MainActivity.kt` end-to-end Compose Navigation wiring, Android Lint resolution (`MODIFY_AUDIO_SETTINGS` for API 34+ mixer APIs, `minSdk = 26` `MediaFormat` fix), full audit, and `HANDOFF_REPORT.md`. |
+| **M5: Final Wiring & Audit** | `T5.4` | `404352e` | `BitPerfectAppNav.kt` & `MainActivity.kt` end-to-end Compose Navigation wiring, Android Lint resolution (`MODIFY_AUDIO_SETTINGS` for API 34+ mixer APIs, `minSdk = 26` `MediaFormat` fix), full audit, and `docs/HANDOFF_REPORT.md`. |
 
 ---
 
@@ -630,8 +630,8 @@ Following physical testing of the signed Release APK on POCO F4 (Android 14 / Hy
    - Restored 3 CRLF-only line-ending diffs back to `HEAD` and fast-forward merged `feat/mvp-overnight` (`ec2b888`) cleanly into `main`.
    - Pushed `main` to `origin` and deleted `feat/mvp-overnight` both locally and on `origin`.
 2. **Root Documentation & Release Build Hygiene (`457d89e`, `6af1209`):**
-   - Added [`README.md`](README.md) documenting architecture, supported formats, hearing safety invariants, 6-stage diagnostics, permissions, Room v4 persistence, build requirements, and hardware safety notices.
-   - Updated [`app/.gitignore`](app/.gitignore) to ignore `/release` so Android Studio's generated signed APK and R8 `mapping.txt` outputs remain untracked.
+   - Added [`README.md`](../README.md) documenting architecture, supported formats, hearing safety invariants, 6-stage diagnostics, permissions, Room v4 persistence, build requirements, and hardware safety notices.
+   - Updated [`app/.gitignore`](../app/.gitignore) to ignore `/release` so Android Studio's generated signed APK and R8 `mapping.txt` outputs remain untracked.
 3. **Annotated Tag & GitHub Release Publication (`v1.0`):**
    - Created and pushed annotated Git tag `v1.0` (`6af1209b186ef9a439df244e358a9d3ab11d89da`, matching `versionName = "1.0"`, `versionCode = 1`).
    - Published GitHub Release **`BitPerfectPlayer v1.0`** (`Latest`) at `https://github.com/WageFolabessy/BitPerfectPlayer/releases/tag/v1.0` attaching `BitPerfectPlayer-v1.0-release.apk` (`2,628,802` bytes).
@@ -639,4 +639,27 @@ Following physical testing of the signed Release APK on POCO F4 (Android 14 / Hy
      - **APK SHA-256:** `725481a31d4786cecd7c2ed17ee7d0ba38a3a7a7b6d8884486c1b93ea4bd847a`
      - **Signing Scheme:** `Verifies` via APK Signature Scheme v2 (`CN=Endricho Folabessy`, Cert SHA-256: `c4dd7e0c9f5b883f56b268e54bd02361788fc9d8f52c313075c4f0447eef89d4`)
      - **Compiled APK Manifest Privacy Check:** Zero `INTERNET`, `RECORD_AUDIO`, or `MANAGE_EXTERNAL_STORAGE` permissions.
+
+---
+
+## 21. `feat/v1.1` Preparation — Template Test Removal & `docs/` Reorganization
+
+### Delivered Repository Hygiene Actions
+1. **Feature Branch Setup:**
+   - Created and checked out `feat/v1.1` from clean `main` (`25ac542`).
+2. **Removed Leftover Android Studio Template Tests:**
+   - Removed `app/src/test/java/com/cangkir/bitperfectplayer/ExampleUnitTest.kt` and `app/src/androidTest/java/com/cangkir/bitperfectplayer/ExampleInstrumentedTest.kt`.
+   - Zero production Kotlin audio/UI files under `app/src/main/` were modified.
+3. **Relocated Process Documentation into `docs/` & Synchronized All References:**
+   - Moved `HANDOFF_REPORT.md` -> `docs/HANDOFF_REPORT.md` and `TASKS.md` -> `docs/TASKS.md` via `git mv`, keeping `README.md`, `SPEC.md`, `DECISIONS.md`, `LICENSE`, `NOTICE`, `CONTRIBUTING.md`, `SECURITY.md`, and `AGENTS.md` at the repository root.
+   - Updated every reference and relative Markdown link across `AGENTS.md`, `.agents/skills/overnight-task-loop/SKILL.md`, `README.md`, `CONTRIBUTING.md`, `SPEC.md`, `docs/TASKS.md`, and `docs/HANDOFF_REPORT.md` (verified repo-wide: `0` stale root-path references, `0` broken relative Markdown links).
+
+### Software Verification (`./gradlew clean testDebugUnitTest lintDebug assembleDebug assembleRelease`)
+- **Automated JVM Unit + Robolectric SQLite Migration + Headless Compose UI Tests:** **180 / 180 passed** across **32 test suites** (`0` failed, `0` errors, `0` skipped, `0` `@Ignore`).
+- **Compiler & R8 Warnings:** `0` Kotlin compiler warnings (production + test), `0` KSP warnings, `0` R8 warnings.
+- **Android Lint (`lintDebug` & `lintVitalRelease`):** **0 errors**, **0 warnings across all `/app/src/` Kotlin, manifest, and resource files**.
+- **Debug APK (`assembleDebug`):** `app/build/outputs/apk/debug/app-debug.apk` (`20.15 MB` / `21,129,808 bytes`).
+- **Release APK (`assembleRelease` with R8 optimization):** `app/build/outputs/apk/release/app-release-unsigned.apk` (`2.50 MB` / `2,616,514 bytes`).
+- **Strict Offline & Zero-Permission Audit (Source + All 8 Generated Debug, Release & UnitTest Manifests):** **PASS** — **0 `INTERNET`**, **0 `RECORD_AUDIO`**, **0 `MANAGE_EXTERNAL_STORAGE`**.
+- **Physical Hardware Verification:** No production runtime behavior changed in this checkpoint; prior pending POCO F4 + KZ EDX Pro 2 USB-C verification items from Sections 18–19 remain unchanged.
 

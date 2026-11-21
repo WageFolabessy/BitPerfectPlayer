@@ -69,4 +69,5 @@ grep -Eni "permission\.(INTERNET|MANAGE_EXTERNAL_STORAGE|RECORD_AUDIO)" \
 
 - **Commit Format:** Follow Conventional Commits (`feat:`, `fix:`, `refactor:`, `perf:`, `test:`, `docs:`, `chore:`).
 - **Tests:** Include JVM unit tests (or Robolectric UI tests with `@Config(sdk = [34])`) covering normal paths, edge cases, and invalid inputs. Never delete, `@Ignore`, or weaken existing tests.
+- **Documentation & Verification Logs:** Keep [`SPEC.md`](SPEC.md), [`DECISIONS.md`](DECISIONS.md), [`docs/TASKS.md`](docs/TASKS.md), and [`docs/HANDOFF_REPORT.md`](docs/HANDOFF_REPORT.md) synchronized when changing architecture, constraints, or release milestones.
 - **Verification Honesty:** Clearly state in your PR description which checks were run in software (`testDebugUnitTest`, `lintDebug`, `assembleDebug`) vs. verified on physical Android hardware and USB-C DACs. Never fabricate hardware test results.
