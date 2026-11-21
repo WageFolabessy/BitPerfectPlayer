@@ -9,7 +9,7 @@ A 100% offline, local-first native Android music player (`com.cangkir.bitperfect
 1. **100% Offline and Local-First:** Zero `INTERNET`, `RECORD_AUDIO`, or `MANAGE_EXTERNAL_STORAGE` permissions. No networking libraries, telemetry, analytics, ads, cloud sync, or automatic online lookups for metadata, artwork, or lyrics.
 2. **Hearing Safety First:** Defaults to **Safe Mode (`SAFE_VOLUME_MODE`)** on fresh installation and whenever any USB audio device connects. **Bit-Perfect Opt-In (`BIT_PERFECT_OPT_IN`)** never auto-activates and requires explicit confirmation through a mandatory `HearingSafetyWarningDialog` whenever hardware volume control is unverified.
 3. **Honest Audio Diagnostics:** Explicitly distinguishes verified runtime state from OS-indicated metadata and unverifiable DAC hardware stages. Never equates lossless file decoding with verified bit-perfect output.
-4. **Pure-Kotlin Domain Separation:** Core domain logic (SHA-256 content fingerprinting, `.lrc` parsing, WAV RIFF/PCM decoding, playback queue, safety state machine, ReplayGain tagging/scaling, FFT spectrum DSP, turntable scratch DSP, JSON backup codec, and `.m3u8` codec) lives in `android.*`-free Kotlin modules for deterministic JVM unit testing.
+4. **Pure-Kotlin Domain Separation:** Core domain logic (SHA-256 content fingerprinting, `.lrc` parsing, WAV RIFF/PCM decoding, playback queue, safety state machine, ReplayGain tagging/scaling, FFT spectrum DSP, turntable scratch DSP, diagnostic log formatting/rotation/buffering, JSON backup codec, and `.m3u8` codec) lives in `android.*`-free Kotlin modules for deterministic JVM unit testing.
 
 ---
 
@@ -57,6 +57,8 @@ A 100% offline, local-first native Android music player (`com.cangkir.bitperfect
 Every diagnostic item is tagged `VERIFIED`, `INDICATED`, or `UNVERIFIABLE`, accompanied by the claim boundary notice:
 
 > Verified up to Android Audio HAL / USB Output boundary; internal USB-C DAC cable firmware processing cannot be verified without external hardware instrumentation.
+
+- **Opt-In Local Diagnostic Logging (`Settings -> DIAGNOSTIC LOGGING`):** Strictly **OFF by default** with zero extra permissions, zero disk I/O when disabled, and zero hot-path audio/UI thread blocking. When enabled, writes compact, single-line UTC `key=value` records across four bounded/rotated private `.txt` files (`device_summary.txt`, `audio_pipeline.txt`, `performance.txt`, `errors_and_crashes.txt`; `256 KB` cap + 1 `.prev.txt` backup per append channel, `< 2 MB` total) with defense-in-depth PII/URI/path redaction (never logs song titles, artists, albums, filenames, folder names, or raw URIs — uses 8-character SHA-256 prefixes and technical audio metadata only). Includes **Export Logs (.zip)** via SAF, **Share Logs** via scoped `FileProvider`, **Clear Logs**, and `-keepattributes SourceFile,LineNumberTable` in `app/src/main/keepRules/rules.keep` for `retrace`-ready Release APK crash stacks (retain `app/build/outputs/mapping/release/mapping.txt` per release build).
 
 ### Library, Context-Aware Queue, Playlists, and Local Backup
 
@@ -126,13 +128,14 @@ app/src/main/java/com/cangkir/bitperfectplayer/
 |-- audio/                        # Decoders (incl. RawExtractorPcmDecoder), WAV parser, modular AudioOutputEngine,
 |                                 # UsbMixerProfileSelector, ForegroundPlaybackGate, safety, 6-stage diagnostics, DSP
 |-- data/                         # Room v4 DB, entities, DAOs, DataStore prefs (incl. DefaultHomepage), JSON backup codec
+|-- diagnostics/                  # Opt-in local diagnostic logging (pure formatter/rotation/ring buffer, logger, crash handler, ZIP exporter)
 |-- library/                      # MediaStore/SAF scanning, scan filter, sorting, aspect-preserving artwork, playlists, .m3u8
 |-- lyrics/                       # SHA-256 content fingerprint generator, .lrc parser, repository
 `-- ui/                           # Adaptive navigation (WindowLayoutMetrics), ViewModel, drag-and-drop Queue, vinyl/spectrum,
     |-- library/                  # LibraryScreen, header controls, track list, & group views
     |-- nowplaying/               # Adaptive 1/2-pane NowPlayingScreen, controls, & hearing safety dialog
     |-- playlists/                # PlaylistsScreen, overview, detail view, & dialogs
-    |-- settings/                 # SettingsScreen, audio engine, display/library (Default Homepage), & backup/about sections
+    |-- settings/                 # SettingsScreen, audio engine, display/library, backup/about, & diagnostic logging sections
     `-- theme/                    # Matte obsidian Color, Theme, & Type definitions
 ```
 
@@ -145,7 +148,7 @@ Local persistence uses Room (`BitPerfectDatabase.kt`, schema `version = 4`) with
 - `playlist_tracks`
 - `track_stats`
 
-Preferences (Safe Mode default, shuffle, repeat, gapless toggle, ReplayGain settings, default homepage, artwork style, spectrum style/sparks, SAF URIs, per-scope sort state, and last queue context) are stored locally in Jetpack DataStore Preferences.
+Preferences (Safe Mode default, shuffle, repeat, gapless toggle, ReplayGain settings, default homepage, artwork style, spectrum style/sparks, opt-in diagnostic logging flag, SAF URIs, per-scope sort state, and last queue context) are stored locally in Jetpack DataStore Preferences.
 
 ---
 
@@ -211,7 +214,7 @@ grep -E "INTERNET|RECORD_AUDIO|MANAGE_EXTERNAL_STORAGE" \
 
 ## Verification Scope and Hardware Safety Notice
 
-- **Automated Software Verification:** Core pure-Kotlin domain logic (including `UsbMixerProfileSelector`, `PcmStreamRules`, `TurntableFlushHeadTracker`, `QueueDragReorderMath`, `DefaultHomepage`, `AlbumArtworkHelper`, `ForegroundPlaybackGate`, and `WindowLayoutMetrics`), Room v1-to-v4 schema migrations, and headless Compose UI behaviors (including the mandatory `HearingSafetyWarningDialog` gate, passive Queue navigation, pure-Compose drag-and-drop reordering, full-list `All Songs` search playback, `DefaultHomepage` cold startup, and adaptive `NavigationRail` / 2-column `NowPlayingScreen` layouts) are covered by **222 automated tests across 35 suites** under `./gradlew testDebugUnitTest`, alongside `ktlintCheck`, `detekt`, Android Lint, and R8 release builds.
+- **Automated Software Verification:** Core pure-Kotlin domain logic (including `UsbMixerProfileSelector`, `PcmStreamRules`, `TurntableFlushHeadTracker`, `QueueDragReorderMath`, `DefaultHomepage`, `AlbumArtworkHelper`, `DiagnosticLogFormatter`, `DiagnosticLogRotationPolicy`, `DiagnosticLogBuffer`, `ForegroundPlaybackGate`, and `WindowLayoutMetrics`), Room v1-to-v4 schema migrations, and headless Compose UI behaviors (including the mandatory `HearingSafetyWarningDialog` gate, passive Queue navigation, pure-Compose drag-and-drop reordering, full-list `All Songs` search playback, `DefaultHomepage` cold startup, opt-in `DIAGNOSTIC LOGGING` settings controls, and adaptive `NavigationRail` / 2-column `NowPlayingScreen` layouts) are covered by **243 automated tests across 39 suites** under `./gradlew testDebugUnitTest`, alongside `ktlintCheck`, `detekt`, Android Lint, and R8 release builds.
 - **Physical Hardware Limits:** Runtime behavior of `AudioManager.MIXER_BEHAVIOR_BIT_PERFECT` and `MIXER_BEHAVIOR_DEFAULT` sample-rate negotiation, Android 16 / OEM `audio/raw` and `MediaCodec` 24-bit output support, UAC hardware volume attenuation, and internal USB-C DAC firmware processing depend on the target device's Android Audio HAL and DAC hardware. The reference hardware profile used during specification is a POCO F4 (Android 14 / HyperOS) paired with a KZ EDX Pro 2 USB-C IEM (107 dB/mW at 24 ohms).
 - **Safety Warning:** Before toggling **Bit-Perfect Opt-In** on an unfamiliar phone or USB-C DAC, keep high-sensitivity earphones out of your ears until you confirm whether volume buttons attenuate output or the DAC plays at fixed 100% full scale.
 

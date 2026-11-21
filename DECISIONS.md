@@ -330,4 +330,25 @@ This file records autonomous architectural, dependency, and environment decision
   - Square `1:1` covers fill rectangular/square containers edge-to-edge seamlessly, while non-square covers (`16:9`, `4:3`, portrait) stay 100% uncropped across every browsing and playback surface without compromising the authentic circular vinyl label aesthetic.
 - **Rejected Alternatives:** Forcing a shrunken square inside the circular vinyl center label (Option A; degrades turntable visual fidelity); mutating container aspect ratios per row in `LazyColumn` (breaks vertical rhythm and hairline divider alignment across track lists).
 
+---
+
+## D11.9 — Opt-In Local Diagnostic Logging Subsystem, Bounded Rotation, Zero-PII Export/Share, & R8 Stacktrace Retention
+- **Decision:**
+  1. **Default OFF & Opt-In Only:** Added `diagnosticLoggingEnabled: Boolean = false` to `UserPreferences` (`UserPreferencesRepository`), intentionally excluded from `LocalBackupCodec` `.json` restore so importing a backup never silently enables diagnostic recording. When OFF, `LocalDiagnosticLogger` performs only a single `@Volatile Boolean` check in `inline` log helpers (zero lambda/map/string allocations), writes zero files, spawns no background writer thread, and captures zero crash traces.
+  2. **Pure-Kotlin Domain Core (`com.cangkir.bitperfectplayer.diagnostics`, `0` `android.*`/`androidx.*` imports):**
+     - `DiagnosticLogChannel`: separates output cleanly across 4 files inside app-private `filesDir/diagnostic_logs/` (`device_summary.txt`, `audio_pipeline.txt`, `performance.txt`, `errors_and_crashes.txt`) plus `.prev.txt` backups.
+     - `DiagnosticLogFormatter`: emits agent-readable single-line UTC ISO-8601 `YYYY-MM-DDTHH:mm:ss.SSSZ <LEVEL> <CHANNEL> <EVENT> key=value` records, `--- CRASH_START ---`/`--- CRASH_END ---` blocks, allowlisted audio extension extraction, 8-char lowercase SHA-256 prefixing, and defense-in-depth redaction of forbidden PII keys, `content://`/`file://` URIs, and `/storage/`/`/sdcard/` paths.
+     - `DiagnosticLogRotationPolicy`: caps each append channel at `256 KB` with max `1` `.prev.txt` backup (`< 2 MB` total local footprint) and writes `device_summary.txt` atomically.
+     - `DiagnosticLogBuffer`: bounded `512`-entry drop-oldest ring buffer so producers never block on disk I/O.
+  3. **Non-Blocking Android Runtime, Zero-Permission Export/Share, & R8 Keep Rules:**
+     - `LocalDiagnosticLogger` uses a lazily started low-priority daemon thread (`BitPerfectDiagWriter`, `ReentrantLock` + `Condition`, 3-second batch flush + flush on pause/stop/background/export).
+     - `DiagnosticCrashHandler` chains `Thread.setDefaultUncaughtExceptionHandler` strictly when enabled and always delegates to the previous handler.
+     - `DiagnosticLogExporter` uses standard JDK `ZipOutputStream` (zero external libraries) to bundle `README_LOGS.txt` + all non-empty log files via SAF `ActivityResultContracts.CreateDocument("application/zip")` (**Export Logs (.zip)**) and non-exported `androidx.core.content.FileProvider` scoped strictly to `cacheDir/diagnostic_exports/` via `res/xml/file_paths.xml` (**Share Logs**), adding **zero** Android permissions.
+     - Added `-keepattributes SourceFile,LineNumberTable` to `app/src/main/keepRules/rules.keep` (AGP `9.5.2`'s active R8 keep rules file; `app/proguard-rules.pro` does not exist in this baseline). Teams publishing signed Release APKs should archive `app/build/outputs/mapping/release/mapping.txt` alongside each build to deobfuscate Release crash blocks with `retrace`.
+  4. **Modular Settings UI (`SettingsDiagnosticLoggingSection.kt`):** Added a dedicated `DIAGNOSTIC LOGGING` matte-obsidian card in `SettingsScreen.kt` with opt-in toggle, live `Stored Logs` footprint (`3 files · 14.2 KB` / `No logs stored`), `>= 48.dp` **Export Logs (.zip)**, **Share Logs**, and **Clear Logs** actions.
+- **Rationale:**
+  - Gives non-root Release APK users a clean, privacy-preserving, one-tap way to collect structured audio HAL, `audio/raw`, USB mixer, turntable, FGS handshake, latency/underrun, and crash diagnostics on real devices without touching `adb`, degrading 120 Hz rendering, or risking audio glitches or library PII leakage.
+- **Rejected Alternatives:** Writing a single unbounded monolithic log file (unreadable by agents and risks unbounded disk growth); auto-enabling logging on fresh install (violates strict opt-in privacy posture); writing to public `Downloads/` with legacy storage permissions (unnecessary permissions); adding external logging or ZIP libraries such as Timber/Zip4j (unnecessary APK bloat when JDK `ZipOutputStream` + pure Kotlin keeps the R8 Release APK at `2.70 MB`).
+
+
 

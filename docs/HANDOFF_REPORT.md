@@ -2,7 +2,7 @@
 
 - **Project:** `com.cangkir.bitperfectplayer` (Kotlin + Jetpack Compose, 100% Offline Android Music Player)
 - **Active Branch:** `feat/v1.2` *(branched from `main` at `b157c4b`)*
-- **Overall Status:** **`feat/v1.2` Complete & Software-Verified (`versionName = "1.2"`, `versionCode = 3`)** *(222 / 222 automated tests passing across 35 suites with `ktlintCheck`, `detekt`, Android Lint, Debug APK, and R8 Release APK clean; physical POCO F4 + Android 16 / USB-C DAC hardware verification pending)*
+- **Overall Status:** **`feat/v1.2` Complete & Software-Verified (`versionName = "1.2"`, `versionCode = 3`)** *(243 / 243 automated tests passing across 39 suites with `ktlintCheck`, `detekt`, Android Lint, Debug APK, and R8 Release APK clean; physical POCO F4 + Android 16 / USB-C DAC hardware verification pending)*
 - **Tasks Completed:** **17 / 17** (`T0.1` through `T5.4` in `docs/TASKS.md`) + `v1.1` release + complete `v1.2` release upgrades
 - **Active Blockers:** None (`BLOCKED.md` not required)
 
@@ -970,5 +970,48 @@ Split the 4 oversized Compose screen files (`LibraryScreen.kt`, `PlaylistsScreen
    - [ ] **Full Uncropped Non-Square Album Cover Artwork (Option B):** Inspect tracks with `16:9` landscape and portrait cover art across `All Songs`, `Albums`, `Playlists`, `Queue`, `MiniPlayer`, and `Now Playing` Square Cover mode (confirm 100% uncropped `ContentScale.Fit` on matte-obsidian backdrop), and switch to Vinyl Disc mode to confirm distortion-free circular vinyl center framing.
 2. **Android 16 (API 36) / Custom ROM:**
    - [ ] **`audio/raw` 24-bit/96 kHz FLAC Playback:** Play a 24-bit/96 kHz FLAC file where `MediaExtractor` exposes `audio/raw`; confirm clean noise-free audio via `RawExtractorPcmDecoder` and verify Stages 1–2 diagnostics report `FLAC` + `MediaExtractor Direct PCM (...)`.
+
+---
+
+## 31. `v1.2` Opt-In Local Diagnostic Logging Subsystem (`D11.9`)
+
+### Delivered Architecture & Files
+1. **Pure-Kotlin Diagnostic Core (`com.cangkir.bitperfectplayer.diagnostics`, `0` `android.*` / `androidx.*` imports):**
+   - [`DiagnosticLogChannel.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/diagnostics/DiagnosticLogChannel.kt): Defines `DiagnosticLogLevel`, the 4 bounded files (`device_summary.txt`, `audio_pipeline.txt`, `performance.txt`, `errors_and_crashes.txt`) + `.prev.txt` backup mapping, and `DiagnosticLogStats.formatSummary()`.
+   - [`DiagnosticLogFormatter.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/diagnostics/DiagnosticLogFormatter.kt): Single-line UTC ISO-8601 `key=value` formatter, `--- CRASH_START ---`/`--- CRASH_END ---` crash wrapper, allowlisted audio extension extractor, 8-char SHA-256 prefix helper, `README_LOGS.txt` generator, and defense-in-depth PII key + `content://`/`file://` + `/storage/` path redaction.
+   - [`DiagnosticLogRotationPolicy.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/diagnostics/DiagnosticLogRotationPolicy.kt): `256 KB` active-file rotation with max 1 `.prev.txt` backup per append channel (`< 2 MB` total local cap), atomic snapshot writes for `device_summary.txt`, storage stats computation, and full cleanup.
+   - [`DiagnosticLogBuffer.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/diagnostics/DiagnosticLogBuffer.kt): Bounded `512`-entry drop-oldest ring queue with overflow tracking.
+2. **Android Runtime, Crash Handler, Zero-Permission ZIP Exporter, Manifest & R8 Rules:**
+   - [`LocalDiagnosticLogger.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/diagnostics/LocalDiagnosticLogger.kt): Strictly default-OFF (`isEnabled = false`) logger with zero-allocation `inline` guards when disabled, lazy `BitPerfectDiagWriter` background thread (`ReentrantLock` + `Condition`, 3-second batching + explicit flush), synchronous crash capture, and live `storageStats: StateFlow<DiagnosticLogStats>`.
+   - [`DiagnosticCrashHandler.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/diagnostics/DiagnosticCrashHandler.kt): Chained `Thread.UncaughtExceptionHandler` capturing bounded crash traces strictly when opted in and always delegating to the previous handler.
+   - [`DiagnosticLogExporter.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/diagnostics/DiagnosticLogExporter.kt): Standard-JDK `ZipOutputStream` packager (`README_LOGS.txt` + active/rotated `.txt` files) for SAF `CreateDocument("application/zip")` export and scoped `FileProvider` `Intent.ACTION_SEND` sharing.
+   - [`file_paths.xml`](../app/src/main/res/xml/file_paths.xml), [`AndroidManifest.xml`](../app/src/main/AndroidManifest.xml) (non-exported `androidx.core.content.FileProvider` scoped strictly to `cacheDir/diagnostic_exports/`; zero new permissions), and [`rules.keep`](../app/src/main/keepRules/rules.keep) (`-keepattributes SourceFile,LineNumberTable`).
+3. **Strategic Zero-PII Instrumentation & Modular Settings UI:**
+   - Persisted `diagnosticLoggingEnabled: Boolean = false` in [`PersistenceModels.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/data/PersistenceModels.kt) and [`UserPreferencesRepository.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/data/UserPreferencesRepository.kt) (never auto-enabled by `.json` backup restore).
+   - Instrumented [`BitPerfectApplication.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/BitPerfectApplication.kt), [`MainActivity.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/MainActivity.kt), [`MediaCodecAudioDecoder.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/MediaCodecAudioDecoder.kt), [`AudioRouteAndMixerManager.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/AudioRouteAndMixerManager.kt), [`AudioTrackWriter.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/AudioTrackWriter.kt), [`TurntableScratchRunner.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/TurntableScratchRunner.kt), [`AudioOutputEngine.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/AudioOutputEngine.kt), [`PlaybackController.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/PlaybackController.kt), and [`PlaybackForegroundService.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/PlaybackForegroundService.kt) strictly on discrete lifecycle transitions (zero per-buffer or per-frame logging).
+   - Created [`SettingsDiagnosticLoggingSection.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/settings/SettingsDiagnosticLoggingSection.kt) and wired it into [`MainViewModel.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/MainViewModel.kt), [`SettingsScreen.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/settings/SettingsScreen.kt), and [`BitPerfectAppNav.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/BitPerfectAppNav.kt).
+
+### Final Clean Verification Evidence (`./gradlew clean ktlintCheck detekt testDebugUnitTest lintDebug` + `assembleDebug assembleRelease`)
+- **Kotlin Formatting (`ktlintCheck`):** **PASS — 0 violations** across `main`, `test`, and Kotlin Gradle scripts.
+- **Static Analysis (`detekt`):** **PASS — 0 issues** (0 baseline files).
+- **Automated JVM Unit + Room Migration + Robolectric Compose UI Tests (`testDebugUnitTest`):** **243 / 243 passed** across **39 test suites** (`0` failed, `0` errors, `0` skipped, `0` `@Ignore`, `0` `TODO()`), including:
+  - [`DiagnosticLogFormatterTest.kt`](../app/src/test/java/com/cangkir/bitperfectplayer/diagnostics/DiagnosticLogFormatterTest.kt): `9 / 9`
+  - [`DiagnosticLogRotationPolicyTest.kt`](../app/src/test/java/com/cangkir/bitperfectplayer/diagnostics/DiagnosticLogRotationPolicyTest.kt): `4 / 4`
+  - [`DiagnosticLogBufferTest.kt`](../app/src/test/java/com/cangkir/bitperfectplayer/diagnostics/DiagnosticLogBufferTest.kt): `4 / 4`
+  - [`LocalDiagnosticLoggerTest.kt`](../app/src/test/java/com/cangkir/bitperfectplayer/diagnostics/LocalDiagnosticLoggerTest.kt): `3 / 3` (default-OFF zero-disk-write invariant, 4-channel ZIP export + `README_LOGS.txt` inspection, `clearAllLogs`, and `DiagnosticCrashHandler` chaining)
+  - [`PersistenceAndPreferencesTest.kt`](../app/src/test/java/com/cangkir/bitperfectplayer/data/PersistenceAndPreferencesTest.kt): `4 / 4` (`diagnosticLoggingEnabled` default `false` + round-trip toggle)
+  - [`BitPerfectUiBehaviorTest.kt`](../app/src/test/java/com/cangkir/bitperfectplayer/ui/BitPerfectUiBehaviorTest.kt): `28 / 28` (+1 verifying Settings `DIAGNOSTIC LOGGING` default-OFF state, disabled action buttons, toggle ON live footprint, Share click, and Clear reset)
+- **Compiler, KSP, & R8 Warnings:** **0** Kotlin compiler warnings, **0** KSP warnings, **0** R8 warnings.
+- **Android Lint (`lintDebug` & `lintVitalRelease`):** **0 errors**, **0 total warnings**.
+- **Version Integrity:** Merged Release manifest confirmed `android:versionCode="3"` and `android:versionName="1.2"`.
+- **Debug APK (`assembleDebug`):** `app/build/outputs/apk/debug/app-debug.apk` (`20.32 MB` / `21,306,566 bytes`).
+- **Release APK (`assembleRelease` with R8 optimization):** `app/build/outputs/apk/release/app-release-unsigned.apk` (`2.70 MB` / `2,828,380 bytes`).
+- **R8 Mapping Artifact (`retrace` support):** `app/build/outputs/mapping/release/mapping.txt` (`36.17 MB` / `37,922,287 bytes`, non-empty).
+- **Pure-Kotlin Domain Boundary (`DiagnosticLogChannel`, `DiagnosticLogFormatter`, `DiagnosticLogRotationPolicy`, `DiagnosticLogBuffer`):** **PASS — 0 `android.*` / `androidx.*` imports**.
+- **Strict Offline & Zero-Permission Audit (XML-parsed Source + All 5 Merged Debug/Release/UnitTest Manifests):** **PASS — 0 `INTERNET`, 0 `RECORD_AUDIO`, 0 `MANAGE_EXTERNAL_STORAGE`, 0 `WRITE_EXTERNAL_STORAGE`**; `FileProvider` confirmed `exported="false"`, `grantUriPermissions="true"`, `authorities="com.cangkir.bitperfectplayer.fileprovider"`.
+
+### Additional Hardware Verification Checklist (Not Executed in Cloud)
+- [ ] **Release APK Field Diagnostics Workflow:** Install signed `v1.2` Release APK on physical POCO F4 / Android 16 device, confirm `DIAGNOSTIC LOGGING` defaults OFF (`No logs stored`), toggle ON, play a 24-bit/96 kHz FLAC + test USB-C DAC + live turntable scrub, verify **Export Logs (.zip)** via Android SAF saves a valid zip (`README_LOGS.txt` + `.txt` channels with zero song titles/paths), verify **Share Logs** opens the Android Share Sheet cleanly via `FileProvider`, and verify **Clear Logs** deletes all stored log/cache files.
+
 
 
