@@ -193,6 +193,7 @@ data class UserPreferences(
     val replayGainPreampDb: Float = 0.0f,
     val replayGainPreventClipping: Boolean = true,
     val nowPlayingArtworkStyle: NowPlayingArtworkStyle = NowPlayingArtworkStyle.VINYL_DISC,
+    val spectrumVisualizerEnabled: Boolean = true,
     val persistedSafTreeUris: Set<String> = emptySet(),
     val persistedSafFileUris: Set<String> = emptySet(),
     val lastPlaybackState: LastPlaybackState = LastPlaybackState(),

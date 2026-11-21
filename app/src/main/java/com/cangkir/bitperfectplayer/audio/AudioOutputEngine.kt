@@ -145,6 +145,13 @@ class AudioOutputEngine(
     @Volatile
     private var turntableRingBuffer: TurntablePcmRingBuffer? = null
 
+    // Strictly read-only, lifecycle-gated PCM tap (~192 KB) for the radial FFT spectrum visualizer.
+    // Allocated lazily ONLY when active; released immediately when disabled, backgrounded, or stopped.
+    private val spectrumTapActive = AtomicBoolean(false)
+
+    @Volatile
+    private var spectrumPcmTap: SpectrumPcmTap? = null
+
     @Volatile
     private var gaplessEnabled: Boolean = true
 
@@ -616,6 +623,37 @@ class AudioOutputEngine(
         turntableFallbackSeekMs.set(-1L)
     }
 
+    /**
+     * Activates or deactivates the strictly read-only PCM spectrum side-tap.
+     * When `active == false`, immediately releases the ~192 KB ring buffer so `BitPerfectAudioThread`
+     * performs zero tapping and UI performs zero FFT work.
+     */
+    fun setSpectrumTapActive(active: Boolean) {
+        val changed = spectrumTapActive.getAndSet(active) != active
+        if (!active && changed) {
+            spectrumPcmTap = null
+        }
+    }
+
+    /**
+     * Reads a head-synced 1024-sample mono window aligned with `AudioTrack.playbackHeadPosition`
+     * into [outMonoSamples]. Returns effective decimated sample rate in `Hz`, or `0` when paused,
+     * inactive, or uninitialized. Safe to call off the audio thread (`Dispatchers.Default`).
+     */
+    fun sampleCurrentSpectrumWindow(outMonoSamples: FloatArray): Int {
+        if (!spectrumTapActive.get() || !_state.value.isPlaying || isPausedFlag.get() || releasedFlag.get()) {
+            return 0
+        }
+        val tap = spectrumPcmTap ?: return 0
+        val track = activeAudioTrack ?: return 0
+        val isTrackPlaying = runCatching {
+            track.state == AudioTrack.STATE_INITIALIZED && track.playState == AudioTrack.PLAYSTATE_PLAYING
+        }.getOrDefault(false)
+        if (!isTrackPlaying) return 0
+        val headFrame = readUnsignedPlaybackHeadFrames(track)
+        return tap.sampleWindowAtTrackFrame(headFrame, outMonoSamples)
+    }
+
     fun seekTo(positionMs: Long) {
         if (releasedFlag.get()) return
         abortTurntableScratch()
@@ -632,6 +670,7 @@ class AudioOutputEngine(
                     val actual = runCatching { decoder.seekToMs(clamped) }.getOrDefault(clamped)
                     activeAudioTrack?.let { safeFlushTrack(it) }
                     turntableRingBuffer?.reset(0L)
+                    spectrumPcmTap?.reset(decoder.format.sampleRateHz, 0L)
                     _playbackPositionMs.value = actual
                 }
             }
@@ -643,6 +682,7 @@ class AudioOutputEngine(
         abortTurntableScratch()
         if (_state.value.status == PlaybackStatus.IDLE && activeAudioTrack == null && activeDecoder == null) {
             turntableRingBuffer = null
+            spectrumPcmTap = null
             clearPreloadedNextAsync()
             return
         }
@@ -657,6 +697,7 @@ class AudioOutputEngine(
                 clearPreloadedNextLocked()
                 stopWorkerAndReleaseTrackLocked(clearMixer = true)
                 turntableRingBuffer = null
+                spectrumPcmTap = null
                 abandonAudioFocusLocked()
                 activeTrackReplayGainMetadata = null
                 recomputeReplayGain()
@@ -703,6 +744,8 @@ class AudioOutputEngine(
     fun release() {
         if (!releasedFlag.compareAndSet(false, true)) return
         abortTurntableScratch()
+        spectrumTapActive.set(false)
+        spectrumPcmTap = null
         loadGeneration.incrementAndGet()
         queuedNextRequest = null
         stopWorkerFlag.set(true)
@@ -715,6 +758,7 @@ class AudioOutputEngine(
                     clearPreloadedNextLocked()
                     stopWorkerAndReleaseTrackLocked(clearMixer = true)
                     turntableRingBuffer = null
+                    spectrumPcmTap = null
                     abandonAudioFocusLocked()
                 }
             }
@@ -1109,6 +1153,21 @@ class AudioOutputEngine(
         var scratchOutFloats = if (activeRingBuffer != null) FloatArray(scratchChunkFrames * channels) else FloatArray(0)
         var scratchOutBytes = if (activeRingBuffer != null) ByteArray(scratchChunkFrames * bytesPerFrame) else ByteArray(0)
 
+        fun ensureActiveSpectrumTap(rateHz: Int, trackFrameCursor: Long): SpectrumPcmTap? {
+            if (!spectrumTapActive.get()) {
+                if (spectrumPcmTap != null) spectrumPcmTap = null
+                return null
+            }
+            val expectedEffRate = SpectrumAnalyzerDsp.computeEffectiveSampleRateHz(rateHz)
+            val existing = spectrumPcmTap
+            if (existing != null && existing.currentEffectiveSampleRateHz == expectedEffRate) {
+                return existing
+            }
+            val tap = existing ?: SpectrumPcmTap().also { spectrumPcmTap = it }
+            tap.reset(rateHz, trackFrameCursor)
+            return tap
+        }
+
         var seekBaseMs = initialSeekMs.coerceAtLeast(0L)
         var streamOriginMs = seekBaseMs
         var headBaseFrames = readUnsignedPlaybackHeadFrames(currentTrack)
@@ -1121,6 +1180,11 @@ class AudioOutputEngine(
         var pendingPlayCountMs = 0L
         var wasPausedInLoop = false
         var lastUiUpdateNano = 0L
+
+        if (spectrumTapActive.get()) {
+            val tap = spectrumPcmTap ?: SpectrumPcmTap().also { spectrumPcmTap = it }
+            tap.reset(sampleRate, totalFramesWrittenToTrack)
+        }
 
         fun accumulateActivePlayTime(forceFlush: Boolean, overrideHeadFrames: Long? = null) {
             val headFrames = overrideHeadFrames ?: readUnsignedPlaybackHeadFrames(currentTrack)
@@ -1160,6 +1224,7 @@ class AudioOutputEngine(
                     headBaseFrames = readUnsignedPlaybackHeadFrames(currentTrack)
                     totalFramesWrittenToTrack = headBaseFrames
                     countHeadFrames = headBaseFrames
+                    spectrumPcmTap?.reset(sampleRate, totalFramesWrittenToTrack)
                     lastUiUpdateNano = 0L
                     _playbackPositionMs.value = actualSeekMs
                     if (wasPlaying) {
@@ -1229,6 +1294,7 @@ class AudioOutputEngine(
                         headBaseFrames = readUnsignedPlaybackHeadFrames(currentTrack)
                         totalFramesWrittenToTrack = headBaseFrames
                         countHeadFrames = headBaseFrames
+                        spectrumPcmTap?.reset(sampleRate, totalFramesWrittenToTrack)
                         safePlayTrack(currentTrack)
 
                         val initialRate = Float.fromBits(turntableTargetRateBits.get())
@@ -1356,7 +1422,16 @@ class AudioOutputEngine(
                                 directBuffer = directBuffer,
                             )
                             if (framesWritten > 0) {
+                                val frameStart = totalFramesWrittenToTrack
                                 totalFramesWrittenToTrack += framesWritten.toLong()
+                                if (spectrumTapActive.get()) {
+                                    ensureActiveSpectrumTap(sampleRate, frameStart)?.appendInterleavedFloatsReadOnly(
+                                        srcFloats = scratchOutFloats,
+                                        frameCount = framesWritten,
+                                        channels = channels,
+                                        trackFrameAfterWrite = totalFramesWrittenToTrack,
+                                    )
+                                }
                             }
 
                             val liveTrackMs = (streamOriginMs + (scratchCursorFrame * 1000.0) / sampleRate.toDouble())
@@ -1398,7 +1473,16 @@ class AudioOutputEngine(
                                     directBuffer = directBuffer,
                                 )
                                 if (tailWritten > 0) {
+                                    val frameStart = totalFramesWrittenToTrack
                                     totalFramesWrittenToTrack += tailWritten.toLong()
+                                    if (spectrumTapActive.get()) {
+                                        ensureActiveSpectrumTap(sampleRate, frameStart)?.appendInterleavedFloatsReadOnly(
+                                            srcFloats = scratchOutFloats,
+                                            frameCount = tailWritten,
+                                            channels = channels,
+                                            trackFrameAfterWrite = totalFramesWrittenToTrack,
+                                        )
+                                    }
                                 }
                             }
 
@@ -1442,6 +1526,7 @@ class AudioOutputEngine(
                                 headBaseFrames = readUnsignedPlaybackHeadFrames(currentTrack)
                                 totalFramesWrittenToTrack = headBaseFrames
                                 countHeadFrames = headBaseFrames
+                                spectrumPcmTap?.reset(sampleRate, totalFramesWrittenToTrack)
                                 lastUiUpdateNano = 0L
                                 _playbackPositionMs.value = actualSeekMs
                                 safePlayTrack(currentTrack)
@@ -1510,9 +1595,18 @@ class AudioOutputEngine(
                                 directBuffer = directBuffer,
                             )
                             if (framesWritten > 0) {
+                                val frameStart = totalFramesWrittenToTrack
                                 totalFramesWrittenToTrack += framesWritten.toLong()
                                 ringDrainCursorFrame += framesWritten.toLong()
                                 streamFramesWrittenToTrack = ringDrainCursorFrame
+                                if (spectrumTapActive.get()) {
+                                    ensureActiveSpectrumTap(sampleRate, frameStart)?.appendInterleavedFloatsReadOnly(
+                                        srcFloats = scratchOutFloats,
+                                        frameCount = framesWritten,
+                                        channels = channels,
+                                        trackFrameAfterWrite = totalFramesWrittenToTrack,
+                                    )
+                                }
                             }
                             accumulateActivePlayTime(forceFlush = false)
                             val nowNano = System.nanoTime()
@@ -1699,6 +1793,7 @@ class AudioOutputEngine(
                         headBaseFrames = readUnsignedPlaybackHeadFrames(currentTrack)
                         totalFramesWrittenToTrack = headBaseFrames
                         countHeadFrames = headBaseFrames
+                        spectrumPcmTap?.reset(sampleRate, totalFramesWrittenToTrack)
                         // Skip writing bytes from the prior buffer/format into the newly allocated pcmBuffer.
                         continue
                     }
@@ -1771,9 +1866,22 @@ class AudioOutputEngine(
                         linearGain = effectiveLinearGain,
                     )
                     if (bytesWritten > 0) {
+                        val frameStart = totalFramesWrittenToTrack
                         val writtenFrames = (bytesWritten / bytesPerFrame).toLong()
                         totalFramesWrittenToTrack += writtenFrames
                         streamFramesWrittenToTrack += writtenFrames
+                        // Strictly read-only, lifecycle-gated spectrum side-tap AFTER AudioTrack write
+                        // (100% Bit-Perfect safe; zero overhead when off-screen, backgrounded, or disabled).
+                        if (spectrumTapActive.get()) {
+                            ensureActiveSpectrumTap(sampleRate, frameStart)?.appendPcmBytesReadOnly(
+                                encoding = currentFormat.encoding,
+                                srcBytes = combinedBytes,
+                                byteOffset = 0,
+                                byteCount = bytesWritten,
+                                channels = channels,
+                                trackFrameAfterWrite = totalFramesWrittenToTrack,
+                            )
+                        }
                     }
                     accumulateActivePlayTime(forceFlush = false)
                 }

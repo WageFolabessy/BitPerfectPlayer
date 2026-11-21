@@ -373,6 +373,21 @@ class PlaybackController(
         persistCurrentPositionAsync()
     }
 
+    /**
+     * Enables or disables the strictly read-only, head-synced PCM spectrum tap.
+     * Safe in both Safe Mode and Bit-Perfect Opt-In mode; zero overhead when inactive.
+     */
+    fun setSpectrumTapActive(active: Boolean) {
+        engine.setSpectrumTapActive(active)
+    }
+
+    /**
+     * Reads a head-synced 1024-sample mono window into [outMonoSamples] off the audio thread.
+     * Returns effective decimated sample rate in `Hz`, or `0` if paused/inactive.
+     */
+    fun sampleCurrentSpectrumWindow(outMonoSamples: FloatArray): Int =
+        engine.sampleCurrentSpectrumWindow(outMonoSamples)
+
     fun stop() {
         playCountTracker.clearSession()?.let { persistPlayCountFlush(it) }
         persistCurrentPositionAsync()

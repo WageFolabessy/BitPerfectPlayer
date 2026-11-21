@@ -53,6 +53,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
@@ -73,9 +74,6 @@ import kotlin.math.atan2
 import kotlin.math.roundToLong
 
 private val VINYL_DISC_DIAMETER = 272.dp
-private val VINYL_ARTWORK_DIAMETER = 158.dp // ~58% of 272.dp
-private val VINYL_LABEL_RING_DIAMETER = 22.dp
-private val VINYL_SPINDLE_DIAMETER = 14.dp
 
 private const val HOLD_WATCHDOG_POLL_MS = 35L
 private const val HOLD_IDLE_THRESHOLD_NS = 65_000_000L
@@ -124,6 +122,7 @@ fun InteractiveVinylDisc(
     albumArtworkLoader: AlbumArtworkLoader,
     onSeekTo: (Long) -> Unit,
     modifier: Modifier = Modifier,
+    discDiameter: Dp = VINYL_DISC_DIAMETER,
     onBeginTurntableScratch: () -> Boolean = { false },
     onUpdateTurntableScratchRate: (Float) -> Unit = {},
     onEndTurntableScratch: (Long?) -> Unit = {},
@@ -192,9 +191,13 @@ fun InteractiveVinylDisc(
         }
     }
 
+    val artworkDiameter = discDiameter * 0.58f
+    val labelRingDiameter = (discDiameter * 0.08f).coerceAtLeast(18.dp)
+    val spindleDiameter = (discDiameter * 0.052f).coerceAtLeast(12.dp)
+
     Box(
         modifier = modifier
-            .size(VINYL_DISC_DIAMETER)
+            .size(discDiameter)
             .semantics {
                 contentDescription = "Vinyl disc turntable for ${track.title}. Drag circularly to seek."
             }
@@ -555,13 +558,13 @@ fun InteractiveVinylDisc(
             VinylCircularArtwork(
                 track = track,
                 artworkLoader = albumArtworkLoader,
-                modifier = Modifier.size(VINYL_ARTWORK_DIAMETER),
+                modifier = Modifier.size(artworkDiameter),
             )
 
             // Subtle inner label ring around spindle
             Box(
                 modifier = Modifier
-                    .size(VINYL_LABEL_RING_DIAMETER)
+                    .size(labelRingDiameter)
                     .clip(CircleShape)
                     .border(
                         width = 0.75.dp,
@@ -573,7 +576,7 @@ fun InteractiveVinylDisc(
             // Matte obsidian center spindle hole
             Box(
                 modifier = Modifier
-                    .size(VINYL_SPINDLE_DIAMETER)
+                    .size(spindleDiameter)
                     .clip(CircleShape)
                     .background(VinylSpindleHole)
                     .border(

@@ -64,11 +64,13 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -80,6 +82,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.cangkir.bitperfectplayer.audio.AudioOutputMode
 import com.cangkir.bitperfectplayer.audio.AudioSafetyController
@@ -113,6 +118,10 @@ fun NowPlayingScreen(
     isFavorite: Boolean,
     artworkStyle: NowPlayingArtworkStyle = NowPlayingArtworkStyle.VINYL_DISC,
     onSetArtworkStyle: (NowPlayingArtworkStyle) -> Unit = {},
+    spectrumVisualizerEnabled: Boolean = true,
+    onSetSpectrumVisualizerEnabled: (Boolean) -> Unit = {},
+    onSetSpectrumVisualizerActive: (Boolean) -> Unit = {},
+    onSampleSpectrumWindow: (FloatArray) -> Int = { 0 },
     onBack: () -> Unit,
     onToggleFavorite: (PlaybackTrack) -> Unit,
     onAddToPlaylist: (PlaybackTrack) -> Unit,
@@ -140,6 +149,29 @@ fun NowPlayingScreen(
     val safetyState = playbackState.engineState.safetyState
     val diagnostics = playbackState.engineState.diagnostics
     val durationMs = playbackState.durationMs.coerceAtLeast(0L)
+
+    // Strict lifecycle gate: activate read-only PCM spectrum tap ONLY while NowPlayingScreen
+    // is foreground-visible (ON_START..ON_STOP) AND spectrumVisualizerEnabled is ON.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val latestSetSpectrumActive by rememberUpdatedState(onSetSpectrumVisualizerActive)
+    DisposableEffect(lifecycleOwner, spectrumVisualizerEnabled) {
+        val lifecycle = lifecycleOwner.lifecycle
+        val isStartedNow = lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+        latestSetSpectrumActive(spectrumVisualizerEnabled && isStartedNow)
+
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_START -> latestSetSpectrumActive(spectrumVisualizerEnabled)
+                Lifecycle.Event.ON_STOP -> latestSetSpectrumActive(false)
+                else -> Unit
+            }
+        }
+        lifecycle.addObserver(observer)
+        onDispose {
+            lifecycle.removeObserver(observer)
+            latestSetSpectrumActive(false)
+        }
+    }
 
     var showAudioModeSheet by remember { mutableStateOf(false) }
     var showSleepTimerSheet by remember { mutableStateOf(false) }
@@ -298,6 +330,21 @@ fun NowPlayingScreen(
                                             )
                                         },
                                     )
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                if (spectrumVisualizerEnabled) {
+                                                    "Hide Spectrum"
+                                                } else {
+                                                    "Show Spectrum"
+                                                },
+                                            )
+                                        },
+                                        onClick = {
+                                            overflowMenuExpanded = false
+                                            onSetSpectrumVisualizerEnabled(!spectrumVisualizerEnabled)
+                                        },
+                                    )
                                 }
                             }
                         }
@@ -384,22 +431,46 @@ fun NowPlayingScreen(
                 Spacer(modifier = Modifier.height(12.dp))
             }
 
-            // Hero Artwork Centerpiece: Interactive Spinning Vinyl Disc (default) or Swipeable Square Cover
+            // Hero Artwork Centerpiece: Interactive Spinning Vinyl Disc (wrapped by optional Radial Spectrum)
+            // or Swipeable Square Cover (with optional compact 28.dp studio spectrum bar strip).
             when (artworkStyle) {
                 NowPlayingArtworkStyle.VINYL_DISC -> {
-                    InteractiveVinylDisc(
-                        track = track,
-                        isPlaying = playbackState.isPlaying,
-                        isSafeMode = isSafe,
-                        durationMs = durationMs,
-                        playbackPositionMsFlow = playbackPositionMsFlow,
-                        scrubPreviewMsState = vinylScrubPreviewMs,
-                        albumArtworkLoader = albumArtworkLoader,
-                        onSeekTo = onSeekTo,
-                        onBeginTurntableScratch = onBeginTurntableScratch,
-                        onUpdateTurntableScratchRate = onUpdateTurntableScratchRate,
-                        onEndTurntableScratch = onEndTurntableScratch,
-                    )
+                    if (spectrumVisualizerEnabled) {
+                        RadialSpectrumRing(
+                            isEnabled = true,
+                            isPlaying = playbackState.isPlaying,
+                            sampleSpectrumWindow = onSampleSpectrumWindow,
+                        ) {
+                            InteractiveVinylDisc(
+                                track = track,
+                                isPlaying = playbackState.isPlaying,
+                                isSafeMode = isSafe,
+                                durationMs = durationMs,
+                                playbackPositionMsFlow = playbackPositionMsFlow,
+                                scrubPreviewMsState = vinylScrubPreviewMs,
+                                albumArtworkLoader = albumArtworkLoader,
+                                onSeekTo = onSeekTo,
+                                discDiameter = RADIAL_SPECTRUM_VINYL_DIAMETER,
+                                onBeginTurntableScratch = onBeginTurntableScratch,
+                                onUpdateTurntableScratchRate = onUpdateTurntableScratchRate,
+                                onEndTurntableScratch = onEndTurntableScratch,
+                            )
+                        }
+                    } else {
+                        InteractiveVinylDisc(
+                            track = track,
+                            isPlaying = playbackState.isPlaying,
+                            isSafeMode = isSafe,
+                            durationMs = durationMs,
+                            playbackPositionMsFlow = playbackPositionMsFlow,
+                            scrubPreviewMsState = vinylScrubPreviewMs,
+                            albumArtworkLoader = albumArtworkLoader,
+                            onSeekTo = onSeekTo,
+                            onBeginTurntableScratch = onBeginTurntableScratch,
+                            onUpdateTurntableScratchRate = onUpdateTurntableScratchRate,
+                            onEndTurntableScratch = onEndTurntableScratch,
+                        )
+                    }
                 }
                 NowPlayingArtworkStyle.SQUARE_COVER -> {
                     SwipeableSquareArtwork(
@@ -408,6 +479,14 @@ fun NowPlayingScreen(
                         onPrevious = onPrevious,
                         onNext = onNext,
                     )
+                    if (spectrumVisualizerEnabled) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        CompactSpectrumBarStrip(
+                            isEnabled = true,
+                            isPlaying = playbackState.isPlaying,
+                            sampleSpectrumWindow = onSampleSpectrumWindow,
+                        )
+                    }
                 }
             }
 

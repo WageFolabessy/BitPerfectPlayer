@@ -727,4 +727,118 @@ class BitPerfectUiBehaviorTest {
         assertEquals(1, silentSeeks.size)
         assertTrue("Clockwise silent scrub should seek forward past 60,000 ms", silentSeeks.single() > 60_000L)
     }
+
+    @Test
+    fun settingsScreen_spectrumVisualizerToggleUpdatesPreference() {
+        var enabled by mutableStateOf(true)
+        val changes = mutableListOf<Boolean>()
+
+        composeRule.setContent {
+            BitPerfectPlayerTheme {
+                SettingsScreen(
+                    libraryState = LibrarySnapshot(),
+                    playbackState = PlaybackControllerState(),
+                    sleepTimerStateFlow = MutableStateFlow(SleepTimerState()),
+                    spectrumVisualizerEnabled = enabled,
+                    onSetSpectrumVisualizerEnabled = { next ->
+                        changes.add(next)
+                        enabled = next
+                    },
+                    onImportFolder = {},
+                    onRemoveSafFolder = {},
+                    onRefreshLibrary = {},
+                    onSetGaplessEnabled = {},
+                    onSetReplayGainMode = {},
+                    onSetReplayGainPreampDb = {},
+                    onSetReplayGainPreventClipping = {},
+                    onSelectSleepTimerPreset = {},
+                    onExportLocalBackup = {},
+                    onImportLocalBackup = {},
+                    onOpenDiagnostics = {},
+                )
+            }
+        }
+
+        composeRule.onNode(hasScrollToIndexAction()).performScrollToIndex(1)
+        composeRule.onNodeWithText("Spectrum Visualizer").assertIsDisplayed()
+        composeRule.onNodeWithText("Zero microphone permissions; safe in Bit-Perfect mode.", substring = true)
+            .assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Toggle spectrum visualizer")
+            .assertIsDisplayed()
+            .performClick()
+
+        assertEquals(listOf(false), changes)
+    }
+
+    @Test
+    fun nowPlayingScreen_rendersRadialAndCompactSpectrumAndTogglesViaOverflowMenu() {
+        var spectrumEnabled by mutableStateOf(true)
+        var artworkStyle by mutableStateOf(NowPlayingArtworkStyle.VINYL_DISC)
+        val activeSignals = mutableListOf<Boolean>()
+
+        val pausedState = PlaybackControllerState(
+            activeTrack = hiResFlacTrack,
+            queueContext = QueueContext.album("21st Century Breakdown"),
+            engineState = EnginePlaybackState(
+                status = PlaybackStatus.PAUSED,
+                durationMs = hiResFlacTrack.durationMs,
+            ),
+        )
+
+        composeRule.setContent {
+            BitPerfectPlayerTheme {
+                NowPlayingScreen(
+                    playbackState = pausedState,
+                    playbackPositionMsFlow = MutableStateFlow(45_000L),
+                    sleepTimerStateFlow = MutableStateFlow(SleepTimerState()),
+                    albumArtworkLoader = artworkLoader,
+                    isFavorite = false,
+                    artworkStyle = artworkStyle,
+                    onSetArtworkStyle = { artworkStyle = it },
+                    spectrumVisualizerEnabled = spectrumEnabled,
+                    onSetSpectrumVisualizerEnabled = { spectrumEnabled = it },
+                    onSetSpectrumVisualizerActive = { activeSignals.add(it) },
+                    onBack = {},
+                    onToggleFavorite = {},
+                    onAddToPlaylist = {},
+                    onShowTrackInfo = {},
+                    onSelectSleepTimerPreset = {},
+                    onTogglePlayPause = {},
+                    onPrevious = {},
+                    onNext = {},
+                    onSeekTo = {},
+                    onToggleShuffle = {},
+                    onCycleRepeatMode = {},
+                    onRequestBitPerfectMode = {},
+                    onConfirmBitPerfectWarning = {},
+                    onDismissSafetyWarning = {},
+                    onSwitchToSafeMode = {},
+                    onClearAutoPauseNotice = {},
+                    onOpenQueue = {},
+                    onOpenLyrics = {},
+                    onOpenDiagnostics = {},
+                )
+            }
+        }
+
+        // Vinyl Disc + Spectrum Enabled -> Radial Spectrum Ring rendered and lifecycle tap activated.
+        composeRule.onNodeWithContentDescription("Audio spectrum visualizer ring").assertIsDisplayed()
+        assertTrue("Expected spectrum tap activated while foreground & enabled", activeSignals.lastOrNull() == true)
+
+        // Toggle Hide Spectrum via overflow menu -> Radial ring removed and tap deactivated.
+        composeRule.onNodeWithContentDescription("More track actions").assertIsDisplayed().performClick()
+        composeRule.onNodeWithText("Hide Spectrum").assertIsDisplayed().performClick()
+        assertEquals(
+            0,
+            composeRule.onAllNodesWithContentDescription("Audio spectrum visualizer ring").fetchSemanticsNodes().size,
+        )
+        assertTrue("Expected spectrum tap deactivated when hidden", activeSignals.lastOrNull() == false)
+
+        // Re-enable spectrum and switch to Square Cover -> compact 28.dp bar strip renders cleanly.
+        composeRule.onNodeWithContentDescription("More track actions").assertIsDisplayed().performClick()
+        composeRule.onNodeWithText("Show Spectrum").assertIsDisplayed().performClick()
+        composeRule.onNodeWithContentDescription("More track actions").assertIsDisplayed().performClick()
+        composeRule.onNodeWithText("Switch to Square Cover").assertIsDisplayed().performClick()
+        composeRule.onNodeWithContentDescription("Audio spectrum visualizer bar strip").assertIsDisplayed()
+    }
 }

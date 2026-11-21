@@ -247,12 +247,15 @@ fun BitPerfectAppRoot(
 
             composable(Routes.SETTINGS) {
                 val nowPlayingArtworkStyle by viewModel.nowPlayingArtworkStyle.collectAsStateWithLifecycle()
+                val spectrumVisualizerEnabled by viewModel.spectrumVisualizerEnabled.collectAsStateWithLifecycle()
                 SettingsScreen(
                     libraryState = libraryState,
                     playbackState = playbackState,
                     sleepTimerStateFlow = viewModel.sleepTimerState,
                     artworkStyle = nowPlayingArtworkStyle,
                     onSetArtworkStyle = viewModel::setNowPlayingArtworkStyle,
+                    spectrumVisualizerEnabled = spectrumVisualizerEnabled,
+                    onSetSpectrumVisualizerEnabled = viewModel::setSpectrumVisualizerEnabled,
                     onImportFolder = viewModel::importSafFolder,
                     onRemoveSafFolder = viewModel::removeSafFolder,
                     onRefreshLibrary = viewModel::refreshLibrary,
@@ -269,6 +272,7 @@ fun BitPerfectAppRoot(
 
             composable(Routes.NOW_PLAYING) {
                 val nowPlayingArtworkStyle by viewModel.nowPlayingArtworkStyle.collectAsStateWithLifecycle()
+                val spectrumVisualizerEnabled by viewModel.spectrumVisualizerEnabled.collectAsStateWithLifecycle()
                 val activeTrack = playbackState.activeTrack
                 val isFav = activeTrack != null && (
                     activeTrack.uriString in favoriteTrackUris ||
@@ -282,6 +286,10 @@ fun BitPerfectAppRoot(
                     isFavorite = isFav,
                     artworkStyle = nowPlayingArtworkStyle,
                     onSetArtworkStyle = viewModel::setNowPlayingArtworkStyle,
+                    spectrumVisualizerEnabled = spectrumVisualizerEnabled,
+                    onSetSpectrumVisualizerEnabled = viewModel::setSpectrumVisualizerEnabled,
+                    onSetSpectrumVisualizerActive = viewModel::setSpectrumVisualizerActive,
+                    onSampleSpectrumWindow = viewModel::sampleCurrentSpectrumWindow,
                     onBack = { navController.popBackStack() },
                     onToggleFavorite = viewModel::toggleFavorite,
                     onAddToPlaylist = openAddToPlaylist,

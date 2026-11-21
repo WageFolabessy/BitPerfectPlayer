@@ -62,6 +62,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -92,6 +94,8 @@ fun SettingsScreen(
     sleepTimerStateFlow: StateFlow<SleepTimerState>,
     artworkStyle: NowPlayingArtworkStyle = NowPlayingArtworkStyle.VINYL_DISC,
     onSetArtworkStyle: (NowPlayingArtworkStyle) -> Unit = {},
+    spectrumVisualizerEnabled: Boolean = true,
+    onSetSpectrumVisualizerEnabled: (Boolean) -> Unit = {},
     onImportFolder: (Uri) -> Unit,
     onRemoveSafFolder: (String) -> Unit,
     onRefreshLibrary: () -> Unit,
@@ -533,6 +537,39 @@ fun SettingsScreen(
                                     }
                                 }
                             }
+                        }
+
+                        SettingsHairline()
+
+                        // Spectrum Visualizer toggle
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .sizeIn(minHeight = 60.dp)
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Spectrum Visualizer",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = "Read-only local FFT ring around Now Playing artwork. Zero microphone permissions; safe in Bit-Perfect mode.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Switch(
+                                checked = spectrumVisualizerEnabled,
+                                onCheckedChange = onSetSpectrumVisualizerEnabled,
+                                modifier = Modifier.semantics {
+                                    contentDescription = "Toggle spectrum visualizer"
+                                },
+                            )
                         }
                     }
                 }

@@ -84,6 +84,19 @@ class MainViewModel(
             initialValue = NowPlayingArtworkStyle.VINYL_DISC,
         )
 
+    /**
+     * Persisted toggle for the read-only radial FFT spectrum visualizer (`true` by default),
+     * deduplicated with `distinctUntilChanged()` so unrelated preference writes never recompose UI.
+     */
+    val spectrumVisualizerEnabled: StateFlow<Boolean> = container.preferencesRepository.preferencesFlow
+        .map { it.spectrumVisualizerEnabled }
+        .distinctUntilChanged()
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.Eagerly,
+            initialValue = true,
+        )
+
     private val _lyricsUiState = MutableStateFlow(LyricsUiState())
     val lyricsUiState: StateFlow<LyricsUiState> = _lyricsUiState.asStateFlow()
 
@@ -270,6 +283,22 @@ class MainViewModel(
             container.preferencesRepository.setNowPlayingArtworkStyle(style)
         }
     }
+
+    fun setSpectrumVisualizerEnabled(enabled: Boolean) {
+        if (!enabled) {
+            container.playbackController.setSpectrumTapActive(false)
+        }
+        viewModelScope.launch {
+            container.preferencesRepository.setSpectrumVisualizerEnabled(enabled)
+        }
+    }
+
+    fun setSpectrumVisualizerActive(active: Boolean) {
+        container.playbackController.setSpectrumTapActive(active)
+    }
+
+    fun sampleCurrentSpectrumWindow(outMonoSamples: FloatArray): Int =
+        container.playbackController.sampleCurrentSpectrumWindow(outMonoSamples)
 
     fun setSleepTimerPreset(preset: SleepTimerPreset) {
         container.playbackController.setSleepTimerPreset(preset)

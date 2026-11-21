@@ -44,6 +44,7 @@ class UserPreferencesRepository(
         val REPLAYGAIN_PREAMP_DB = floatPreferencesKey("replaygain_preamp_db")
         val REPLAYGAIN_PREVENT_CLIPPING = booleanPreferencesKey("replaygain_prevent_clipping")
         val NOW_PLAYING_ARTWORK_STYLE = stringPreferencesKey("now_playing_artwork_style")
+        val SPECTRUM_VISUALIZER_ENABLED = booleanPreferencesKey("spectrum_visualizer_enabled")
         val PERSISTED_SAF_TREE_URIS = stringSetPreferencesKey("persisted_saf_tree_uris")
         val PERSISTED_SAF_FILE_URIS = stringSetPreferencesKey("persisted_saf_file_uris")
         val LAST_TRACK_URI = stringPreferencesKey("last_track_uri")
@@ -114,6 +115,12 @@ class UserPreferencesRepository(
     suspend fun setNowPlayingArtworkStyle(style: NowPlayingArtworkStyle) {
         dataStore.edit { prefs ->
             prefs[Keys.NOW_PLAYING_ARTWORK_STYLE] = style.name
+        }
+    }
+
+    suspend fun setSpectrumVisualizerEnabled(enabled: Boolean) {
+        dataStore.edit { prefs ->
+            prefs[Keys.SPECTRUM_VISUALIZER_ENABLED] = enabled
         }
     }
 
@@ -246,6 +253,7 @@ class UserPreferencesRepository(
             ),
             replayGainPreventClipping = prefs[Keys.REPLAYGAIN_PREVENT_CLIPPING] ?: true,
             nowPlayingArtworkStyle = NowPlayingArtworkStyle.fromStoredName(prefs[Keys.NOW_PLAYING_ARTWORK_STYLE]),
+            spectrumVisualizerEnabled = prefs[Keys.SPECTRUM_VISUALIZER_ENABLED] ?: true,
             persistedSafTreeUris = PersistenceSanitizer.sanitizeUriSet(
                 prefs[Keys.PERSISTED_SAF_TREE_URIS].orEmpty(),
             ),

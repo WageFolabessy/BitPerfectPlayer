@@ -541,6 +541,32 @@ Following physical testing of the signed Release APK on POCO F4 (Android 14 / Hy
 - **Pure-Kotlin Domain Boundary (`TurntableAudioDsp.kt`, `VinylScrubMath.kt`):** **PASS** — **0 `android.*` / `androidx.*` imports**.
 - **Physical Hardware Verification Pending (Not Executed in Cloud):** On POCO F4 (Android 14 / HyperOS) + KZ EDX Pro 2 USB-C, confirm audible quality and responsiveness of live Safe-Mode forward varispeed, finger-hold braking (`HOLD`), reverse scratch within the 8 MB window and deep-rewind fallback past `oldestAvailableFrame`, pop/click-free entry & 1.0x exit resume across 16/24-bit 44,100–192,000 Hz FLAC/WAV/MP3/M4A/OGG, Play Count stability after scratching, immediate auto-pause safety on USB unplug mid-scratch, and strict Bit-Perfect Opt-In silent-seek fallback with zero DSP modification.
 
+---
+
+## 17. Read-Only Offline Radial Ring Spectrum Visualizer
+
+### Delivered Architecture & UX
+1. **Pure-Kotlin Zero-Allocation FFT & Head-Synced Side-Tap (`SpectrumAnalyzerDsp.kt`, `SpectrumPcmTap.kt`):**
+   - Built `SpectrumAnalyzerDsp` / `SpectrumAnalyzer` (zero `android.*` / `androidx.*` imports, zero external DSP dependencies): pre-allocated 1024-point Hann-windowed iterative radix-2 FFT with Hann-weighted DC offset removal, Hi-Res decimation stride calculation (`<= 50 kHz -> 1`, `<= 100 kHz -> 2`, `<= 200 kHz -> 4`), 32 logarithmic bands across `30 Hz..16,000 Hz` (`-62 dB..-4 dB` with gentle `+9 dB` high-frequency perceptual tilt), frame-rate-independent fast-attack (`25 ms`) / smooth-decay (`140 ms`) ballistics, and seamless left/right mirrored 64-bar radial mapping.
+   - Built `SpectrumPcmTap` (`48,000` mono floats ≈ `192 KB`) with boxcar-averaged decimation and generation-checked `AudioTrack.playbackHeadPosition` alignment eliminating ~160 ms lookahead audio/visual lag.
+2. **Strict Read-Only Bit-Perfect Safety & Lifecycle Gate (`AudioOutputEngine.kt`, `PlaybackController.kt`, `MainViewModel.kt`):**
+   - `AudioOutputEngine` taps PCM strictly **read-only AFTER `writeAlignedPcmFully(...)` / `writeNormalizedFloatsToTrack(...)`**, so `AudioTrack` receives completely untouched PCM in `BIT_PERFECT_OPT_IN` mode while the spectrum animates smoothly in Safe Mode (including live turntable scratch), Clean Native, and Bit-Perfect Opt-In mode.
+   - Gated via `NowPlayingScreen`'s `LifecycleEventObserver` (`ON_START` / `ON_STOP` + `onDispose`) and persisted `spectrumVisualizerEnabled`: when off-screen, backgrounded, or disabled, `spectrumPcmTap` is immediately released (`null`) for 0% FFT CPU and 0 KB overhead.
+3. **Minimalist Matte-Obsidian Visuals & Controls (`RadialSpectrumRing.kt`, `VinylDiscPlayer.kt`, `NowPlayingScreen.kt`, `SettingsScreen.kt`, `PersistenceModels.kt`, `UserPreferencesRepository.kt`):**
+   - `RadialSpectrumRing` (`304.dp` container wrapping `248.dp` `InteractiveVinylDisc` with zero touch interception) draws 64 crisp rounded-cap studio ticks (`#3D3D47` -> `#7BA7D9` -> `#D7E5F5` tips) via draw-phase-only `Canvas` invalidation (`0` Compose recompositions at 60/120 Hz; stops idle frames cleanly when paused bars decay below `0.002f`).
+   - Added matching `28.dp`-tall 32-bar `CompactSpectrumBarStrip` fallback beneath `Square Cover`, persisted `spectrumVisualizerEnabled` (`true` default) in DataStore, a **"Spectrum Visualizer"** switch in `SettingsScreen` (`DISPLAY`), and `"Hide Spectrum"` / `"Show Spectrum"` in `NowPlayingScreen`'s overflow menu.
+
+### Software Verification (`./gradlew clean testDebugUnitTest lintDebug assembleDebug assembleRelease`)
+- **Automated JVM Unit + Robolectric SQLite Migration + Headless Compose UI Tests:** **174 / 174 passed** across **32 test suites** (`0` failed, `0` errors, `0` skipped, `0` `@Ignore`), adding `SpectrumAnalyzerDspTest` (7/7), extending `PersistenceAndPreferencesTest` (4/4), and extending `BitPerfectUiBehaviorTest` (15/15).
+- **Compiler & R8 Warnings:** `0` Kotlin compiler warnings (production + test), `0` KSP warnings, `0` R8 warnings.
+- **Android Lint (`lintDebug` & `lintVitalRelease`):** **0 errors**, **0 warnings across all `/app/src/` Kotlin, manifest, and resource files**.
+- **Debug APK (`assembleDebug`):** `app/build/outputs/apk/debug/app-debug.apk` (`20.14 MB` / `21,113,424 bytes`).
+- **Release APK (`assembleRelease` with R8 optimization):** `app/build/outputs/apk/release/app-release-unsigned.apk` (`2.48 MB` / `2,600,130 bytes`).
+- **Strict Offline & Zero-Permission Audit (Source + All 9 Generated Debug, Release & UnitTest Manifests):** **PASS** — **0 `INTERNET`**, **0 `RECORD_AUDIO`**, **0 `MANAGE_EXTERNAL_STORAGE`**, **0 `android.media.audiofx.Visualizer` references**.
+- **Pure-Kotlin Domain Boundary (`SpectrumAnalyzerDsp.kt`, `SpectrumPcmTap.kt`):** **PASS** — **0 `android.*` / `androidx.*` imports**.
+- **Physical Hardware Verification Pending (Not Executed in Cloud):** On POCO F4 (Android 14 / HyperOS, 120 Hz OLED) + KZ EDX Pro 2 USB-C, confirm on-beat visual synchronization across 44,100–192,000 Hz tracks, smooth 120 Hz radial bar ballistics and pause decay, live scratch spectrum reactivity in Safe Mode, unmodified Bit-Perfect USB playback with radial spectrum active, unobstructed vinyl touch scrubbing and vertical scrolling, and zero background CPU draw when screen turns off (`ON_STOP`).
+
+
 
 
 

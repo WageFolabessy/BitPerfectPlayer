@@ -119,6 +119,18 @@ This file records autonomous architectural, dependency, and environment decision
 - **Rationale:** Provides authentic vinyl DJ tactile audio feedback (forward varispeed up to `+4.0x`, finger-hold braking via a 65 ms idle watchdog, and smooth real-time reverse scratch down to `-4.0x`) without adding native C++/NDK/FFmpeg bloat, without risking OOM on 192 kHz 24-bit tracks, without distorting listening stats, and without compromising a single bit in `BIT_PERFECT_OPT_IN` mode.
 - **Rejected Alternatives:** Android `PlaybackParams.setSpeed()` on `AudioTrack` (cannot play negative/reverse rates, fails or glitches on many OEM HALs, and cannot brake cleanly to `0.0x` hold); full-track PCM decoding into RAM (OOM risk on 100+ MB Hi-Res WAV/FLAC files); calling `MediaExtractor.seekTo()` repeatedly during reverse drag (causes severe codec stutter and keyframe snapping on FLAC/MP3/AAC); enabling turntable DSP inside `BIT_PERFECT_OPT_IN` (violates unmodified PCM and exclusive HAL mixer invariants).
 
+---
+
+### D9.2: Zero-Permission Read-Only Head-Synced FFT Radial Ring Spectrum Visualizer
+- **Decision:**
+  1. Implemented pure-Kotlin `SpectrumAnalyzerDsp` / `SpectrumAnalyzer` (pre-allocated 1024-point Hann-windowed iterative radix-2 FFT, logarithmic 32-band mapping across `30 Hz..16,000 Hz` with `-62 dB..-4 dB` scaling and gentle high-frequency perceptual tilt, frame-rate-independent fast-attack `25 ms` / smooth-decay `140 ms` ballistics, and seamless 64-bar left/right radial mirroring) plus pure-Kotlin `SpectrumPcmTap` (`48,000`-float ≈ `192 KB` rolling mono buffer with boxcar-averaged Hi-Res decimation strides `1/2/4` and lock-free generation-checked `playbackHeadPosition` window alignment).
+  2. Tapped PCM strictly **read-only AFTER `writeAlignedPcmFully(...)` / `writeNormalizedFloatsToTrack(...)`** inside `AudioOutputEngine.runPlaybackLoop`, so `AudioTrack` always receives completely unmodified bytes in `BIT_PERFECT_OPT_IN` mode while the visualizer works seamlessly in Safe Mode (including live turntable scratch), Clean Native, and Bit-Perfect Opt-In mode.
+  3. Gated the side-tap strictly behind `NowPlayingScreen`'s `LifecycleEventObserver` (`ON_START` / `ON_STOP` + `onDispose`) AND the persisted `spectrumVisualizerEnabled` DataStore preference (`true` by default): when off-screen, backgrounded, or disabled, `spectrumPcmTap` is immediately released (`null`) and `BitPerfectAudioThread` skips tapping with zero CPU/memory overhead.
+  4. Executed FFT snapshots off both the audio and main threads on `Dispatchers.Default` (~55 Hz) and drove 60/120 Hz ballistic smoothing exclusively inside `Canvas` draw invalidation (`drawFrameTick.longValue` read strictly inside `Canvas { ... }`) for **0 Compose recompositions**, stopping the animation loop completely when paused bars decay below `0.002f`.
+- **Rationale:** Completely avoids `android.media.audiofx.Visualizer` and `RECORD_AUDIO` (zero scary microphone permissions, works on exclusive USB bit-perfect HAL paths where system `Visualizer` returns zeros), keeps bass/mid/treble frequency mapping accurate on 96/192 kHz Hi-Res files via anti-aliased decimation, eliminates ~160 ms audio-to-visual lookahead lag via `playbackHeadPosition` sync, and preserves silky 120 Hz UI performance.
+- **Rejected Alternatives:** `android.media.audiofx.Visualizer` (requires `RECORD_AUDIO` runtime permission and breaks when `MIXER_BEHAVIOR_BIT_PERFECT` bypasses the Android mixer); running FFT inside `BitPerfectAudioThread` (risks audio underruns on Hi-Res streams); storing spectrum bars in Compose `State<List<Float>>` (would trigger 60–120 Hz Compose recompositions and GC churn); adding native FFTW/KissFFT C++ libraries (unnecessary NDK complexity for a 1024-point radix-2 FFT).
+
+
 
 
 

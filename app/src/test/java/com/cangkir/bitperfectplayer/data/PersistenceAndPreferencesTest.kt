@@ -42,6 +42,7 @@ class PersistenceAndPreferencesTest {
         assertEquals(0.0f, snapshot.replayGainPreampDb, 1e-6f)
         assertTrue(snapshot.replayGainPreventClipping)
         assertEquals(NowPlayingArtworkStyle.VINYL_DISC, snapshot.nowPlayingArtworkStyle)
+        assertTrue(snapshot.spectrumVisualizerEnabled)
         assertTrue(snapshot.persistedSafTreeUris.isEmpty())
         assertTrue(snapshot.persistedSafFileUris.isEmpty())
         assertNull(snapshot.lastPlaybackState.trackUri)
@@ -65,6 +66,7 @@ class PersistenceAndPreferencesTest {
         repo.setReplayGainPreampDb(15.0f) // Out-of-bounds clamped to +6.0 dB
         repo.setReplayGainPreventClipping(false)
         repo.setNowPlayingArtworkStyle(NowPlayingArtworkStyle.SQUARE_COVER)
+        repo.setSpectrumVisualizerEnabled(false)
         repo.addPersistedSafTreeUri("  content://com.android.externalstorage.documents/tree/primary%3AMusic  ")
         repo.addPersistedSafTreeUri("   ") // Blank URI ignored
         repo.addPersistedSafFileUri("content://com.android.externalstorage.documents/document/primary%3Asong.flac")
@@ -100,6 +102,7 @@ class PersistenceAndPreferencesTest {
         assertEquals(6.0f, snapshot.replayGainPreampDb, 1e-6f)
         assertFalse(snapshot.replayGainPreventClipping)
         assertEquals(NowPlayingArtworkStyle.SQUARE_COVER, snapshot.nowPlayingArtworkStyle)
+        assertFalse(snapshot.spectrumVisualizerEnabled)
         assertEquals(
             setOf("content://com.android.externalstorage.documents/tree/primary%3AMusic"),
             snapshot.persistedSafTreeUris,
@@ -133,12 +136,14 @@ class PersistenceAndPreferencesTest {
         repo.setAudioSafetyMode(AudioSafetyModePreference.SAFE_VOLUME_MODE)
         repo.setReplayGainPreampDb(-99.0f) // Clamped to -6.0 dB
         repo.setNowPlayingArtworkStyle(NowPlayingArtworkStyle.VINYL_DISC)
+        repo.setSpectrumVisualizerEnabled(true)
         repo.clearLastPlaybackState()
 
         val updated = repo.getSnapshot()
         assertEquals(AudioSafetyModePreference.SAFE_VOLUME_MODE, updated.audioSafetyMode)
         assertEquals(-6.0f, updated.replayGainPreampDb, 1e-6f)
         assertEquals(NowPlayingArtworkStyle.VINYL_DISC, updated.nowPlayingArtworkStyle)
+        assertTrue(updated.spectrumVisualizerEnabled)
         assertTrue(updated.persistedSafTreeUris.isEmpty())
         assertNull(updated.lastPlaybackState.trackUri)
         assertNull(updated.lastPlaybackState.contentFingerprint)
