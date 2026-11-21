@@ -1,13 +1,13 @@
 package com.cangkir.bitperfectplayer.audio
 
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import kotlin.math.pow
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
-import kotlin.math.pow
 
 class ReplayGainProcessorTest {
 

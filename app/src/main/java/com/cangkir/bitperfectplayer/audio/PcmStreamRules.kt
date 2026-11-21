@@ -28,20 +28,18 @@ object PcmStreamRules {
      * Requests [PcmEncodingType.PCM_FLOAT] for >16-bit lossless sources (e.g. 24-bit FLAC) to
      * preserve full 24-bit mantissa precision without risking broken 24-bit packed codec paths.
      */
-    fun selectMediaCodecRequestEncoding(sourceBitDepth: Int?): PcmEncodingType =
-        if (sourceBitDepth != null && sourceBitDepth > 16) {
-            PcmEncodingType.PCM_FLOAT
-        } else {
-            PcmEncodingType.PCM_16BIT
-        }
+    fun selectMediaCodecRequestEncoding(sourceBitDepth: Int?): PcmEncodingType = if (sourceBitDepth != null && sourceBitDepth > 16) {
+        PcmEncodingType.PCM_FLOAT
+    } else {
+        PcmEncodingType.PCM_16BIT
+    }
 
     /**
      * Returns `true` only when a non-default PCM encoding (e.g., [PcmEncodingType.PCM_FLOAT] for
      * 24-bit sources) must be requested on the input `MediaFormat`. For 16-bit sources, Android
      * `MediaCodec` natively defaults to 16-bit PCM without force-setting `KEY_PCM_ENCODING`.
      */
-    fun shouldSetMediaCodecPcmEncodingKey(requested: PcmEncodingType): Boolean =
-        requested != PcmEncodingType.PCM_16BIT
+    fun shouldSetMediaCodecPcmEncodingKey(requested: PcmEncodingType): Boolean = requested != PcmEncodingType.PCM_16BIT
 
     /**
      * Resolves the ACTUAL PCM encoding emitted by `MediaCodec.getOutputFormat()`.
@@ -61,10 +59,7 @@ object PcmStreamRules {
         return mapAndroidPcmEncoding(reportedEncoding, supportsApi31Encodings)
     }
 
-    fun mapAndroidPcmEncoding(
-        androidEncoding: Int,
-        supportsApi31Encodings: Boolean,
-    ): PcmEncodingType {
+    fun mapAndroidPcmEncoding(androidEncoding: Int, supportsApi31Encodings: Boolean): PcmEncodingType {
         if (supportsApi31Encodings) {
             when (androidEncoding) {
                 ANDROID_ENCODING_PCM_24BIT_PACKED -> return PcmEncodingType.PCM_24BIT_PACKED
@@ -99,11 +94,7 @@ object PcmStreamRules {
      * Extracts an exact slice `[offset, offset + size)` from [source] without reading outside the
      * codec-reported bounds and without leaving residual position/limit corruption on [source].
      */
-    fun extractBufferSlice(
-        source: ByteBuffer,
-        offset: Int,
-        size: Int,
-    ): ByteArray {
+    fun extractBufferSlice(source: ByteBuffer, offset: Int, size: Int): ByteArray {
         if (size <= 0 || offset < 0 || offset >= source.capacity()) return ByteArray(0)
         val safeSize = minOf(size, source.capacity() - offset)
         if (safeSize <= 0) return ByteArray(0)
@@ -119,12 +110,7 @@ object PcmStreamRules {
      * Converts [byteCount] little-endian IEEE-754 float32 PCM bytes from [sourceBytes] starting at
      * [sourceOffset] into [destFloats]. Returns the exact number of floats written.
      */
-    fun convertLittleEndianBytesToFloats(
-        sourceBytes: ByteArray,
-        sourceOffset: Int,
-        byteCount: Int,
-        destFloats: FloatArray,
-    ): Int {
+    fun convertLittleEndianBytesToFloats(sourceBytes: ByteArray, sourceOffset: Int, byteCount: Int, destFloats: FloatArray): Int {
         val alignedBytes = alignByteCountToFrame(byteCount, 4)
         val floatCount = minOf(alignedBytes / 4, destFloats.size)
         if (floatCount <= 0) return 0

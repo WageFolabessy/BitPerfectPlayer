@@ -14,10 +14,10 @@ import com.cangkir.bitperfectplayer.data.LyricsRecord
 import com.cangkir.bitperfectplayer.data.LyricsSourceType
 import com.cangkir.bitperfectplayer.data.PersistenceSanitizer
 import com.cangkir.bitperfectplayer.data.UserPreferencesRepository
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.io.IOException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * Loaded lyrics state bound to a track's deterministic SHA-256 content fingerprint.
@@ -112,83 +112,80 @@ class LyricsCoordinator(
         )
     }
 
-    suspend fun saveLrcBytes(track: PlaybackTrack, lrcBytes: ByteArray): Result<TrackLyricsState> =
-        runCatching {
-            val fp = resolveTrackFingerprint(track)
-                ?: throw IOException("Unable to compute content fingerprint for ${track.fileName}")
-            val parsed = LrcParser.parseBytes(lrcBytes)
-            if (parsed.rawText.isBlank()) {
-                throw IOException("Selected .lrc file is empty")
-            }
-            val record = LyricsRecord(
-                contentFingerprint = fp,
-                rawLyricsText = parsed.rawText,
-                isSyncedLrc = parsed.isSynced,
-                sourceType = LyricsSourceType.LRC_FILE,
-                fileName = track.fileName,
-                fileSizeBytes = track.fileSizeBytes,
-                durationMs = track.durationMs,
-                updatedAtEpochMs = clockEpochMs(),
-            )
-            upsertStoredLyrics(record)
-            TrackLyricsState(
-                contentFingerprint = fp,
-                parsedLyrics = parsed,
-                sourceType = LyricsSourceType.LRC_FILE,
-                hasPersistedLyrics = true,
-                statusMessage = if (parsed.isSynced) "Imported synced .lrc lyrics" else "Imported plain-text lyrics",
-            )
+    suspend fun saveLrcBytes(track: PlaybackTrack, lrcBytes: ByteArray): Result<TrackLyricsState> = runCatching {
+        val fp = resolveTrackFingerprint(track)
+            ?: throw IOException("Unable to compute content fingerprint for ${track.fileName}")
+        val parsed = LrcParser.parseBytes(lrcBytes)
+        if (parsed.rawText.isBlank()) {
+            throw IOException("Selected .lrc file is empty")
         }
+        val record = LyricsRecord(
+            contentFingerprint = fp,
+            rawLyricsText = parsed.rawText,
+            isSyncedLrc = parsed.isSynced,
+            sourceType = LyricsSourceType.LRC_FILE,
+            fileName = track.fileName,
+            fileSizeBytes = track.fileSizeBytes,
+            durationMs = track.durationMs,
+            updatedAtEpochMs = clockEpochMs(),
+        )
+        upsertStoredLyrics(record)
+        TrackLyricsState(
+            contentFingerprint = fp,
+            parsedLyrics = parsed,
+            sourceType = LyricsSourceType.LRC_FILE,
+            hasPersistedLyrics = true,
+            statusMessage = if (parsed.isSynced) "Imported synced .lrc lyrics" else "Imported plain-text lyrics",
+        )
+    }
 
-    suspend fun saveManualLyrics(track: PlaybackTrack, rawText: String): Result<TrackLyricsState> =
-        runCatching {
-            val fp = resolveTrackFingerprint(track)
-                ?: throw IOException("Unable to compute content fingerprint for ${track.fileName}")
-            val sanitized = PersistenceSanitizer.sanitizeLyricsText(rawText)
-            if (sanitized.isBlank()) {
-                deleteStoredLyrics(fp)
-                return@runCatching TrackLyricsState(
-                    contentFingerprint = fp,
-                    parsedLyrics = LrcParser.parse(""),
-                    sourceType = null,
-                    hasPersistedLyrics = false,
-                    statusMessage = "Lyrics cleared",
-                )
-            }
-            val parsed = LrcParser.parse(sanitized)
-            val record = LyricsRecord(
-                contentFingerprint = fp,
-                rawLyricsText = parsed.rawText,
-                isSyncedLrc = parsed.isSynced,
-                sourceType = LyricsSourceType.MANUAL,
-                fileName = track.fileName,
-                fileSizeBytes = track.fileSizeBytes,
-                durationMs = track.durationMs,
-                updatedAtEpochMs = clockEpochMs(),
-            )
-            upsertStoredLyrics(record)
-            TrackLyricsState(
-                contentFingerprint = fp,
-                parsedLyrics = parsed,
-                sourceType = LyricsSourceType.MANUAL,
-                hasPersistedLyrics = true,
-                statusMessage = "Saved lyrics locally",
-            )
-        }
-
-    suspend fun deleteLyrics(track: PlaybackTrack): Result<TrackLyricsState> =
-        runCatching {
-            val fp = resolveTrackFingerprint(track)
-                ?: throw IOException("Unable to compute content fingerprint for ${track.fileName}")
+    suspend fun saveManualLyrics(track: PlaybackTrack, rawText: String): Result<TrackLyricsState> = runCatching {
+        val fp = resolveTrackFingerprint(track)
+            ?: throw IOException("Unable to compute content fingerprint for ${track.fileName}")
+        val sanitized = PersistenceSanitizer.sanitizeLyricsText(rawText)
+        if (sanitized.isBlank()) {
             deleteStoredLyrics(fp)
-            TrackLyricsState(
+            return@runCatching TrackLyricsState(
                 contentFingerprint = fp,
                 parsedLyrics = LrcParser.parse(""),
                 sourceType = null,
                 hasPersistedLyrics = false,
-                statusMessage = "Lyrics deleted",
+                statusMessage = "Lyrics cleared",
             )
         }
+        val parsed = LrcParser.parse(sanitized)
+        val record = LyricsRecord(
+            contentFingerprint = fp,
+            rawLyricsText = parsed.rawText,
+            isSyncedLrc = parsed.isSynced,
+            sourceType = LyricsSourceType.MANUAL,
+            fileName = track.fileName,
+            fileSizeBytes = track.fileSizeBytes,
+            durationMs = track.durationMs,
+            updatedAtEpochMs = clockEpochMs(),
+        )
+        upsertStoredLyrics(record)
+        TrackLyricsState(
+            contentFingerprint = fp,
+            parsedLyrics = parsed,
+            sourceType = LyricsSourceType.MANUAL,
+            hasPersistedLyrics = true,
+            statusMessage = "Saved lyrics locally",
+        )
+    }
+
+    suspend fun deleteLyrics(track: PlaybackTrack): Result<TrackLyricsState> = runCatching {
+        val fp = resolveTrackFingerprint(track)
+            ?: throw IOException("Unable to compute content fingerprint for ${track.fileName}")
+        deleteStoredLyrics(fp)
+        TrackLyricsState(
+            contentFingerprint = fp,
+            parsedLyrics = LrcParser.parse(""),
+            sourceType = null,
+            hasPersistedLyrics = false,
+            statusMessage = "Lyrics deleted",
+        )
+    }
 
     private suspend fun resolveTrackFingerprint(track: PlaybackTrack): String? {
         val existing = track.contentFingerprint?.takeIf { PersistenceSanitizer.isValidSha256Fingerprint(it) }
@@ -228,29 +225,25 @@ class LyricsRepository(
         findAutoDetectLrcBytes = { track -> findMatchingSidecarLrcBytes(track) },
     )
 
-    suspend fun loadLyricsForTrack(track: PlaybackTrack): TrackLyricsState? =
-        withContext(Dispatchers.IO) {
-            coordinator.loadLyricsForTrack(track)
-        }
+    suspend fun loadLyricsForTrack(track: PlaybackTrack): TrackLyricsState? = withContext(Dispatchers.IO) {
+        coordinator.loadLyricsForTrack(track)
+    }
 
-    suspend fun importLrcFromSaf(track: PlaybackTrack, lrcUri: Uri): Result<TrackLyricsState> =
-        withContext(Dispatchers.IO) {
-            runCatching {
-                val bytes = readUriBytesCapped(lrcUri)
-                    ?: throw IOException("Unable to read selected .lrc file")
-                coordinator.saveLrcBytes(track, bytes).getOrThrow()
-            }
+    suspend fun importLrcFromSaf(track: PlaybackTrack, lrcUri: Uri): Result<TrackLyricsState> = withContext(Dispatchers.IO) {
+        runCatching {
+            val bytes = readUriBytesCapped(lrcUri)
+                ?: throw IOException("Unable to read selected .lrc file")
+            coordinator.saveLrcBytes(track, bytes).getOrThrow()
         }
+    }
 
-    suspend fun saveManualLyrics(track: PlaybackTrack, rawText: String): Result<TrackLyricsState> =
-        withContext(Dispatchers.IO) {
-            coordinator.saveManualLyrics(track, rawText)
-        }
+    suspend fun saveManualLyrics(track: PlaybackTrack, rawText: String): Result<TrackLyricsState> = withContext(Dispatchers.IO) {
+        coordinator.saveManualLyrics(track, rawText)
+    }
 
-    suspend fun deleteLyrics(track: PlaybackTrack): Result<TrackLyricsState> =
-        withContext(Dispatchers.IO) {
-            coordinator.deleteLyrics(track)
-        }
+    suspend fun deleteLyrics(track: PlaybackTrack): Result<TrackLyricsState> = withContext(Dispatchers.IO) {
+        coordinator.deleteLyrics(track)
+    }
 
     private suspend fun findMatchingSidecarLrcBytes(track: PlaybackTrack): ByteArray? {
         val targetFileName = LrcFileMatcher.expectedLrcFileName(track.fileName)
@@ -301,63 +294,59 @@ class LyricsRepository(
         return null
     }
 
-    private fun findLrcInMediaStore(expectedLrcFileName: String, relativePath: String?): Uri? {
-        return try {
-            val filesUri = MediaStore.Files.getContentUri("external")
-            val projection = buildList {
-                add(MediaStore.Files.FileColumns._ID)
-                add(MediaStore.Files.FileColumns.DISPLAY_NAME)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    add(MediaStore.Files.FileColumns.RELATIVE_PATH)
-                }
-            }.toTypedArray()
-
-            val selection: String
-            val selectionArgs: Array<String>
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && !relativePath.isNullOrBlank()) {
-                selection = "${MediaStore.Files.FileColumns.DISPLAY_NAME} = ? AND ${MediaStore.Files.FileColumns.RELATIVE_PATH} = ?"
-                selectionArgs = arrayOf(expectedLrcFileName, relativePath)
-            } else {
-                selection = "${MediaStore.Files.FileColumns.DISPLAY_NAME} = ?"
-                selectionArgs = arrayOf(expectedLrcFileName)
+    private fun findLrcInMediaStore(expectedLrcFileName: String, relativePath: String?): Uri? = try {
+        val filesUri = MediaStore.Files.getContentUri("external")
+        val projection = buildList {
+            add(MediaStore.Files.FileColumns._ID)
+            add(MediaStore.Files.FileColumns.DISPLAY_NAME)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                add(MediaStore.Files.FileColumns.RELATIVE_PATH)
             }
+        }.toTypedArray()
 
-            appContext.contentResolver.query(
-                filesUri,
-                projection,
-                selection,
-                selectionArgs,
-                null,
-            )?.use { cursor ->
-                if (cursor.moveToFirst()) {
-                    val id = cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns._ID))
-                    ContentUris.withAppendedId(filesUri, id)
-                } else {
-                    null
-                }
-            }
-        } catch (_: Exception) {
-            null
+        val selection: String
+        val selectionArgs: Array<String>
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && !relativePath.isNullOrBlank()) {
+            selection = "${MediaStore.Files.FileColumns.DISPLAY_NAME} = ? AND ${MediaStore.Files.FileColumns.RELATIVE_PATH} = ?"
+            selectionArgs = arrayOf(expectedLrcFileName, relativePath)
+        } else {
+            selection = "${MediaStore.Files.FileColumns.DISPLAY_NAME} = ?"
+            selectionArgs = arrayOf(expectedLrcFileName)
         }
+
+        appContext.contentResolver.query(
+            filesUri,
+            projection,
+            selection,
+            selectionArgs,
+            null,
+        )?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val id = cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns._ID))
+                ContentUris.withAppendedId(filesUri, id)
+            } else {
+                null
+            }
+        }
+    } catch (_: Exception) {
+        null
     }
 
-    private fun readUriBytesCapped(uri: Uri): ByteArray? {
-        return runCatching {
-            appContext.contentResolver.openInputStream(uri)?.use { input ->
-                val out = ByteArrayOutputStream()
-                val buf = ByteArray(8_192)
-                var total = 0
-                while (total < MAX_LRC_FILE_BYTES) {
-                    val toRead = minOf(buf.size, MAX_LRC_FILE_BYTES - total)
-                    val read = input.read(buf, 0, toRead)
-                    if (read <= 0) break
-                    out.write(buf, 0, read)
-                    total += read
-                }
-                out.toByteArray()
+    private fun readUriBytesCapped(uri: Uri): ByteArray? = runCatching {
+        appContext.contentResolver.openInputStream(uri)?.use { input ->
+            val out = ByteArrayOutputStream()
+            val buf = ByteArray(8_192)
+            var total = 0
+            while (total < MAX_LRC_FILE_BYTES) {
+                val toRead = minOf(buf.size, MAX_LRC_FILE_BYTES - total)
+                val read = input.read(buf, 0, toRead)
+                if (read <= 0) break
+                out.write(buf, 0, read)
+                total += read
             }
-        }.getOrNull()
-    }
+            out.toByteArray()
+        }
+    }.getOrNull()
 
     companion object {
         private const val MAX_LRC_SEARCH_DEPTH = 6

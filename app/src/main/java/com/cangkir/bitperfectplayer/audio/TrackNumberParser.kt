@@ -3,10 +3,7 @@ package com.cangkir.bitperfectplayer.audio
 /**
  * Pure-Kotlin parsed disc & track position (0 means absent/unspecified).
  */
-data class ParsedTrackPosition(
-    val discNumber: Int = 0,
-    val trackNumber: Int = 0,
-) {
+data class ParsedTrackPosition(val discNumber: Int = 0, val trackNumber: Int = 0) {
     val hasPosition: Boolean
         get() = discNumber > 0 || trackNumber > 0
 }

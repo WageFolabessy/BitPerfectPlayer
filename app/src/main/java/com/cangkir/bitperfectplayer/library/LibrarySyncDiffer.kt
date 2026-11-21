@@ -17,20 +17,13 @@ data class DiscoveredAudioSignature(
 /**
  * Pure-Kotlin cached record view used by [LibrarySyncDiffer].
  */
-data class CachedTrackSignature(
-    val track: PlaybackTrack,
-    val sourceKind: CachedTrackSourceKind,
-)
+data class CachedTrackSignature(val track: PlaybackTrack, val sourceKind: CachedTrackSourceKind)
 
 /**
  * Incremental synchronization plan distinguishing tracks that can be reused directly from Room
  * cache vs. newly added/modified files requiring metadata parsing vs. deleted URIs to prune.
  */
-data class IncrementalSyncPlan(
-    val unchangedUris: Set<String>,
-    val toParseUris: Set<String>,
-    val toPruneUris: List<String>,
-)
+data class IncrementalSyncPlan(val unchangedUris: Set<String>, val toParseUris: Set<String>, val toPruneUris: List<String>)
 
 /**
  * Pure-Kotlin incremental library diffing engine (zero `android.*` imports).

@@ -49,9 +49,7 @@ data class LyricsUiState(
  * Shared presentation ViewModel connecting Compose UI screens to [AppContainer] repositories and
  * [com.cangkir.bitperfectplayer.audio.PlaybackController].
  */
-class MainViewModel(
-    private val container: AppContainer,
-) : ViewModel() {
+class MainViewModel(private val container: AppContainer) : ViewModel() {
 
     val libraryState: StateFlow<LibrarySnapshot> = container.libraryRepository.librarySnapshot
     val playlistsState: StateFlow<PlaylistsUiSnapshot> = container.playlistRepository.playlistsSnapshot
@@ -197,11 +195,7 @@ class MainViewModel(
         }
     }
 
-    fun playTracks(
-        tracks: List<PlaybackTrack>,
-        startIndex: Int = 0,
-        context: QueueContext = QueueContext.allSongs(),
-    ) {
+    fun playTracks(tracks: List<PlaybackTrack>, startIndex: Int = 0, context: QueueContext = QueueContext.allSongs()) {
         container.playbackController.playQueue(
             tracks = tracks,
             startIndex = startIndex,
@@ -259,7 +253,8 @@ class MainViewModel(
     fun enqueueTracksNext(tracks: List<PlaybackTrack>, context: QueueContext) {
         if (tracks.isEmpty()) return
         container.playbackController.enqueueAllNext(tracks, fallbackContext = context)
-        _uiMessage.value = "Queued ${tracks.size} ${if (tracks.size == 1) "track" else "tracks"} from \"${context.sourceLabel}\" to play next"
+        _uiMessage.value =
+            "Queued ${tracks.size} ${if (tracks.size == 1) "track" else "tracks"} from \"${context.sourceLabel}\" to play next"
     }
 
     fun setTrackSort(scope: TrackSortScope, spec: TrackSortSpec) {
@@ -287,17 +282,14 @@ class MainViewModel(
     fun previous() = container.playbackController.previous()
     fun seekTo(positionMs: Long) = container.playbackController.seekTo(positionMs)
     fun beginTurntableScratch(): Boolean = container.playbackController.beginTurntableScratch()
-    fun updateTurntableScratchRate(playbackRate: Float) =
-        container.playbackController.updateTurntableScratchRate(playbackRate)
-    fun endTurntableScratch(fallbackTargetMs: Long? = null) =
-        container.playbackController.endTurntableScratch(fallbackTargetMs)
+    fun updateTurntableScratchRate(playbackRate: Float) = container.playbackController.updateTurntableScratchRate(playbackRate)
+    fun endTurntableScratch(fallbackTargetMs: Long? = null) = container.playbackController.endTurntableScratch(fallbackTargetMs)
     fun toggleShuffle() = container.playbackController.toggleShuffle()
     fun cycleRepeatMode() = container.playbackController.cycleRepeatMode()
     fun setGaplessEnabled(enabled: Boolean) = container.playbackController.setGaplessEnabled(enabled)
     fun setReplayGainMode(mode: ReplayGainMode) = container.playbackController.setReplayGainMode(mode)
     fun setReplayGainPreampDb(preampDb: Float) = container.playbackController.setReplayGainPreampDb(preampDb)
-    fun setReplayGainPreventClipping(preventClipping: Boolean) =
-        container.playbackController.setReplayGainPreventClipping(preventClipping)
+    fun setReplayGainPreventClipping(preventClipping: Boolean) = container.playbackController.setReplayGainPreventClipping(preventClipping)
 
     fun setNowPlayingArtworkStyle(style: NowPlayingArtworkStyle) {
         viewModelScope.launch {
@@ -624,12 +616,9 @@ class MainViewModel(
     }
 
     companion object {
-        fun factory(container: AppContainer): ViewModelProvider.Factory =
-            object : ViewModelProvider.Factory {
-                @Suppress("UNCHECKED_CAST")
-                override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                    return MainViewModel(container) as T
-                }
-            }
+        fun factory(container: AppContainer): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
+            @Suppress("UNCHECKED_CAST")
+            override fun <T : ViewModel> create(modelClass: Class<T>): T = MainViewModel(container) as T
+        }
     }
 }

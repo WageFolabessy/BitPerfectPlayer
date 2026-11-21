@@ -1,10 +1,10 @@
 package com.cangkir.bitperfectplayer.audio
 
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Test
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 
 class PcmStreamRulesTest {
 

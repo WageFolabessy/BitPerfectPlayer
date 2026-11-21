@@ -112,7 +112,7 @@ class PreHardwareAuditRegressionTest {
         val trickyLyrics = "[00:01.00]Line with \"quotes\" and \\backslash\\\n[00:05.50]Second line ♪ 歌詞\n[00:09.00]Control:\u0007bell"
 
         val payload = LocalBackupPayload(
-             exportedAtEpochMs = 1_760_000_000_000L,
+            exportedAtEpochMs = 1_760_000_000_000L,
             playlists = listOf(
                 BackupPlaylist(
                     name = "Audiophile \"Reference\" \\ Mix ♪",

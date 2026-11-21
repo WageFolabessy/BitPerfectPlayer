@@ -63,15 +63,14 @@ import com.cangkir.bitperfectplayer.ui.theme.IcePrimary
 import com.cangkir.bitperfectplayer.ui.theme.ObsidianSurfaceVariant
 import com.cangkir.bitperfectplayer.ui.theme.TextPrimary
 import com.cangkir.bitperfectplayer.ui.theme.TextSecondary
+import kotlin.math.abs
+import kotlin.math.atan2
+import kotlin.math.roundToLong
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlin.coroutines.cancellation.CancellationException
-import kotlin.math.abs
-import kotlin.math.atan2
-import kotlin.math.roundToLong
 
 private val VINYL_DISC_DIAMETER = 272.dp
 
@@ -231,9 +230,10 @@ fun InteractiveVinylDisc(
                     isUserDragging = true
 
                     // Engage Safe-Mode live turntable DSP if actively playing in Safe Mode (or continue caught live coast).
-                    val liveMode = if (caughtCoast && session.isLiveSessionActive && latestIsPlaying && latestIsSafeMode) {
+                    val canEngageLiveScratch = latestIsPlaying && latestIsSafeMode
+                    val liveMode = if (caughtCoast && session.isLiveSessionActive && canEngageLiveScratch) {
                         true
-                    } else if (!caughtCoast && latestIsPlaying && latestIsSafeMode) {
+                    } else if (!caughtCoast && canEngageLiveScratch) {
                         val started = latestOnBeginScratch()
                         session.isLiveSessionActive = started
                         started
@@ -313,8 +313,7 @@ fun InteractiveVinylDisc(
 
                             if (liveMode) {
                                 // If externally aborted mid-drag (auto-pause / Bit-Perfect switch), stay passive until finger lifts.
-                                if (!session.isLiveSessionActive) continue
-                                if (deltaDeg != 0f) {
+                                if (session.isLiveSessionActive && deltaDeg != 0f) {
                                     didScrubOrCatchCoast = true
                                     lastMoveTimeMs = nowMs
                                     session.lastMoveWallNano = System.nanoTime()
@@ -410,55 +409,51 @@ fun InteractiveVinylDisc(
                         } else {
                             isCoasting = true
                             session.coastJob = coroutineScope.launch {
-                                try {
-                                    var vel = releaseVelocity
-                                    val startNanos = withFrameNanos { it }
-                                    var lastNanos = startNanos
-                                    var coastHapticAccum = 0f
+                                var vel = releaseVelocity
+                                val startNanos = withFrameNanos { it }
+                                var lastNanos = startNanos
+                                var coastHapticAccum = 0f
 
-                                    while (isActive && session.isLiveSessionActive) {
-                                        val nowNanos = withFrameNanos { it }
-                                        val elapsedMs = (nowNanos - startNanos) / 1_000_000L
-                                        val dtSec = ((nowNanos - lastNanos) / 1_000_000_000.0)
-                                            .coerceIn(0.0, 0.05)
-                                            .toFloat()
-                                        lastNanos = nowNanos
+                                while (isActive && session.isLiveSessionActive) {
+                                    val nowNanos = withFrameNanos { it }
+                                    val elapsedMs = (nowNanos - startNanos) / 1_000_000L
+                                    val dtSec = ((nowNanos - lastNanos) / 1_000_000_000.0)
+                                        .coerceIn(0.0, 0.05)
+                                        .toFloat()
+                                    lastNanos = nowNanos
 
-                                        val frameDeltaDeg = vel * dtSec
-                                        rotationDegrees.floatValue = (rotationDegrees.floatValue + frameDeltaDeg) % 360f
+                                    val frameDeltaDeg = vel * dtSec
+                                    rotationDegrees.floatValue = (rotationDegrees.floatValue + frameDeltaDeg) % 360f
 
-                                        val rate = VinylScrubMath.angularVelocityToPlaybackRate(vel)
-                                        liveScratchSpeedState.value = rate
-                                        latestOnUpdateScratchRate(rate)
+                                    val rate = VinylScrubMath.angularVelocityToPlaybackRate(vel)
+                                    liveScratchSpeedState.value = rate
+                                    latestOnUpdateScratchRate(rate)
 
-                                        coastHapticAccum += abs(frameDeltaDeg)
-                                        if (coastHapticAccum >= VinylScrubMath.HAPTIC_TICK_INTERVAL_DEG) {
-                                            coastHapticAccum %= VinylScrubMath.HAPTIC_TICK_INTERVAL_DEG
-                                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                        }
-
-                                        vel = VinylScrubMath.decayInertiaVelocity(vel, dtSec)
-
-                                        val livePos = latestPositionFlow.value
-                                        val hitBoundary = (livePos <= 0L && vel < 0f) ||
-                                            (livePos >= durationMs && vel > 0f)
-                                        if (hitBoundary ||
-                                            elapsedMs >= VinylScrubMath.INERTIA_MAX_DURATION_MS ||
-                                            abs(vel) < VinylScrubMath.INERTIA_STOP_VELOCITY_DEG_PER_SEC
-                                        ) {
-                                            break
-                                        }
+                                    coastHapticAccum += abs(frameDeltaDeg)
+                                    if (coastHapticAccum >= VinylScrubMath.HAPTIC_TICK_INTERVAL_DEG) {
+                                        coastHapticAccum %= VinylScrubMath.HAPTIC_TICK_INTERVAL_DEG
+                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                     }
 
-                                    isCoasting = false
-                                    session.coastJob = null
-                                    liveScratchSpeedState.value = null
-                                    if (session.isLiveSessionActive) {
-                                        session.isLiveSessionActive = false
-                                        latestOnEndScratch(null)
+                                    vel = VinylScrubMath.decayInertiaVelocity(vel, dtSec)
+
+                                    val livePos = latestPositionFlow.value
+                                    val hitBoundary = (livePos <= 0L && vel < 0f) ||
+                                        (livePos >= durationMs && vel > 0f)
+                                    if (hitBoundary ||
+                                        elapsedMs >= VinylScrubMath.INERTIA_MAX_DURATION_MS ||
+                                        abs(vel) < VinylScrubMath.INERTIA_STOP_VELOCITY_DEG_PER_SEC
+                                    ) {
+                                        break
                                     }
-                                } catch (ce: CancellationException) {
-                                    throw ce
+                                }
+
+                                isCoasting = false
+                                session.coastJob = null
+                                liveScratchSpeedState.value = null
+                                if (session.isLiveSessionActive) {
+                                    session.isLiveSessionActive = false
+                                    latestOnEndScratch(null)
                                 }
                             }
                         }
@@ -488,56 +483,52 @@ fun InteractiveVinylDisc(
                         isCoasting = true
                         val initialCoastPos = previewPosDouble
                         session.coastJob = coroutineScope.launch {
-                            try {
-                                var vel = releaseVelocity
-                                var posDouble = initialCoastPos
-                                val startNanos = withFrameNanos { it }
-                                var lastNanos = startNanos
-                                var coastHapticAccum = 0f
+                            var vel = releaseVelocity
+                            var posDouble = initialCoastPos
+                            val startNanos = withFrameNanos { it }
+                            var lastNanos = startNanos
+                            var coastHapticAccum = 0f
 
-                                while (isActive) {
-                                    val nowNanos = withFrameNanos { it }
-                                    val elapsedMs = (nowNanos - startNanos) / 1_000_000L
-                                    val dtSec = ((nowNanos - lastNanos) / 1_000_000_000.0)
-                                        .coerceIn(0.0, 0.05)
-                                        .toFloat()
-                                    lastNanos = nowNanos
+                            while (isActive) {
+                                val nowNanos = withFrameNanos { it }
+                                val elapsedMs = (nowNanos - startNanos) / 1_000_000L
+                                val dtSec = ((nowNanos - lastNanos) / 1_000_000_000.0)
+                                    .coerceIn(0.0, 0.05)
+                                    .toFloat()
+                                lastNanos = nowNanos
 
-                                    val frameDeltaDeg = vel * dtSec
-                                    rotationDegrees.floatValue = (rotationDegrees.floatValue + frameDeltaDeg) % 360f
-                                    val frameDeltaMs = VinylScrubMath.computeIncrementalScrubDeltaMs(frameDeltaDeg, vel)
-                                    posDouble = VinylScrubMath.clampScrubPositionMs(
-                                        positionMs = posDouble + frameDeltaMs,
-                                        durationMs = durationMs,
-                                    )
-                                    scrubPreviewMsState.value = posDouble.roundToLong().coerceIn(0L, durationMs)
+                                val frameDeltaDeg = vel * dtSec
+                                rotationDegrees.floatValue = (rotationDegrees.floatValue + frameDeltaDeg) % 360f
+                                val frameDeltaMs = VinylScrubMath.computeIncrementalScrubDeltaMs(frameDeltaDeg, vel)
+                                posDouble = VinylScrubMath.clampScrubPositionMs(
+                                    positionMs = posDouble + frameDeltaMs,
+                                    durationMs = durationMs,
+                                )
+                                scrubPreviewMsState.value = posDouble.roundToLong().coerceIn(0L, durationMs)
 
-                                    coastHapticAccum += abs(frameDeltaDeg)
-                                    if (coastHapticAccum >= VinylScrubMath.HAPTIC_TICK_INTERVAL_DEG) {
-                                        coastHapticAccum %= VinylScrubMath.HAPTIC_TICK_INTERVAL_DEG
-                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                    }
-
-                                    vel = VinylScrubMath.decayInertiaVelocity(vel, dtSec)
-
-                                    val hitBoundary = (posDouble <= 0.0 && vel < 0f) ||
-                                        (posDouble >= durationMs.toDouble() && vel > 0f)
-                                    if (hitBoundary ||
-                                        elapsedMs >= VinylScrubMath.INERTIA_MAX_DURATION_MS ||
-                                        abs(vel) < VinylScrubMath.INERTIA_STOP_VELOCITY_DEG_PER_SEC
-                                    ) {
-                                        break
-                                    }
+                                coastHapticAccum += abs(frameDeltaDeg)
+                                if (coastHapticAccum >= VinylScrubMath.HAPTIC_TICK_INTERVAL_DEG) {
+                                    coastHapticAccum %= VinylScrubMath.HAPTIC_TICK_INTERVAL_DEG
+                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                 }
 
-                                val settledMs = posDouble.roundToLong().coerceIn(0L, durationMs)
-                                isCoasting = false
-                                session.coastJob = null
-                                scrubPreviewMsState.value = null
-                                latestOnSeekTo(settledMs)
-                            } catch (ce: CancellationException) {
-                                throw ce
+                                vel = VinylScrubMath.decayInertiaVelocity(vel, dtSec)
+
+                                val hitBoundary = (posDouble <= 0.0 && vel < 0f) ||
+                                    (posDouble >= durationMs.toDouble() && vel > 0f)
+                                if (hitBoundary ||
+                                    elapsedMs >= VinylScrubMath.INERTIA_MAX_DURATION_MS ||
+                                    abs(vel) < VinylScrubMath.INERTIA_STOP_VELOCITY_DEG_PER_SEC
+                                ) {
+                                    break
+                                }
                             }
+
+                            val settledMs = posDouble.roundToLong().coerceIn(0L, durationMs)
+                            isCoasting = false
+                            session.coastJob = null
+                            scrubPreviewMsState.value = null
+                            latestOnSeekTo(settledMs)
                         }
                     }
                 }
@@ -608,9 +599,7 @@ fun InteractiveVinylDisc(
 }
 
 @Composable
-private fun VinylGroovesCanvas(
-    modifier: Modifier = Modifier,
-) {
+private fun VinylGroovesCanvas(modifier: Modifier = Modifier) {
     Canvas(modifier = modifier) {
         val radius = size.minDimension / 2f
         val center = Offset(size.width / 2f, size.height / 2f)
@@ -681,9 +670,7 @@ private fun VinylGroovesCanvas(
 }
 
 @Composable
-private fun VinylStationarySheenCanvas(
-    modifier: Modifier = Modifier,
-) {
+private fun VinylStationarySheenCanvas(modifier: Modifier = Modifier) {
     Canvas(modifier = modifier) {
         val radius = size.minDimension / 2f
         val center = Offset(size.width / 2f, size.height / 2f)
@@ -728,11 +715,7 @@ private fun VinylStationarySheenCanvas(
 }
 
 @Composable
-private fun VinylCircularArtwork(
-    track: PlaybackTrack,
-    artworkLoader: AlbumArtworkLoader,
-    modifier: Modifier = Modifier,
-) {
+private fun VinylCircularArtwork(track: PlaybackTrack, artworkLoader: AlbumArtworkLoader, modifier: Modifier = Modifier) {
     val targetSizePx = AlbumArtworkLoader.HERO_SIZE_PX
     val cacheIdentity = remember(track.uriString, track.album, track.artist, track.dateModifiedSeconds, targetSizePx) {
         artworkLoader.memoryKeyFor(track, targetSizePx)

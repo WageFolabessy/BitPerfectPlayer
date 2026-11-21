@@ -47,11 +47,7 @@ import com.cangkir.bitperfectplayer.ui.theme.IcePrimaryContainer
  * track-count / group-subtitle header row (zero bulky filter chip bars; guaranteed >= 48.dp height).
  */
 @Composable
-fun InlineSortTriggerButton(
-    label: String,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
+fun InlineSortTriggerButton(label: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
     Row(
         modifier = modifier
             .sizeIn(minHeight = 48.dp)
@@ -84,12 +80,7 @@ fun InlineSortTriggerButton(
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun TrackSortBottomSheet(
-    scope: TrackSortScope,
-    currentSpec: TrackSortSpec,
-    onSelectSpec: (TrackSortSpec) -> Unit,
-    onDismiss: () -> Unit,
-) {
+fun TrackSortBottomSheet(scope: TrackSortScope, currentSpec: TrackSortSpec, onSelectSpec: (TrackSortSpec) -> Unit, onDismiss: () -> Unit) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -152,12 +143,7 @@ fun TrackSortBottomSheet(
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun GroupSortBottomSheet(
-    scope: GroupSortScope,
-    currentSpec: GroupSortSpec,
-    onSelectSpec: (GroupSortSpec) -> Unit,
-    onDismiss: () -> Unit,
-) {
+fun GroupSortBottomSheet(scope: GroupSortScope, currentSpec: GroupSortSpec, onSelectSpec: (GroupSortSpec) -> Unit, onDismiss: () -> Unit) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -215,10 +201,7 @@ fun GroupSortBottomSheet(
 }
 
 @Composable
-private fun SortDirectionToggleRow(
-    direction: SortDirection,
-    onSelectDirection: (SortDirection) -> Unit,
-) {
+private fun SortDirectionToggleRow(direction: SortDirection, onSelectDirection: (SortDirection) -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -268,11 +251,7 @@ private fun SortDirectionToggleRow(
 }
 
 @Composable
-private fun SortOptionRow(
-    label: String,
-    selected: Boolean,
-    onClick: () -> Unit,
-) {
+private fun SortOptionRow(label: String, selected: Boolean, onClick: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()

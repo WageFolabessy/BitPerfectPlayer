@@ -11,10 +11,7 @@ import kotlinx.coroutines.launch
 /**
  * Available local Sleep Timer presets.
  */
-enum class SleepTimerPreset(
-    val label: String,
-    val durationMs: Long?,
-) {
+enum class SleepTimerPreset(val label: String, val durationMs: Long?) {
     OFF("Off", null),
     MIN_15("15 min", 15L * 60_000L),
     MIN_30("30 min", 30L * 60_000L),

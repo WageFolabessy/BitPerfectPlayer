@@ -17,8 +17,7 @@ enum class ReplayGainMode(val displayName: String) {
     ;
 
     companion object {
-        fun fromStoredName(raw: String?): ReplayGainMode =
-            entries.firstOrNull { it.name.equals(raw?.trim(), ignoreCase = true) } ?: OFF
+        fun fromStoredName(raw: String?): ReplayGainMode = entries.firstOrNull { it.name.equals(raw?.trim(), ignoreCase = true) } ?: OFF
     }
 }
 
@@ -87,11 +86,7 @@ object ReplayGainProcessor {
     private const val INT24_MIN = -8_388_608
     private const val INT24_MAX = 8_388_607
 
-    fun resolve(
-        config: ReplayGainConfig,
-        metadata: ReplayGainMetadata?,
-        safetyMode: AudioOutputMode,
-    ): ReplayGainResolution {
+    fun resolve(config: ReplayGainConfig, metadata: ReplayGainMetadata?, safetyMode: AudioOutputMode): ReplayGainResolution {
         if (config.mode == ReplayGainMode.OFF) {
             return ReplayGainResolution(
                 linearGain = 1.0f,
@@ -154,10 +149,11 @@ object ReplayGainProcessor {
         }
 
         var peakClamped = false
-        if (config.preventClipping && selectedPeak != null && selectedPeak.isFinite() && selectedPeak > 0f) {
-            val predictedPeak = linearGain * selectedPeak
+        val validPeak = selectedPeak?.takeIf { it.isFinite() && it > 0f }
+        if (config.preventClipping && validPeak != null) {
+            val predictedPeak = linearGain * validPeak
             if (predictedPeak > 1.0f) {
-                linearGain = (1.0 / selectedPeak.toDouble()).toFloat()
+                linearGain = (1.0 / validPeak.toDouble()).toFloat()
                 peakClamped = true
             }
         }
@@ -186,17 +182,12 @@ object ReplayGainProcessor {
         )
     }
 
-    fun needsSampleScaling(linearGain: Float): Boolean =
-        linearGain.isFinite() && linearGain > 0f && abs(linearGain - 1.0f) > UNITY_EPSILON
+    fun needsSampleScaling(linearGain: Float): Boolean = linearGain.isFinite() && linearGain > 0f && abs(linearGain - 1.0f) > UNITY_EPSILON
 
     /**
      * Zero-allocation in-place float32 PCM gain application (Safe Mode only).
      */
-    fun applyGainToFloatSamples(
-        samples: FloatArray,
-        sampleCount: Int,
-        linearGain: Float,
-    ) {
+    fun applyGainToFloatSamples(samples: FloatArray, sampleCount: Int, linearGain: Float) {
         if (!needsSampleScaling(linearGain) || sampleCount <= 0) return
         val limit = minOf(sampleCount, samples.size)
         for (i in 0 until limit) {
@@ -209,12 +200,7 @@ object ReplayGainProcessor {
      * Zero-allocation in-place signed 16-bit little-endian PCM gain application with rounding
      * and saturation clamping (Safe Mode only).
      */
-    fun applyGainToPcm16LittleEndian(
-        bytes: ByteArray,
-        offset: Int,
-        byteCount: Int,
-        linearGain: Float,
-    ) {
+    fun applyGainToPcm16LittleEndian(bytes: ByteArray, offset: Int, byteCount: Int, linearGain: Float) {
         if (!needsSampleScaling(linearGain) || byteCount < 2) return
         val end = minOf(offset + (byteCount and 1.inv()), bytes.size - 1)
         var i = offset
@@ -235,12 +221,7 @@ object ReplayGainProcessor {
      * Zero-allocation in-place signed 24-bit packed little-endian PCM gain application in double
      * precision with saturation clamping (Safe Mode only).
      */
-    fun applyGainToPcm24PackedLittleEndian(
-        bytes: ByteArray,
-        offset: Int,
-        byteCount: Int,
-        linearGain: Float,
-    ) {
+    fun applyGainToPcm24PackedLittleEndian(bytes: ByteArray, offset: Int, byteCount: Int, linearGain: Float) {
         if (!needsSampleScaling(linearGain) || byteCount < 3) return
         val gainDouble = linearGain.toDouble()
         val alignedLen = (byteCount / 3) * 3
@@ -265,12 +246,7 @@ object ReplayGainProcessor {
      * Zero-allocation in-place signed 32-bit little-endian PCM gain application in double
      * precision with saturation clamping (Safe Mode only).
      */
-    fun applyGainToPcm32LittleEndian(
-        bytes: ByteArray,
-        offset: Int,
-        byteCount: Int,
-        linearGain: Float,
-    ) {
+    fun applyGainToPcm32LittleEndian(bytes: ByteArray, offset: Int, byteCount: Int, linearGain: Float) {
         if (!needsSampleScaling(linearGain) || byteCount < 4) return
         val gainDouble = linearGain.toDouble()
         val alignedLen = byteCount and 3.inv()

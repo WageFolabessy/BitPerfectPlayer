@@ -17,11 +17,11 @@ import com.cangkir.bitperfectplayer.library.GroupSortSpec
 import com.cangkir.bitperfectplayer.library.LibrarySortPreferences
 import com.cangkir.bitperfectplayer.library.TrackSortScope
 import com.cangkir.bitperfectplayer.library.TrackSortSpec
+import java.io.IOException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
-import java.io.IOException
 
 val Context.bitPerfectUserPreferencesDataStore: DataStore<Preferences> by preferencesDataStore(
     name = "bitperfect_user_preferences",
@@ -32,9 +32,7 @@ val Context.bitPerfectUserPreferencesDataStore: DataStore<Preferences> by prefer
  * playback controls (shuffle/repeat/gapless), Safe-Mode-only ReplayGain settings, persisted SAF
  * URIs, context-aware last playback restoration state, and independent per-scope sort preferences.
  */
-class UserPreferencesRepository(
-    private val dataStore: DataStore<Preferences>,
-) {
+class UserPreferencesRepository(private val dataStore: DataStore<Preferences>) {
     private object Keys {
         val AUDIO_SAFETY_MODE = stringPreferencesKey("audio_safety_mode")
         val SHUFFLE_ENABLED = booleanPreferencesKey("shuffle_enabled")

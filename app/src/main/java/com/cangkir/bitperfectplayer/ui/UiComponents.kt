@@ -260,10 +260,7 @@ fun AudioModeSegmentedSwitch(
  * nor host screens recompose during playback.
  */
 @Composable
-private fun MiniPlayerProgressBar(
-    durationMs: Long,
-    playbackPositionMsFlow: StateFlow<Long>,
-) {
+private fun MiniPlayerProgressBar(durationMs: Long, playbackPositionMsFlow: StateFlow<Long>) {
     val currentPositionMs by playbackPositionMsFlow.collectAsStateWithLifecycle()
     val progress = if (durationMs > 0L) {
         (currentPositionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)

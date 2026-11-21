@@ -66,7 +66,7 @@ object AudioFormatFormatter {
     ): String {
         val parts = mutableListOf(formatContainerAndCodec(container, codec))
         if (bitDepth != null && bitDepth > 0) {
-            parts.add("${bitDepth}-bit")
+            parts.add("$bitDepth-bit")
         }
         if (sampleRateHz > 0) {
             parts.add(formatSampleRateHz(sampleRateHz))

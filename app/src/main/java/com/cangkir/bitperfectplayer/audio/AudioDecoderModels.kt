@@ -8,11 +8,7 @@ import java.io.IOException
  * Pure-Kotlin PCM encoding representation mapped to Android [android.media.AudioFormat] constants
  * with API-level guards at the Android engine boundary.
  */
-enum class PcmEncodingType(
-    val displayLabel: String,
-    val bytesPerSample: Int,
-    val effectiveBitDepth: Int,
-) {
+enum class PcmEncodingType(val displayLabel: String, val bytesPerSample: Int, val effectiveBitDepth: Int) {
     PCM_16BIT("PCM_16BIT", bytesPerSample = 2, effectiveBitDepth = 16),
     PCM_24BIT_PACKED("PCM_24BIT_PACKED", bytesPerSample = 3, effectiveBitDepth = 24),
     PCM_32BIT("PCM_32BIT", bytesPerSample = 4, effectiveBitDepth = 32),
@@ -42,21 +38,14 @@ data class DecodedPcmFormat(
 /**
  * Typed decoder failure hierarchy so corrupted or unsupported audio files never crash playback.
  */
-sealed class AudioDecodeException(
-    message: String,
-    cause: Throwable? = null,
-) : IOException(message, cause) {
-    class UnsupportedFormat(message: String, cause: Throwable? = null) :
-        AudioDecodeException(message, cause)
+sealed class AudioDecodeException(message: String, cause: Throwable? = null) : IOException(message, cause) {
+    class UnsupportedFormat(message: String, cause: Throwable? = null) : AudioDecodeException(message, cause)
 
-    class CorruptedFile(message: String, cause: Throwable? = null) :
-        AudioDecodeException(message, cause)
+    class CorruptedFile(message: String, cause: Throwable? = null) : AudioDecodeException(message, cause)
 
-    class IoError(message: String, cause: Throwable? = null) :
-        AudioDecodeException(message, cause)
+    class IoError(message: String, cause: Throwable? = null) : AudioDecodeException(message, cause)
 
-    class DecoderInitFailed(message: String, cause: Throwable? = null) :
-        AudioDecodeException(message, cause)
+    class DecoderInitFailed(message: String, cause: Throwable? = null) : AudioDecodeException(message, cause)
 }
 
 /**
@@ -85,11 +74,7 @@ interface PcmAudioDecoder : Closeable {
 /**
  * Supported MVP audio container formats (SPEC Section 3.4).
  */
-enum class SupportedAudioFormat(
-    val containerLabel: String,
-    val defaultCodecLabel: String,
-    val isLossless: Boolean,
-) {
+enum class SupportedAudioFormat(val containerLabel: String, val defaultCodecLabel: String, val isLossless: Boolean) {
     FLAC("FLAC", "FLAC", isLossless = true),
     WAV("WAV", "PCM", isLossless = true),
     MP3("MP3", "MP3", isLossless = false),
@@ -138,8 +123,7 @@ object AudioFormatClassifier {
         }
     }
 
-    fun isSupported(fileName: String?, mimeType: String? = null): Boolean =
-        classify(fileName, mimeType) != null
+    fun isSupported(fileName: String?, mimeType: String? = null): Boolean = classify(fileName, mimeType) != null
 
     fun baseNameWithoutExtension(fileName: String): String {
         val cleaned = fileName.trim()
@@ -168,33 +152,19 @@ object FlacStreamInfoParser {
     private const val MAX_VORBIS_COMMENT_BYTES = 256 * 1024 // 256 KB OOM safety cap
     private const val MAX_METADATA_BLOCKS_TO_SCAN = 32
 
+    private val FLAC_MAGIC = byteArrayOf(
+        'f'.code.toByte(),
+        'L'.code.toByte(),
+        'a'.code.toByte(),
+        'C'.code.toByte(),
+    )
+
     fun parse(source: SeekableByteSource): FlacStreamInfo? {
-        if (source.size < MIN_FLAC_HEADER_BYTES) return null
+        val offset = resolveFlacHeaderOffset(source) ?: return null
         val header = ByteArray(MIN_FLAC_HEADER_BYTES)
-        var offset = 0L
-
-        // Optional ID3v2 prefix before "fLaC" magic
-        val probe = ByteArray(10)
-        if (readFully(source, 0L, probe, 10) < 10) return null
-        if (probe[0] == 'I'.code.toByte() && probe[1] == 'D'.code.toByte() && probe[2] == '3'.code.toByte()) {
-            val tagSize = ((probe[6].toInt() and 0x7F) shl 21) or
-                ((probe[7].toInt() and 0x7F) shl 14) or
-                ((probe[8].toInt() and 0x7F) shl 7) or
-                (probe[9].toInt() and 0x7F)
-            offset = 10L + tagSize.toLong()
-        }
-
-        if (offset + MIN_FLAC_HEADER_BYTES > source.size) return null
-        if (readFully(source, offset, header, MIN_FLAC_HEADER_BYTES) < MIN_FLAC_HEADER_BYTES) return null
-
-        // Verify "fLaC" magic
-        if (header[0] != 'f'.code.toByte() ||
-            header[1] != 'L'.code.toByte() ||
-            header[2] != 'a'.code.toByte() ||
-            header[3] != 'C'.code.toByte()
-        ) {
-            return null
-        }
+        val hasValidHeader = readFully(source, offset, header, MIN_FLAC_HEADER_BYTES) == MIN_FLAC_HEADER_BYTES &&
+            hasFlacMagic(header)
+        if (!hasValidHeader) return null
 
         // Metadata block 0 must be STREAMINFO (type == 0) with length >= 34 bytes
         val streamInfoIsLast = (header[4].toInt() and 0x80) != 0
@@ -204,6 +174,39 @@ object FlacStreamInfoParser {
             (header[7].toInt() and 0xFF)
         if (blockType != 0 || blockLength < 34) return null
 
+        val baseInfo = decodeStreamInfoHeader(header) ?: return null
+        val parsedPos = if (!streamInfoIsLast) {
+            readVorbisTrackPositionSafely(source, offset + 8L + blockLength.toLong())
+        } else {
+            ParsedTrackPosition()
+        }
+
+        return baseInfo.copy(
+            discNumber = parsedPos.discNumber,
+            trackNumber = parsedPos.trackNumber,
+        )
+    }
+
+    private fun resolveFlacHeaderOffset(source: SeekableByteSource): Long? {
+        if (source.size < MIN_FLAC_HEADER_BYTES) return null
+        val probe = ByteArray(10)
+        if (readFully(source, 0L, probe, 10) < 10) return null
+
+        var offset = 0L
+        // Optional ID3v2 prefix before "fLaC" magic
+        if (probe[0] == 'I'.code.toByte() && probe[1] == 'D'.code.toByte() && probe[2] == '3'.code.toByte()) {
+            val tagSize = ((probe[6].toInt() and 0x7F) shl 21) or
+                ((probe[7].toInt() and 0x7F) shl 14) or
+                ((probe[8].toInt() and 0x7F) shl 7) or
+                (probe[9].toInt() and 0x7F)
+            offset = 10L + tagSize.toLong()
+        }
+        return offset.takeIf { it + MIN_FLAC_HEADER_BYTES <= source.size }
+    }
+
+    private fun hasFlacMagic(header: ByteArray): Boolean = FLAC_MAGIC.indices.all { idx -> header[idx] == FLAC_MAGIC[idx] }
+
+    private fun decodeStreamInfoHeader(header: ByteArray): FlacStreamInfo? {
         // STREAMINFO starts at byte 8; bytes 18..25 hold sampleRate(20b), channels-1(3b), bps-1(5b), totalSamples(36b)
         val b18 = header[18].toLong() and 0xFF
         val b19 = header[19].toLong() and 0xFF
@@ -225,55 +228,41 @@ object FlacStreamInfoParser {
 
         if (sampleRate <= 0 || channels <= 0 || bitsPerSample <= 0) return null
         val durationMs = if (totalSamples > 0L) (totalSamples * 1000L) / sampleRate.toLong() else 0L
-
-        var discNumber = 0
-        var trackNumber = 0
-        if (!streamInfoIsLast) {
-            val nextBlockOffset = offset + 8L + blockLength.toLong()
-            val parsedPos = readVorbisTrackPositionSafely(source, nextBlockOffset)
-            discNumber = parsedPos.discNumber
-            trackNumber = parsedPos.trackNumber
-        }
-
         return FlacStreamInfo(
             sampleRateHz = sampleRate,
             channelCount = channels,
             bitsPerSample = bitsPerSample,
             totalSamples = totalSamples,
             durationMs = durationMs,
-            discNumber = discNumber,
-            trackNumber = trackNumber,
         )
     }
 
-    private fun readVorbisTrackPositionSafely(
-        source: SeekableByteSource,
-        startOffset: Long,
-    ): ParsedTrackPosition {
+    private fun readVorbisTrackPositionSafely(source: SeekableByteSource, startOffset: Long): ParsedTrackPosition {
         var cursor = startOffset
         val blockHeader = ByteArray(4)
         var blocksVisited = 0
-        while (cursor + 4L <= source.size && blocksVisited < MAX_METADATA_BLOCKS_TO_SCAN) {
+        var reachedLast = false
+        while (!reachedLast && cursor + 4L <= source.size && blocksVisited < MAX_METADATA_BLOCKS_TO_SCAN) {
             blocksVisited++
-            if (readFully(source, cursor, blockHeader, 4) < 4) break
-            val isLast = (blockHeader[0].toInt() and 0x80) != 0
+            if (readFully(source, cursor, blockHeader, 4) < 4) return ParsedTrackPosition()
+            reachedLast = (blockHeader[0].toInt() and 0x80) != 0
             val blockType = blockHeader[0].toInt() and 0x7F
             val length = ((blockHeader[1].toInt() and 0xFF) shl 16) or
                 ((blockHeader[2].toInt() and 0xFF) shl 8) or
                 (blockHeader[3].toInt() and 0xFF)
             cursor += 4L
-            if (length < 0 || cursor + length.toLong() > source.size) break
+            if (length < 0 || cursor + length.toLong() > source.size) return ParsedTrackPosition()
 
             if (blockType == 4 && length in 8..MAX_VORBIS_COMMENT_BYTES) {
                 val payload = ByteArray(length)
-                if (readFully(source, cursor, payload, length) == length) {
-                    return parseVorbisCommentTrackPosition(payload)
+                return if (readFully(source, cursor, payload, length) == length) {
+                    parseVorbisCommentTrackPosition(payload)
+                } else {
+                    ParsedTrackPosition()
                 }
-                break
             }
 
             cursor += length.toLong()
-            if (isLast) break
         }
         return ParsedTrackPosition()
     }
@@ -330,11 +319,10 @@ object FlacStreamInfoParser {
         return -1
     }
 
-    private fun readInt32Le(data: ByteArray, offset: Int): Int =
-        (data[offset].toInt() and 0xFF) or
-            ((data[offset + 1].toInt() and 0xFF) shl 8) or
-            ((data[offset + 2].toInt() and 0xFF) shl 16) or
-            ((data[offset + 3].toInt() and 0xFF) shl 24)
+    private fun readInt32Le(data: ByteArray, offset: Int): Int = (data[offset].toInt() and 0xFF) or
+        ((data[offset + 1].toInt() and 0xFF) shl 8) or
+        ((data[offset + 2].toInt() and 0xFF) shl 16) or
+        ((data[offset + 3].toInt() and 0xFF) shl 24)
 
     private fun readFully(source: SeekableByteSource, startOffset: Long, buf: ByteArray, len: Int): Int {
         var total = 0

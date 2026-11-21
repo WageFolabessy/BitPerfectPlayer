@@ -51,11 +51,7 @@ private object Routes {
     const val DIAGNOSTICS = "diagnostics"
 }
 
-private data class TopLevelTab(
-    val route: String,
-    val label: String,
-    val icon: ImageVector,
-)
+private data class TopLevelTab(val route: String, val label: String, val icon: ImageVector)
 
 private val TOP_LEVEL_TABS = listOf(
     TopLevelTab(
@@ -78,9 +74,7 @@ private val TOP_LEVEL_TABS = listOf(
 private val TOP_LEVEL_ROUTES = setOf(Routes.LIBRARY, Routes.PLAYLISTS, Routes.SETTINGS)
 
 @Composable
-fun BitPerfectAppRoot(
-    viewModel: MainViewModel,
-) {
+fun BitPerfectAppRoot(viewModel: MainViewModel) {
     val navController = rememberNavController()
     val libraryState by viewModel.libraryState.collectAsStateWithLifecycle()
     val playlistsState by viewModel.playlistsState.collectAsStateWithLifecycle()
@@ -282,10 +276,11 @@ fun BitPerfectAppRoot(
                 val spectrumColorStyle by viewModel.spectrumColorStyle.collectAsStateWithLifecycle()
                 val spectrumSparksEnabled by viewModel.spectrumSparksEnabled.collectAsStateWithLifecycle()
                 val activeTrack = playbackState.activeTrack
-                val isFav = activeTrack != null && (
-                    activeTrack.uriString in favoriteTrackUris ||
-                        activeTrack.contentFingerprint?.lowercase()?.let { it in libraryState.favoriteFingerprints } == true
-                    )
+                val isFav = activeTrack != null &&
+                    (
+                        activeTrack.uriString in favoriteTrackUris ||
+                            activeTrack.contentFingerprint?.lowercase()?.let { it in libraryState.favoriteFingerprints } == true
+                        )
                 NowPlayingScreen(
                     playbackState = playbackState,
                     playbackPositionMsFlow = viewModel.playbackPositionMs,
@@ -392,10 +387,7 @@ fun BitPerfectAppRoot(
 }
 
 @Composable
-private fun BitPerfectBottomNavBar(
-    currentRoute: String,
-    onSelectTab: (String) -> Unit,
-) {
+private fun BitPerfectBottomNavBar(currentRoute: String, onSelectTab: (String) -> Unit) {
     NavigationBar(
         containerColor = MaterialTheme.colorScheme.surface,
         tonalElevation = 0.dp,

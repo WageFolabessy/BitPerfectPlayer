@@ -5,10 +5,7 @@ import com.cangkir.bitperfectplayer.audio.PlaybackTrack
 /**
  * Sort direction for library tracks and groups.
  */
-enum class SortDirection(
-    val arrow: String,
-    val label: String,
-) {
+enum class SortDirection(val arrow: String, val label: String) {
     ASC("↑", "Ascending"),
     DESC("↓", "Descending"),
     ;
@@ -24,11 +21,7 @@ enum class SortDirection(
 /**
  * Track sort criteria supporting context-aware ordering across library views and playlist details.
  */
-enum class TrackSortOption(
-    val shortLabel: String,
-    val fullLabel: String,
-    val defaultDirection: SortDirection,
-) {
+enum class TrackSortOption(val shortLabel: String, val fullLabel: String, val defaultDirection: SortDirection) {
     CUSTOM_ORDER("Custom", "Custom Order", SortDirection.ASC),
     RECENTLY_PLAYED("Recent", "Recently Played", SortDirection.DESC),
     RECENTLY_ADDED("Added", "Recently Added", SortDirection.DESC),
@@ -52,11 +45,7 @@ enum class TrackSortOption(
 /**
  * Group list sort criteria for Folders, Artists, and Albums tabs.
  */
-enum class GroupSortOption(
-    val shortLabel: String,
-    val fullLabel: String,
-    val defaultDirection: SortDirection,
-) {
+enum class GroupSortOption(val shortLabel: String, val fullLabel: String, val defaultDirection: SortDirection) {
     NAME("Name", "Name", SortDirection.ASC),
     TRACK_COUNT("Tracks", "Track Count", SortDirection.DESC),
     ;
@@ -70,21 +59,14 @@ enum class GroupSortOption(
 /**
  * Independent persisted track sort specification.
  */
-data class TrackSortSpec(
-    val option: TrackSortOption,
-    val direction: SortDirection = option.defaultDirection,
-) {
+data class TrackSortSpec(val option: TrackSortOption, val direction: SortDirection = option.defaultDirection) {
     val compactLabel: String
         get() = "${option.shortLabel} ${direction.arrow}"
 
     fun serialize(): String = "${option.name}:${direction.name}"
 
     companion object {
-        fun deserialize(
-            raw: String?,
-            allowedOptions: List<TrackSortOption>,
-            fallback: TrackSortSpec,
-        ): TrackSortSpec {
+        fun deserialize(raw: String?, allowedOptions: List<TrackSortOption>, fallback: TrackSortSpec): TrackSortSpec {
             if (raw.isNullOrBlank()) return fallback
             val parts = raw.trim().split(':')
             val opt = TrackSortOption.fromStoredName(parts.getOrNull(0), fallback.option)
@@ -98,20 +80,14 @@ data class TrackSortSpec(
 /**
  * Independent persisted group sort specification.
  */
-data class GroupSortSpec(
-    val option: GroupSortOption,
-    val direction: SortDirection = option.defaultDirection,
-) {
+data class GroupSortSpec(val option: GroupSortOption, val direction: SortDirection = option.defaultDirection) {
     val compactLabel: String
         get() = "${option.shortLabel} ${direction.arrow}"
 
     fun serialize(): String = "${option.name}:${direction.name}"
 
     companion object {
-        fun deserialize(
-            raw: String?,
-            fallback: GroupSortSpec,
-        ): GroupSortSpec {
+        fun deserialize(raw: String?, fallback: GroupSortSpec): GroupSortSpec {
             if (raw.isNullOrBlank()) return fallback
             val parts = raw.trim().split(':')
             val opt = GroupSortOption.fromStoredName(parts.getOrNull(0), fallback.option)
@@ -229,11 +205,7 @@ enum class TrackSortScope(
     ),
 }
 
-enum class GroupSortScope(
-    val preferenceKey: String,
-    val sheetTitle: String,
-    val defaultSpec: GroupSortSpec,
-) {
+enum class GroupSortScope(val preferenceKey: String, val sheetTitle: String, val defaultSpec: GroupSortSpec) {
     FOLDERS_LIST(
         preferenceKey = "sort_group_folders",
         sheetTitle = "Sort Folders",
@@ -295,11 +267,7 @@ object LibrarySortPolicy {
      * Sorts [tracks] according to [spec] using optional [playCountsByKey] (keyed by lowercase
      * content fingerprint and/or URI string) for [TrackSortOption.MOST_PLAYED].
      */
-    fun sortTracks(
-        tracks: List<PlaybackTrack>,
-        spec: TrackSortSpec,
-        playCountsByKey: Map<String, Int> = emptyMap(),
-    ): List<PlaybackTrack> {
+    fun sortTracks(tracks: List<PlaybackTrack>, spec: TrackSortSpec, playCountsByKey: Map<String, Int> = emptyMap()): List<PlaybackTrack> {
         if (tracks.size <= 1) return tracks
 
         return when (spec.option) {
@@ -327,10 +295,7 @@ object LibrarySortPolicy {
     /**
      * Sorts [groups] according to [spec] (`NAME` or `TRACK_COUNT`, `ASC` or `DESC`).
      */
-    fun sortGroups(
-        groups: List<LibraryGroup>,
-        spec: GroupSortSpec,
-    ): List<LibraryGroup> {
+    fun sortGroups(groups: List<LibraryGroup>, spec: GroupSortSpec): List<LibraryGroup> {
         if (groups.size <= 1) return groups
         val baseComparator: Comparator<LibraryGroup> = when (spec.option) {
             GroupSortOption.NAME -> Comparator { a, b ->
@@ -356,10 +321,7 @@ object LibrarySortPolicy {
         return groups.sortedWith(effective)
     }
 
-    private fun trackComparator(
-        option: TrackSortOption,
-        playCountsByKey: Map<String, Int>,
-    ): Comparator<PlaybackTrack> = when (option) {
+    private fun trackComparator(option: TrackSortOption, playCountsByKey: Map<String, Int>): Comparator<PlaybackTrack> = when (option) {
         TrackSortOption.TRACK_NUMBER -> TRACK_NUMBER_COMPARATOR
         TrackSortOption.TITLE -> Comparator { a, b ->
             val cmp = compareNaturalIgnoreCase(a.title, b.title)

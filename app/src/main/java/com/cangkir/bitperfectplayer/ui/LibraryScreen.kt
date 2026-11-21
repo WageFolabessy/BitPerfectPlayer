@@ -102,15 +102,6 @@ import com.cangkir.bitperfectplayer.ui.theme.EmeraldSafe
 import com.cangkir.bitperfectplayer.ui.theme.IcePrimary
 import com.cangkir.bitperfectplayer.ui.theme.TextMuted
 
-enum class LibraryTab(val label: String) {
-    ALL_SONGS("All Songs"),
-    FOLDERS("Folders"),
-    ARTISTS("Artists"),
-    ALBUMS("Albums"),
-    RECENT("Recent"),
-    FAVORITES("Favorites"),
-}
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LibraryScreen(
@@ -545,8 +536,10 @@ fun LibraryScreen(
                     )
                     LibraryTab.RECENT -> {
                         if (libraryState.recentlyPlayed.isNotEmpty()) {
+                            val recentCount = libraryState.recentlyPlayed.size
+                            val recentUnit = if (recentCount == 1) "track" else "tracks"
                             SubtleListSortHeaderRow(
-                                countLabel = "${libraryState.recentlyPlayed.size} ${if (libraryState.recentlyPlayed.size == 1) "track" else "tracks"}",
+                                countLabel = "$recentCount $recentUnit",
                                 sortLabel = sortPrefs.recent.compactLabel,
                                 onOpenSort = { activeTrackSortSheet = TrackSortScope.RECENT },
                             )
@@ -573,8 +566,10 @@ fun LibraryScreen(
                     }
                     LibraryTab.FAVORITES -> {
                         if (libraryState.favorites.isNotEmpty()) {
+                            val favCount = libraryState.favorites.size
+                            val favUnit = if (favCount == 1) "track" else "tracks"
                             SubtleListSortHeaderRow(
-                                countLabel = "${libraryState.favorites.size} ${if (libraryState.favorites.size == 1) "track" else "tracks"}",
+                                countLabel = "$favCount $favUnit",
                                 sortLabel = sortPrefs.favorites.compactLabel,
                                 onOpenSort = { activeTrackSortSheet = TrackSortScope.FAVORITES },
                             )
@@ -606,11 +601,7 @@ fun LibraryScreen(
 }
 
 @Composable
-private fun SubtleListSortHeaderRow(
-    countLabel: String,
-    sortLabel: String,
-    onOpenSort: () -> Unit,
-) {
+private fun SubtleListSortHeaderRow(countLabel: String, sortLabel: String, onOpenSort: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()

@@ -11,8 +11,7 @@ object MetadataScanPolicy {
      * Normalizes a raw MediaStore cursor tag (`TITLE`, `ARTIST`, `ALBUM`), rejecting blanks
      * and Android's `<unknown>` sentinel.
      */
-    fun sanitizeCursorTag(raw: String?): String? =
-        raw?.trim()?.takeIf { it.isNotEmpty() && !it.equals("<unknown>", ignoreCase = true) }
+    fun sanitizeCursorTag(raw: String?): String? = raw?.trim()?.takeIf { it.isNotEmpty() && !it.equals("<unknown>", ignoreCase = true) }
 
     /**
      * Returns `true` when `MediaMetadataRetriever` can be completely skipped for a MediaStore
@@ -20,9 +19,6 @@ object MetadataScanPolicy {
      * resolved via fast direct `FileChannel` header parsing (`FlacStreamInfoParser` /
      * `WavHeaderParser`) and MediaStore cursor columns.
      */
-    fun canSkipMediaMetadataRetriever(
-        hasCursorMetadata: Boolean,
-        sampleRateHz: Int,
-        durationMs: Long,
-    ): Boolean = hasCursorMetadata && sampleRateHz > 0 && durationMs > 0L
+    fun canSkipMediaMetadataRetriever(hasCursorMetadata: Boolean, sampleRateHz: Int, durationMs: Long): Boolean =
+        hasCursorMetadata && sampleRateHz > 0 && durationMs > 0L
 }

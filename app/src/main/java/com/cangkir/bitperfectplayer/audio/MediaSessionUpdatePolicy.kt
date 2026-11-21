@@ -7,11 +7,7 @@ import kotlin.math.abs
  * [PlaybackForegroundService] `MediaSession` and `Notification` updates so 20 Hz engine position
  * ticks never spam Binder IPC or repeatedly serialize album-art bitmaps.
  */
-data class MediaMetadataKey(
-    val trackUri: String?,
-    val durationMs: Long,
-    val artworkToken: Int,
-)
+data class MediaMetadataKey(val trackUri: String?, val durationMs: Long, val artworkToken: Int)
 
 data class NotificationContentKey(
     val trackUri: String?,
@@ -43,10 +39,7 @@ object MediaSessionUpdatePolicy {
      * Metadata (including heavy album artwork bitmaps) is pushed over Binder ONLY when track URI,
      * duration, or resolved artwork identity genuinely changes.
      */
-    fun shouldUpdateMetadata(
-        last: MediaMetadataKey?,
-        current: MediaMetadataKey,
-    ): Boolean = last != current
+    fun shouldUpdateMetadata(last: MediaMetadataKey?, current: MediaMetadataKey): Boolean = last != current
 
     /**
      * Determines whether a foreground promotion or notification update is genuinely required.
@@ -57,19 +50,17 @@ object MediaSessionUpdatePolicy {
         isPlaying: Boolean,
         lastKey: NotificationContentKey?,
         currentKey: NotificationContentKey,
-    ): NotificationDispatchAction {
-        return if (isPlaying) {
-            if (!isForegroundActive || lastKey != currentKey) {
-                NotificationDispatchAction.PROMOTE_FOREGROUND
-            } else {
-                NotificationDispatchAction.NONE
-            }
+    ): NotificationDispatchAction = if (isPlaying) {
+        if (!isForegroundActive || lastKey != currentKey) {
+            NotificationDispatchAction.PROMOTE_FOREGROUND
         } else {
-            if (isForegroundActive && lastKey != currentKey) {
-                NotificationDispatchAction.UPDATE_NOTIFICATION
-            } else {
-                NotificationDispatchAction.NONE
-            }
+            NotificationDispatchAction.NONE
+        }
+    } else {
+        if (isForegroundActive && lastKey != currentKey) {
+            NotificationDispatchAction.UPDATE_NOTIFICATION
+        } else {
+            NotificationDispatchAction.NONE
         }
     }
 
@@ -89,11 +80,9 @@ object MediaSessionUpdatePolicy {
         seekJumpThresholdMs: Long = DEFAULT_SEEK_JUMP_THRESHOLD_MS,
     ): Boolean {
         if (last == null) return true
-        if (last.status != status ||
-            last.trackUri != trackUri ||
-            last.errorMessage != errorMessage ||
-            last.playbackSpeed != playbackSpeed
-        ) {
+        val statusOrTrackChanged = last.status != status || last.trackUri != trackUri
+        val errorOrSpeedChanged = last.errorMessage != errorMessage || last.playbackSpeed != playbackSpeed
+        if (statusOrTrackChanged || errorOrSpeedChanged) {
             return true
         }
         val elapsedSinceLastMs = (nowElapsedMs - last.publishedAtElapsedMs).coerceAtLeast(0L)

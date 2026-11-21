@@ -160,32 +160,30 @@ fun CachedTrackEntity.toPlaybackTrack(): PlaybackTrack = PlaybackTrack(
     trackNumber = trackNumber.coerceAtLeast(0),
 )
 
-fun PlaybackTrack.toCachedEntity(
-    sourceKind: CachedTrackSourceKind,
-    syncedEpochMs: Long = System.currentTimeMillis(),
-): CachedTrackEntity = CachedTrackEntity(
-    uriString = uriString.trim(),
-    title = PersistenceSanitizer.sanitizeDisplayText(title, fileName.ifBlank { "Unknown Track" }),
-    artist = PersistenceSanitizer.sanitizeDisplayText(artist, "Unknown Artist"),
-    album = PersistenceSanitizer.sanitizeDisplayText(album, "Unknown Album"),
-    folderName = PersistenceSanitizer.sanitizeDisplayText(folderName, "Internal Storage"),
-    fileName = PersistenceSanitizer.sanitizeDisplayText(fileName, "Unknown"),
-    mimeType = mimeType,
-    fileSizeBytes = PersistenceSanitizer.sanitizeNonNegative(fileSizeBytes),
-    dateModifiedSeconds = PersistenceSanitizer.sanitizeNonNegative(dateModifiedSeconds),
-    durationMs = PersistenceSanitizer.sanitizeNonNegative(durationMs),
-    sampleRateHz = sampleRateHz.coerceAtLeast(0),
-    bitDepth = bitDepth?.takeIf { it > 0 },
-    container = container.ifBlank { "AUDIO" },
-    codec = codec.ifBlank { "Unknown" },
-    contentFingerprint = contentFingerprint?.let { PersistenceSanitizer.normalizeFingerprint(it) }?.takeIf { it.isNotEmpty() },
-    parentTreeUriString = parentTreeUriString,
-    relativePath = relativePath,
-    sourceKind = sourceKind.name,
-    lastSyncedEpochMs = PersistenceSanitizer.sanitizeNonNegative(syncedEpochMs),
-    discNumber = discNumber.coerceAtLeast(0),
-    trackNumber = trackNumber.coerceAtLeast(0),
-)
+fun PlaybackTrack.toCachedEntity(sourceKind: CachedTrackSourceKind, syncedEpochMs: Long = System.currentTimeMillis()): CachedTrackEntity =
+    CachedTrackEntity(
+        uriString = uriString.trim(),
+        title = PersistenceSanitizer.sanitizeDisplayText(title, fileName.ifBlank { "Unknown Track" }),
+        artist = PersistenceSanitizer.sanitizeDisplayText(artist, "Unknown Artist"),
+        album = PersistenceSanitizer.sanitizeDisplayText(album, "Unknown Album"),
+        folderName = PersistenceSanitizer.sanitizeDisplayText(folderName, "Internal Storage"),
+        fileName = PersistenceSanitizer.sanitizeDisplayText(fileName, "Unknown"),
+        mimeType = mimeType,
+        fileSizeBytes = PersistenceSanitizer.sanitizeNonNegative(fileSizeBytes),
+        dateModifiedSeconds = PersistenceSanitizer.sanitizeNonNegative(dateModifiedSeconds),
+        durationMs = PersistenceSanitizer.sanitizeNonNegative(durationMs),
+        sampleRateHz = sampleRateHz.coerceAtLeast(0),
+        bitDepth = bitDepth?.takeIf { it > 0 },
+        container = container.ifBlank { "AUDIO" },
+        codec = codec.ifBlank { "Unknown" },
+        contentFingerprint = contentFingerprint?.let { PersistenceSanitizer.normalizeFingerprint(it) }?.takeIf { it.isNotEmpty() },
+        parentTreeUriString = parentTreeUriString,
+        relativePath = relativePath,
+        sourceKind = sourceKind.name,
+        lastSyncedEpochMs = PersistenceSanitizer.sanitizeNonNegative(syncedEpochMs),
+        discNumber = discNumber.coerceAtLeast(0),
+        trackNumber = trackNumber.coerceAtLeast(0),
+    )
 
 fun LyricsEntity.toDomain(): LyricsRecord = LyricsRecord(
     contentFingerprint = PersistenceSanitizer.normalizeFingerprint(contentFingerprint),
@@ -367,4 +365,3 @@ fun TrackStatsRecord.toEntity(): TrackStatsEntity = TrackStatsEntity(
     totalPlayTimeMs = PersistenceSanitizer.sanitizeNonNegative(totalPlayTimeMs),
     lastPlayedAtEpochMs = PersistenceSanitizer.sanitizeNonNegative(lastPlayedAtEpochMs),
 )
-

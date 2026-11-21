@@ -7,11 +7,7 @@ import com.cangkir.bitperfectplayer.data.TrackHistoryRecord
 /**
  * Grouped library projection used by Folders, Artists, and Albums tabs.
  */
-data class LibraryGroup(
-    val name: String,
-    val subtitle: String,
-    val tracks: List<PlaybackTrack>,
-)
+data class LibraryGroup(val name: String, val subtitle: String, val tracks: List<PlaybackTrack>)
 
 /**
  * Complete reactive library snapshot consumed by the UI.
@@ -40,10 +36,7 @@ object LibraryProjector {
      * Merges MediaStore and SAF tracks while deduplicating identical URIs or identical
      * `(fileName, fileSizeBytes)` entries (preferring entries with richer metadata / SAF tree URI).
      */
-    fun mergeAndDeduplicate(
-        mediaStoreTracks: List<PlaybackTrack>,
-        safTracks: List<PlaybackTrack>,
-    ): List<PlaybackTrack> {
+    fun mergeAndDeduplicate(mediaStoreTracks: List<PlaybackTrack>, safTracks: List<PlaybackTrack>): List<PlaybackTrack> {
         val byUri = LinkedHashMap<String, PlaybackTrack>()
         val seenFileKeyToUri = HashMap<String, String>()
 
@@ -127,9 +120,11 @@ object LibraryProjector {
                     playCountsByKey = playCountsByKey,
                 )
                 val albumCount = ordered.map { it.album }.distinct().size
+                val songWord = if (ordered.size == 1) "song" else "songs"
+                val albumWord = if (albumCount == 1) "album" else "albums"
                 LibraryGroup(
                     name = name,
-                    subtitle = "${ordered.size} ${if (ordered.size == 1) "song" else "songs"} · $albumCount ${if (albumCount == 1) "album" else "albums"}",
+                    subtitle = "${ordered.size} $songWord · $albumCount $albumWord",
                     tracks = ordered,
                 )
             }
@@ -203,15 +198,14 @@ object LibraryProjector {
         )
     }
 
-    private fun mergeTrackFields(base: PlaybackTrack, incoming: PlaybackTrack): PlaybackTrack =
-        base.copy(
-            parentTreeUriString = incoming.parentTreeUriString ?: base.parentTreeUriString,
-            sampleRateHz = incoming.sampleRateHz.takeIf { it > 0 } ?: base.sampleRateHz,
-            bitDepth = incoming.bitDepth ?: base.bitDepth,
-            durationMs = incoming.durationMs.takeIf { it > 0L } ?: base.durationMs,
-            dateModifiedSeconds = maxOf(base.dateModifiedSeconds, incoming.dateModifiedSeconds),
-            contentFingerprint = incoming.contentFingerprint ?: base.contentFingerprint,
-            discNumber = incoming.discNumber.takeIf { it > 0 } ?: base.discNumber,
-            trackNumber = incoming.trackNumber.takeIf { it > 0 } ?: base.trackNumber,
-        )
+    private fun mergeTrackFields(base: PlaybackTrack, incoming: PlaybackTrack): PlaybackTrack = base.copy(
+        parentTreeUriString = incoming.parentTreeUriString ?: base.parentTreeUriString,
+        sampleRateHz = incoming.sampleRateHz.takeIf { it > 0 } ?: base.sampleRateHz,
+        bitDepth = incoming.bitDepth ?: base.bitDepth,
+        durationMs = incoming.durationMs.takeIf { it > 0L } ?: base.durationMs,
+        dateModifiedSeconds = maxOf(base.dateModifiedSeconds, incoming.dateModifiedSeconds),
+        contentFingerprint = incoming.contentFingerprint ?: base.contentFingerprint,
+        discNumber = incoming.discNumber.takeIf { it > 0 } ?: base.discNumber,
+        trackNumber = incoming.trackNumber.takeIf { it > 0 } ?: base.trackNumber,
+    )
 }

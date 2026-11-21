@@ -190,10 +190,7 @@ class PlaybackForegroundService : Service() {
         }
     }
 
-    private fun syncMediaSessionAndNotification(
-        state: PlaybackControllerState,
-        positionMs: Long,
-    ) {
+    private fun syncMediaSessionAndNotification(state: PlaybackControllerState, positionMs: Long) {
         val artworkToken = resolveArtworkToken(state.activeTrack)
         syncMediaSessionOnly(state, positionMs, artworkToken)
 
@@ -244,10 +241,7 @@ class PlaybackForegroundService : Service() {
         syncMediaSessionPlaybackStateOnly(state, positionMs)
     }
 
-    private fun syncMediaSessionPlaybackStateOnly(
-        state: PlaybackControllerState,
-        positionMs: Long,
-    ) {
+    private fun syncMediaSessionPlaybackStateOnly(state: PlaybackControllerState, positionMs: Long) {
         val track = state.activeTrack
         val nowElapsedMs = SystemClock.elapsedRealtime()
         val playbackSpeed = if (state.isPlaying) 1.0f else 0.0f
@@ -311,20 +305,14 @@ class PlaybackForegroundService : Service() {
         return System.identityHashCode(bmp)
     }
 
-    private fun buildNotificationKey(
-        state: PlaybackControllerState,
-        artworkToken: Int,
-    ): NotificationContentKey = NotificationContentKey(
+    private fun buildNotificationKey(state: PlaybackControllerState, artworkToken: Int): NotificationContentKey = NotificationContentKey(
         trackUri = state.activeTrack?.uriString,
         isPlaying = state.isPlaying,
         isBitPerfectMixerActive = state.engineState.diagnostics.isBitPerfectMixerActive,
         artworkToken = artworkToken,
     )
 
-    private fun promoteToForeground(
-        state: PlaybackControllerState,
-        notificationKey: NotificationContentKey,
-    ) {
+    private fun promoteToForeground(state: PlaybackControllerState, notificationKey: NotificationContentKey) {
         val notification = buildNotification(state)
         val serviceType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
@@ -338,10 +326,7 @@ class PlaybackForegroundService : Service() {
         }
     }
 
-    private fun updateNotification(
-        state: PlaybackControllerState,
-        notificationKey: NotificationContentKey,
-    ) {
+    private fun updateNotification(state: PlaybackControllerState, notificationKey: NotificationContentKey) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             val granted = ContextCompat.checkSelfPermission(
                 this,

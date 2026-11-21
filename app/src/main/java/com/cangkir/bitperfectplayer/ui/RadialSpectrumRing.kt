@@ -28,14 +28,14 @@ import com.cangkir.bitperfectplayer.audio.SpectrumAnalyzer
 import com.cangkir.bitperfectplayer.audio.SpectrumAnalyzerDsp
 import com.cangkir.bitperfectplayer.audio.SpectrumColorMapper
 import com.cangkir.bitperfectplayer.data.SpectrumColorStyle
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.withContext
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.sqrt
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.withContext
 
 // 316.dp container around 240.dp vinyl disc = 38.dp radial headroom on all sides for bars + sparks
 val RADIAL_SPECTRUM_CONTAINER_DIAMETER: Dp = 316.dp
@@ -371,8 +371,9 @@ fun RadialSpectrumRing(
                         val speed = sqrt(vr * vr + vt * vt).coerceAtLeast(1f)
                         val dirX = (cosA * vr + tx * vt) / speed
                         val dirY = (sinA * vr + ty * vt) / speed
-                        val streakLen = (minStreakPx + (maxStreakPx - minStreakPx) * (speed / KineticSparkPool.MAX_RADIAL_VEL_DP).coerceIn(0f, 1f)) *
-                            (1f - progress * 0.45f)
+                        val streakLen =
+                            (minStreakPx + (maxStreakPx - minStreakPx) * (speed / KineticSparkPool.MAX_RADIAL_VEL_DP).coerceIn(0f, 1f)) *
+                                (1f - progress * 0.45f)
 
                         val sparkColor = Color(pool.colorArgb[slot])
                         val dotSizePx = pool.sizeDp[slot].dp.toPx() * (1f - progress * 0.35f)
@@ -509,8 +510,9 @@ fun CompactSpectrumBarStrip(
                 val speed = sqrt(vx * vx + vy * vy).coerceAtLeast(1f)
                 val dirX = vx / speed
                 val dirY = vy / speed
-                val streakLen = (minStreakPx + (maxStreakPx - minStreakPx) * (speed / KineticSparkPool.MAX_RADIAL_VEL_DP).coerceIn(0f, 1f)) *
-                    (1f - progress * 0.45f)
+                val streakLen =
+                    (minStreakPx + (maxStreakPx - minStreakPx) * (speed / KineticSparkPool.MAX_RADIAL_VEL_DP).coerceIn(0f, 1f)) *
+                        (1f - progress * 0.45f)
 
                 val sparkColor = Color(pool.colorArgb[slot])
                 val dotSizePx = pool.sizeDp[slot].dp.toPx() * (1f - progress * 0.35f)

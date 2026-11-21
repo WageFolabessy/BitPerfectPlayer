@@ -10,9 +10,9 @@ import com.cangkir.bitperfectplayer.audio.ReplayGainTagParser
 import com.cangkir.bitperfectplayer.data.LocalPersistenceRepository
 import com.cangkir.bitperfectplayer.lyrics.AndroidContentFingerprintProvider
 import com.cangkir.bitperfectplayer.lyrics.FileChannelSeekableByteSource
+import java.io.FileInputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.io.FileInputStream
 
 /**
  * Complete on-demand technical inspection snapshot for a single local track, loaded lazily on
@@ -92,11 +92,7 @@ class TrackInfoLoader(
         } ?: 0L
     }.getOrDefault(0L)
 
-    private fun readReplayGainHeaderOnly(
-        uri: android.net.Uri,
-        fileName: String,
-        mimeType: String?,
-    ): ReplayGainMetadata? = runCatching {
+    private fun readReplayGainHeaderOnly(uri: android.net.Uri, fileName: String, mimeType: String?): ReplayGainMetadata? = runCatching {
         val formatHint = AudioFormatClassifier.classify(fileName, mimeType)
         appContext.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
             FileInputStream(pfd.fileDescriptor).use { fis ->

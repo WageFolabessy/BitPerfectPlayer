@@ -70,9 +70,19 @@ class LibraryPersistenceAndFavoritesTest {
             // track1 unchanged (same uri, size, dateModified)
             DiscoveredAudioSignature(track1.uriString, track1.fileSizeBytes, track1.dateModifiedSeconds, CachedTrackSourceKind.MEDIA_STORE),
             // track2 modified (dateModified changed!) -> must re-parse
-            DiscoveredAudioSignature(track2.uriString, track2.fileSizeBytes, track2.dateModifiedSeconds + 60L, CachedTrackSourceKind.MEDIA_STORE),
+            DiscoveredAudioSignature(
+                track2.uriString,
+                track2.fileSizeBytes,
+                track2.dateModifiedSeconds + 60L,
+                CachedTrackSourceKind.MEDIA_STORE,
+            ),
             // new track3 added -> must parse
-            DiscoveredAudioSignature("content://media/external/audio/media/3", 12_000_000L, 1_700_000_999L, CachedTrackSourceKind.MEDIA_STORE),
+            DiscoveredAudioSignature(
+                "content://media/external/audio/media/3",
+                12_000_000L,
+                1_700_000_999L,
+                CachedTrackSourceKind.MEDIA_STORE,
+            ),
             // safTrack deleted from folder -> must prune
         )
 
@@ -98,7 +108,12 @@ class LibraryPersistenceAndFavoritesTest {
         val plan = LibrarySyncDiffer.computePlan(
             cached = cached,
             discovered = listOf(
-                DiscoveredAudioSignature(safTrack.uriString, safTrack.fileSizeBytes, safTrack.dateModifiedSeconds, CachedTrackSourceKind.SAF_TREE),
+                DiscoveredAudioSignature(
+                    safTrack.uriString,
+                    safTrack.fileSizeBytes,
+                    safTrack.dateModifiedSeconds,
+                    CachedTrackSourceKind.SAF_TREE,
+                ),
             ),
             scannedSourceKinds = setOf(CachedTrackSourceKind.SAF_TREE),
         )

@@ -31,20 +31,38 @@ object AlbumPaletteExtractor {
         0xFFD7E5F5.toInt(),
     )
 
+    private class HueHistogram(
+        val weight: FloatArray,
+        val hue: FloatArray,
+        val sat: FloatArray,
+        val lum: FloatArray,
+        val totalWeight: Float,
+    )
+
     /**
      * Extracts 3 harmonious opaque ARGB accent colors `[bassColor, midColor, trebleColor]` from
      * local artwork ARGB [pixels] (`width * height`). Zero external libraries, zero `android.*`.
      */
-    fun extractAccentPalette(
-        pixels: IntArray,
-        width: Int,
-        height: Int,
-    ): IntArray {
+    fun extractAccentPalette(pixels: IntArray, width: Int, height: Int): IntArray {
         val totalPixels = minOf(pixels.size, width * height)
         if (width <= 0 || height <= 0 || totalPixels <= 0) {
             return FALLBACK_STUDIO_PALETTE.copyOf()
         }
 
+        val histogram = accumulateHueHistogram(pixels, totalPixels)
+        if (histogram.totalWeight <= 1e-4f) {
+            return FALLBACK_STUDIO_PALETTE.copyOf()
+        }
+
+        val pickedIndices = IntArray(3) { -1 }
+        val pickedCount = pickSeparatedHueBuckets(histogram, pickedIndices)
+        if (pickedCount == 0) {
+            return FALLBACK_STUDIO_PALETTE.copyOf()
+        }
+        return buildTriadPalette(histogram, pickedIndices, pickedCount)
+    }
+
+    private fun accumulateHueHistogram(pixels: IntArray, totalPixels: Int): HueHistogram {
         val stride = (totalPixels / TARGET_SAMPLE_COUNT).coerceAtLeast(1)
         val bucketWeight = FloatArray(HUE_BUCKETS)
         val bucketHueSin = FloatArray(HUE_BUCKETS)
@@ -59,8 +77,7 @@ object AlbumPaletteExtractor {
         while (i < totalPixels) {
             val argb = pixels[i]
             i += stride
-            val alpha = (argb ushr 24) and 0xFF
-            if (alpha < 128) continue
+            if (((argb ushr 24) and 0xFF) < 128) continue
 
             rgbToHsl(
                 r = (argb ushr 16) and 0xFF,
@@ -86,11 +103,6 @@ object AlbumPaletteExtractor {
             totalWeight += weight
         }
 
-        if (totalWeight <= 1e-4f) {
-            return FALLBACK_STUDIO_PALETTE.copyOf()
-        }
-
-        // Compute average hue/sat/lum per populated bucket.
         val bucketHue = FloatArray(HUE_BUCKETS)
         val bucketSat = FloatArray(HUE_BUCKETS)
         val bucketLum = FloatArray(HUE_BUCKETS)
@@ -104,24 +116,26 @@ object AlbumPaletteExtractor {
                 bucketLum[b] = bucketLumWeighted[b] / w
             }
         }
+        return HueHistogram(
+            weight = bucketWeight,
+            hue = bucketHue,
+            sat = bucketSat,
+            lum = bucketLum,
+            totalWeight = totalWeight,
+        )
+    }
 
-        // Greedily pick up to 3 strongest buckets with minimum circular hue separation >= 36°.
-        val pickedIndices = IntArray(3) { -1 }
+    /**
+     * Greedily picks up to 3 strongest buckets with minimum circular hue separation >= 36°.
+     */
+    private fun pickSeparatedHueBuckets(histogram: HueHistogram, pickedIndices: IntArray): Int {
         var pickedCount = 0
         while (pickedCount < 3) {
             var bestBucket = -1
             var bestWeight = 0f
             for (b in 0 until HUE_BUCKETS) {
-                val w = bucketWeight[b]
-                if (w <= bestWeight) continue
-                var farEnough = true
-                for (p in 0 until pickedCount) {
-                    if (circularHueDistanceDeg(bucketHue[b], bucketHue[pickedIndices[p]]) < MIN_HUE_SEPARATION_DEG) {
-                        farEnough = false
-                        break
-                    }
-                }
-                if (farEnough) {
+                val w = histogram.weight[b]
+                if (w > bestWeight && isFarEnoughFromPicked(histogram.hue, b, pickedIndices, pickedCount)) {
                     bestWeight = w
                     bestBucket = b
                 }
@@ -129,14 +143,22 @@ object AlbumPaletteExtractor {
             if (bestBucket < 0) break
             pickedIndices[pickedCount++] = bestBucket
         }
+        return pickedCount
+    }
 
-        if (pickedCount == 0) {
-            return FALLBACK_STUDIO_PALETTE.copyOf()
+    private fun isFarEnoughFromPicked(bucketHue: FloatArray, candidate: Int, pickedIndices: IntArray, pickedCount: Int): Boolean {
+        for (p in 0 until pickedCount) {
+            if (circularHueDistanceDeg(bucketHue[candidate], bucketHue[pickedIndices[p]]) < MIN_HUE_SEPARATION_DEG) {
+                return false
+            }
         }
+        return true
+    }
 
-        val h0 = bucketHue[pickedIndices[0]]
-        val s0 = bucketSat[pickedIndices[0]].coerceIn(0.55f, 0.90f)
-        val l0 = bucketLum[pickedIndices[0]].coerceIn(0.52f, 0.66f)
+    private fun buildTriadPalette(histogram: HueHistogram, pickedIndices: IntArray, pickedCount: Int): IntArray {
+        val h0 = histogram.hue[pickedIndices[0]]
+        val s0 = histogram.sat[pickedIndices[0]].coerceIn(0.55f, 0.90f)
+        val l0 = histogram.lum[pickedIndices[0]].coerceIn(0.52f, 0.66f)
 
         val out = IntArray(3)
         when (pickedCount) {
@@ -147,9 +169,9 @@ object AlbumPaletteExtractor {
                 out[2] = hslToOpaqueArgb((h0 + 155f) % 360f, (s0 * 0.90f).coerceIn(0.55f, 0.88f), (l0 + 0.10f).coerceIn(0.56f, 0.72f))
             }
             2 -> {
-                val h1 = bucketHue[pickedIndices[1]]
-                val s1 = bucketSat[pickedIndices[1]].coerceIn(0.55f, 0.90f)
-                val l1 = bucketLum[pickedIndices[1]].coerceIn(0.54f, 0.68f)
+                val h1 = histogram.hue[pickedIndices[1]]
+                val s1 = histogram.sat[pickedIndices[1]].coerceIn(0.55f, 0.90f)
+                val l1 = histogram.lum[pickedIndices[1]].coerceIn(0.54f, 0.68f)
                 // Derive a harmonious third hue separated >= 36° from both h0 and h1.
                 var h2 = (h0 + 180f) % 360f
                 if (circularHueDistanceDeg(h2, h1) < MIN_HUE_SEPARATION_DEG) {
@@ -162,12 +184,12 @@ object AlbumPaletteExtractor {
                 out[2] = hslToOpaqueArgb(h2, s2, l2)
             }
             else -> {
-                val h1 = bucketHue[pickedIndices[1]]
-                val s1 = bucketSat[pickedIndices[1]].coerceIn(0.55f, 0.90f)
-                val l1 = bucketLum[pickedIndices[1]].coerceIn(0.54f, 0.68f)
-                val h2 = bucketHue[pickedIndices[2]]
-                val s2 = bucketSat[pickedIndices[2]].coerceIn(0.55f, 0.90f)
-                val l2 = bucketLum[pickedIndices[2]].coerceIn(0.56f, 0.72f)
+                val h1 = histogram.hue[pickedIndices[1]]
+                val s1 = histogram.sat[pickedIndices[1]].coerceIn(0.55f, 0.90f)
+                val l1 = histogram.lum[pickedIndices[1]].coerceIn(0.54f, 0.68f)
+                val h2 = histogram.hue[pickedIndices[2]]
+                val s2 = histogram.sat[pickedIndices[2]].coerceIn(0.55f, 0.90f)
+                val l2 = histogram.lum[pickedIndices[2]].coerceIn(0.56f, 0.72f)
                 out[0] = hslToOpaqueArgb(h0, s0, l0)
                 out[1] = hslToOpaqueArgb(h1, s1, l1)
                 out[2] = hslToOpaqueArgb(h2, s2, l2)
@@ -222,12 +244,36 @@ object AlbumPaletteExtractor {
         val g1: Float
         val b1: Float
         when {
-            h < 60f -> { r1 = c; g1 = x; b1 = 0f }
-            h < 120f -> { r1 = x; g1 = c; b1 = 0f }
-            h < 180f -> { r1 = 0f; g1 = c; b1 = x }
-            h < 240f -> { r1 = 0f; g1 = x; b1 = c }
-            h < 300f -> { r1 = x; g1 = 0f; b1 = c }
-            else -> { r1 = c; g1 = 0f; b1 = x }
+            h < 60f -> {
+                r1 = c
+                g1 = x
+                b1 = 0f
+            }
+            h < 120f -> {
+                r1 = x
+                g1 = c
+                b1 = 0f
+            }
+            h < 180f -> {
+                r1 = 0f
+                g1 = c
+                b1 = x
+            }
+            h < 240f -> {
+                r1 = 0f
+                g1 = x
+                b1 = c
+            }
+            h < 300f -> {
+                r1 = x
+                g1 = 0f
+                b1 = c
+            }
+            else -> {
+                r1 = c
+                g1 = 0f
+                b1 = x
+            }
         }
         val r = ((r1 + m) * 255f).roundToInt().coerceIn(0, 255)
         val g = ((g1 + m) * 255f).roundToInt().coerceIn(0, 255)
@@ -261,11 +307,7 @@ object SpectrumColorMapper {
      * Resolves the opaque accent ARGB color at [normalizedBandPos] (`0.0f` bass .. `1.0f` treble)
      * for [style], interpolating smoothly across multi-stop palettes with zero heap allocations.
      */
-    fun resolveAccentColorArgb(
-        style: SpectrumColorStyle,
-        normalizedBandPos: Float,
-        albumPalette: IntArray,
-    ): Int {
+    fun resolveAccentColorArgb(style: SpectrumColorStyle, normalizedBandPos: Float, albumPalette: IntArray): Int {
         val pos = if (normalizedBandPos.isFinite()) normalizedBandPos.coerceIn(0f, 1f) else 0f
         return when (style) {
             SpectrumColorStyle.STUDIO -> STUDIO_ACCENT_RGB
@@ -281,12 +323,7 @@ object SpectrumColorMapper {
      * Blends resting matte slate (`#3D3D47`) into the active style's color as [energy] rises, with
      * a crisp luminous peak lift above `0.72f`.
      */
-    fun resolveBarColorArgb(
-        style: SpectrumColorStyle,
-        normalizedBandPos: Float,
-        energy: Float,
-        albumPalette: IntArray,
-    ): Int {
+    fun resolveBarColorArgb(style: SpectrumColorStyle, normalizedBandPos: Float, energy: Float, albumPalette: IntArray): Int {
         val e = if (energy.isFinite()) energy.coerceIn(0f, 1f) else 0f
         val accentOpaque = resolveAccentColorArgb(style, normalizedBandPos, albumPalette)
         val activeBarArgb = (ACTIVE_BAR_ALPHA shl 24) or (accentOpaque and 0x00FFFFFF)
@@ -304,12 +341,7 @@ object SpectrumColorMapper {
     }
 
     /** Resolves a bright peak tip tint matching the bar color for transients (`energy > 0.68f`). */
-    fun resolveTipColorArgb(
-        style: SpectrumColorStyle,
-        normalizedBandPos: Float,
-        energy: Float,
-        albumPalette: IntArray,
-    ): Int {
+    fun resolveTipColorArgb(style: SpectrumColorStyle, normalizedBandPos: Float, energy: Float, albumPalette: IntArray): Int {
         val e = if (energy.isFinite()) energy.coerceIn(0f, 1f) else 0f
         val tipFraction = ((e - 0.68f) / 0.32f).coerceIn(0f, 1f)
         val alpha = (tipFraction * 0.78f * 255f).roundToInt().coerceIn(0, 255)
@@ -323,11 +355,7 @@ object SpectrumColorMapper {
     }
 
     /** Brightened opaque spark color derived cleanly from the launching band's color. */
-    fun resolveSparkColorArgb(
-        style: SpectrumColorStyle,
-        normalizedBandPos: Float,
-        albumPalette: IntArray,
-    ): Int {
+    fun resolveSparkColorArgb(style: SpectrumColorStyle, normalizedBandPos: Float, albumPalette: IntArray): Int {
         val accent = resolveAccentColorArgb(style, normalizedBandPos, albumPalette)
         return (0xFF shl 24) or (lerpArgb(accent, BRIGHT_WHITE_TINT, 0.28f) and 0x00FFFFFF)
     }
@@ -395,12 +423,7 @@ class KineticSparkPool {
      * Detects transient spikes across the 32 logarithmic bands (`delta > 0.12f && energy > 0.28f`)
      * respecting per-band `85 ms` cooldowns and spawns 1–2 sparks matching each band's angle/color.
      */
-    fun emitFromBands(
-        bands32: FloatArray,
-        dtSeconds: Float,
-        style: SpectrumColorStyle,
-        albumPalette: IntArray,
-    ) {
+    fun emitFromBands(bands32: FloatArray, dtSeconds: Float, style: SpectrumColorStyle, albumPalette: IntArray) {
         val dt = if (dtSeconds.isFinite()) dtSeconds.coerceIn(0f, 0.1f) else 0f
         val count = minOf(bands32.size, SpectrumAnalyzerDsp.BAND_COUNT)
         val denom = (SpectrumAnalyzerDsp.BAND_COUNT - 1).coerceAtLeast(1).toFloat()
@@ -484,13 +507,7 @@ class KineticSparkPool {
         activeCount = 0
     }
 
-    private fun spawnSpark(
-        radialAngle: Float,
-        normX: Float,
-        energy: Float,
-        intensity: Float,
-        argb: Int,
-    ) {
+    private fun spawnSpark(radialAngle: Float, normX: Float, energy: Float, intensity: Float, argb: Int) {
         var slot = -1
         for (attempt in 0 until MAX_SPARKS) {
             val candidate = (nextSlotCursor + attempt) % MAX_SPARKS

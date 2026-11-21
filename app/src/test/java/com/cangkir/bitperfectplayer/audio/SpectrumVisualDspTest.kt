@@ -39,7 +39,7 @@ class SpectrumVisualDspTest {
             when {
                 x < 20 -> 0xFFD93829.toInt() // vivid red
                 x < 40 -> 0xFF22B86B.toInt() // vivid green
-                else -> 0xFF2E6CE6.toInt()   // vivid blue
+                else -> 0xFF2E6CE6.toInt() // vivid blue
             }
         }
 
@@ -153,7 +153,8 @@ class SpectrumVisualDspTest {
 
         // Advance physics during pause/silence -> all particles advance smoothly with finite positions and expire to 0.
         var remaining = pool.activeCount
-        repeat(50) { // 50 * 16 ms = 800 ms (> max lifetime 550 ms)
+        repeat(50) {
+            // 50 * 16 ms = 800 ms (> max lifetime 550 ms)
             remaining = pool.step(0.016f)
             for (slot in 0 until KineticSparkPool.MAX_SPARKS) {
                 if (pool.active[slot]) {

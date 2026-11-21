@@ -293,10 +293,7 @@ private fun HairlineInsetDivider() {
 }
 
 @Composable
-private fun DiagnosticKeyValueRow(
-    label: String,
-    value: String,
-) {
+private fun DiagnosticKeyValueRow(label: String, value: String) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -377,29 +374,29 @@ private fun DiagnosticStageRow(entry: DiagnosticStageEntry) {
 
 @Composable
 fun VerificationBadge(level: VerificationLevel) {
-    val (label, bg, fg, dot) = when (level) {
-        VerificationLevel.VERIFIED -> Quad(
-            "VERIFIED",
-            EmeraldSafeContainer,
-            OnEmeraldSafeContainer,
-            EmeraldSafe,
+    val badgeStyle = when (level) {
+        VerificationLevel.VERIFIED -> VerificationBadgeStyle(
+            label = "VERIFIED",
+            bg = EmeraldSafeContainer,
+            fg = OnEmeraldSafeContainer,
+            dot = EmeraldSafe,
         )
-        VerificationLevel.INDICATED -> Quad(
-            "INDICATED",
-            AmberIndicatedContainer,
-            OnAmberIndicatedContainer,
-            AmberIndicated,
+        VerificationLevel.INDICATED -> VerificationBadgeStyle(
+            label = "INDICATED",
+            bg = AmberIndicatedContainer,
+            fg = OnAmberIndicatedContainer,
+            dot = AmberIndicated,
         )
-        VerificationLevel.UNVERIFIABLE -> Quad(
-            "UNVERIFIABLE",
-            CoralWarningContainer,
-            OnCoralWarningContainer,
-            CoralWarning,
+        VerificationLevel.UNVERIFIABLE -> VerificationBadgeStyle(
+            label = "UNVERIFIABLE",
+            bg = CoralWarningContainer,
+            fg = OnCoralWarningContainer,
+            dot = CoralWarning,
         )
     }
     Surface(
         shape = RoundedCornerShape(6.dp),
-        color = bg,
+        color = badgeStyle.bg,
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
@@ -409,13 +406,13 @@ fun VerificationBadge(level: VerificationLevel) {
                 modifier = Modifier
                     .size(6.dp)
                     .clip(CircleShape)
-                    .background(dot),
+                    .background(badgeStyle.dot),
             )
             Spacer(modifier = Modifier.width(5.dp))
             Text(
-                text = label,
+                text = badgeStyle.label,
                 style = MaterialTheme.typography.labelSmall,
-                color = fg,
+                color = badgeStyle.fg,
                 maxLines = 1,
                 softWrap = false,
             )
@@ -423,4 +420,4 @@ fun VerificationBadge(level: VerificationLevel) {
     }
 }
 
-private data class Quad<A, B, C, D>(val first: A, val second: B, val third: C, val fourth: D)
+private data class VerificationBadgeStyle(val label: String, val bg: Color, val fg: Color, val dot: Color)

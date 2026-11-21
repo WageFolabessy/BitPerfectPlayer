@@ -11,6 +11,7 @@ import com.cangkir.bitperfectplayer.data.UserPreferencesRepository
 import com.cangkir.bitperfectplayer.library.LibrarySnapshot
 import com.cangkir.bitperfectplayer.library.PlaylistsUiSnapshot
 import com.cangkir.bitperfectplayer.lyrics.AndroidContentFingerprintProvider
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -22,7 +23,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Combined UI-observable low-frequency playback state unifying queue state, active queue context,
@@ -165,11 +165,7 @@ class PlaybackController(
      * Switches the active queue immediately to [context]'s ordered tracks (prepared paused at index
      * 0 by default for hearing safety unless [autoPlay] is requested).
      */
-    fun loadContextQueue(
-        tracks: List<PlaybackTrack>,
-        context: QueueContext,
-        autoPlay: Boolean = false,
-    ) {
+    fun loadContextQueue(tracks: List<PlaybackTrack>, context: QueueContext, autoPlay: Boolean = false) {
         if (tracks.isEmpty()) return
         playQueue(
             tracks = tracks,
@@ -385,8 +381,7 @@ class PlaybackController(
      * Reads a head-synced 1024-sample mono window into [outMonoSamples] off the audio thread.
      * Returns effective decimated sample rate in `Hz`, or `0` if paused/inactive.
      */
-    fun sampleCurrentSpectrumWindow(outMonoSamples: FloatArray): Int =
-        engine.sampleCurrentSpectrumWindow(outMonoSamples)
+    fun sampleCurrentSpectrumWindow(outMonoSamples: FloatArray): Int = engine.sampleCurrentSpectrumWindow(outMonoSamples)
 
     fun stop() {
         playCountTracker.clearSession()?.let { persistPlayCountFlush(it) }
@@ -496,11 +491,10 @@ class PlaybackController(
      * Recent, Favorites, or All Songs in its sorted order), and paused playback position on app
      * relaunch without auto-playing.
      */
-    fun restoreLastSessionIfNeeded(
-        library: LibrarySnapshot,
-        playlists: PlaylistsUiSnapshot,
-    ) {
-        if (hasRestoredInitialSession || isRestoreInFlight || library.allSongs.isEmpty() || !queueManager.isEmpty()) {
+    fun restoreLastSessionIfNeeded(library: LibrarySnapshot, playlists: PlaylistsUiSnapshot) {
+        val restoreAlreadyHandled = hasRestoredInitialSession || isRestoreInFlight
+        val cannotRestoreNow = library.allSongs.isEmpty() || !queueManager.isEmpty()
+        if (restoreAlreadyHandled || cannotRestoreNow) {
             return
         }
         isRestoreInFlight = true
@@ -721,11 +715,7 @@ class PlaybackController(
         }
     }
 
-    private fun loadActiveTrack(
-        track: PlaybackTrack,
-        startPositionMs: Long,
-        autoPlay: Boolean,
-    ) {
+    private fun loadActiveTrack(track: PlaybackTrack, startPositionMs: Long, autoPlay: Boolean) {
         hasRecordedHistoryForActiveTrack = autoPlay
         trackedTracksByUri[track.uriString] = track
         playCountTracker.startSession(track.uriString, track.durationMs)?.let { persistPlayCountFlush(it) }

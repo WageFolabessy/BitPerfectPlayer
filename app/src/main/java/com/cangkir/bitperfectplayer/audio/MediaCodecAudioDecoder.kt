@@ -67,104 +67,117 @@ class MediaCodecAudioDecoder private constructor(
         val maxAlignedCopy = PcmStreamRules.alignByteCountToFrame(destination.size, bytesPerFrame)
         if (maxAlignedCopy <= 0) return 0
 
-        // 1. Drain leftover buffered PCM bytes from a previous decoded MediaCodec frame.
-        val pending = pendingBytes
-        if (pending != null && pendingOffset < pending.size) {
-            val available = pending.size - pendingOffset
-            val toCopy = PcmStreamRules.alignByteCountToFrame(minOf(maxAlignedCopy, available), bytesPerFrame)
-            if (toCopy > 0) {
-                System.arraycopy(pending, pendingOffset, destination, 0, toCopy)
-                pendingOffset += toCopy
-                if (pendingOffset >= pending.size) {
-                    pendingBytes = null
-                    pendingOffset = 0
-                }
-                return toCopy
-            }
-        }
-
+        val drained = drainPendingPcm(destination, bytesPerFrame, maxAlignedCopy)
+        if (drained > 0) return drained
         if (outputEos) return -1
 
-        try {
-            var attempts = 0
-            while (attempts < 64 && !closed.get()) {
-                attempts++
-                feedInputBufferIfAvailable()
+        return try {
+            pumpDecoderUntilOutput(destination)
+        } catch (e: MediaCodec.CodecException) {
+            throw AudioDecodeException.CorruptedFile("Hardware/OS codec error: ${e.diagnosticInfo}", e)
+        } catch (e: IllegalStateException) {
+            throw AudioDecodeException.CorruptedFile("MediaCodec decode error: ${e.message}", e)
+        }
+    }
 
-                val outIndex = codec.dequeueOutputBuffer(bufferInfo, DEQUEUE_TIMEOUT_US)
-                when {
-                    outIndex >= 0 -> {
-                        val isEnd = (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0
-                        val size = bufferInfo.size
-                        var extracted = ByteArray(0)
+    private fun drainPendingPcm(destination: ByteArray, bytesPerFrame: Int, maxAlignedCopy: Int): Int {
+        val pending = pendingBytes ?: return 0
+        if (pendingOffset >= pending.size) return 0
+        val available = pending.size - pendingOffset
+        val toCopy = PcmStreamRules.alignByteCountToFrame(minOf(maxAlignedCopy, available), bytesPerFrame)
+        if (toCopy <= 0) return 0
+        System.arraycopy(pending, pendingOffset, destination, 0, toCopy)
+        pendingOffset += toCopy
+        if (pendingOffset >= pending.size) {
+            pendingBytes = null
+            pendingOffset = 0
+        }
+        return toCopy
+    }
 
-                        if (size > 0) {
-                            if (!outputFormatConfirmed) {
-                                // Ensure format reflects actual outputFormat even if OEM codec didn't emit INFO_OUTPUT_FORMAT_CHANGED first.
-                                applyActualOutputFormat(codec.outputFormat, sourceTag = "firstBuffer")
-                            }
-                            val outBuf = codec.getOutputBuffer(outIndex)
-                            if (outBuf != null) {
-                                extracted = PcmStreamRules.extractBufferSlice(
-                                    source = outBuf,
-                                    offset = bufferInfo.offset,
-                                    size = size,
-                                )
-                            }
-                            if (bufferInfo.presentationTimeUs >= 0L) {
-                                _currentPositionMs = bufferInfo.presentationTimeUs / 1000L
-                            }
-                        }
+    private fun pumpDecoderUntilOutput(destination: ByteArray): Int {
+        var attempts = 0
+        while (attempts < 64 && !closed.get()) {
+            attempts++
+            feedInputBufferIfAvailable()
 
-                        codec.releaseOutputBuffer(outIndex, false)
-
-                        val combined = combineWithPending(extracted)
-                        val frameBytes = _format.bytesPerFrame.coerceAtLeast(1)
-                        val alignedDestMax = PcmStreamRules.alignByteCountToFrame(destination.size, frameBytes)
-                        val toCopy = PcmStreamRules.alignByteCountToFrame(
-                            minOf(alignedDestMax, combined.size),
-                            frameBytes,
-                        )
-
-                        if (toCopy > 0) {
-                            System.arraycopy(combined, 0, destination, 0, toCopy)
-                            if (toCopy < combined.size) {
-                                pendingBytes = combined.copyOfRange(toCopy, combined.size)
-                                pendingOffset = 0
-                            } else {
-                                pendingBytes = null
-                                pendingOffset = 0
-                            }
-                        } else if (combined.isNotEmpty()) {
-                            pendingBytes = combined
-                            pendingOffset = 0
-                        }
-
-                        if (isEnd) {
-                            outputEos = true
-                            return if (toCopy > 0) toCopy else -1
-                        }
-                        if (toCopy > 0) return toCopy
-                    }
-                    outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
-                        applyActualOutputFormat(codec.outputFormat, sourceTag = "INFO_OUTPUT_FORMAT_CHANGED")
-                        // Return 0 so AudioOutputEngine can notice formatVersion change before next write if needed.
-                        if (pendingBytes == null) return 0
-                    }
-                    outIndex == MediaCodec.INFO_TRY_AGAIN_LATER -> {
-                        if (inputEos && attempts > 20) {
-                            outputEos = true
-                            return -1
-                        }
+            val outIndex = codec.dequeueOutputBuffer(bufferInfo, DEQUEUE_TIMEOUT_US)
+            when {
+                outIndex >= 0 -> processDequeuedOutputBuffer(outIndex, destination)?.let { return it }
+                outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                    applyActualOutputFormat(codec.outputFormat, sourceTag = "INFO_OUTPUT_FORMAT_CHANGED")
+                    // Return 0 so AudioOutputEngine can notice formatVersion change before next write if needed.
+                    if (pendingBytes == null) return 0
+                }
+                outIndex == MediaCodec.INFO_TRY_AGAIN_LATER -> {
+                    if (inputEos && attempts > 20) {
+                        outputEos = true
+                        return -1
                     }
                 }
             }
-            return 0
-        } catch (e: IllegalStateException) {
-            throw AudioDecodeException.CorruptedFile("MediaCodec decode error: ${e.message}", e)
-        } catch (e: MediaCodec.CodecException) {
-            throw AudioDecodeException.CorruptedFile("Hardware/OS codec error: ${e.diagnosticInfo}", e)
         }
+        return 0
+    }
+
+    private fun processDequeuedOutputBuffer(outIndex: Int, destination: ByteArray): Int? {
+        val isEnd = (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0
+        val extracted = extractAndReleaseOutputBuffer(outIndex)
+
+        val combined = combineWithPending(extracted)
+        val frameBytes = _format.bytesPerFrame.coerceAtLeast(1)
+        val alignedDestMax = PcmStreamRules.alignByteCountToFrame(destination.size, frameBytes)
+        val toCopy = PcmStreamRules.alignByteCountToFrame(
+            minOf(alignedDestMax, combined.size),
+            frameBytes,
+        )
+
+        if (toCopy > 0) {
+            System.arraycopy(combined, 0, destination, 0, toCopy)
+            if (toCopy < combined.size) {
+                pendingBytes = combined.copyOfRange(toCopy, combined.size)
+                pendingOffset = 0
+            } else {
+                pendingBytes = null
+                pendingOffset = 0
+            }
+        } else if (combined.isNotEmpty()) {
+            pendingBytes = combined
+            pendingOffset = 0
+        }
+
+        return when {
+            isEnd -> {
+                outputEos = true
+                if (toCopy > 0) toCopy else -1
+            }
+            toCopy > 0 -> toCopy
+            else -> null
+        }
+    }
+
+    private fun extractAndReleaseOutputBuffer(outIndex: Int): ByteArray {
+        val size = bufferInfo.size
+        var extracted = ByteArray(0)
+        if (size > 0) {
+            if (!outputFormatConfirmed) {
+                // Ensure format reflects actual outputFormat even if OEM codec didn't emit INFO_OUTPUT_FORMAT_CHANGED first.
+                applyActualOutputFormat(codec.outputFormat, sourceTag = "firstBuffer")
+            }
+            val outBuf = codec.getOutputBuffer(outIndex)
+            if (outBuf != null) {
+                extracted = PcmStreamRules.extractBufferSlice(
+                    source = outBuf,
+                    offset = bufferInfo.offset,
+                    size = size,
+                )
+            }
+            if (bufferInfo.presentationTimeUs >= 0L) {
+                _currentPositionMs = bufferInfo.presentationTimeUs / 1000L
+            }
+        }
+        codec.releaseOutputBuffer(outIndex, false)
+        return extracted
     }
 
     override fun seekToMs(positionMs: Long): Long {
@@ -180,7 +193,9 @@ class MediaCodecAudioDecoder private constructor(
             val sampleTimeUs = extractor.sampleTime
             _currentPositionMs = if (sampleTimeUs >= 0L) sampleTimeUs / 1000L else clampedMs
             return _currentPositionMs
-        } catch (e: Exception) {
+        } catch (e: IllegalStateException) {
+            throw AudioDecodeException.IoError("Failed seeking audio stream: ${e.message}", e)
+        } catch (e: IllegalArgumentException) {
             throw AudioDecodeException.IoError("Failed seeking audio stream: ${e.message}", e)
         }
     }
@@ -327,12 +342,7 @@ class MediaCodecAudioDecoder private constructor(
         private const val PRIME_MAX_ATTEMPTS = 64
 
         @Throws(AudioDecodeException::class)
-        fun open(
-            context: Context,
-            uri: Uri,
-            fileName: String?,
-            mimeHint: String? = null,
-        ): PcmAudioDecoder {
+        fun open(context: Context, uri: Uri, fileName: String?, mimeHint: String? = null): PcmAudioDecoder {
             val classified = AudioFormatClassifier.classify(fileName, mimeHint)
             if (classified == SupportedAudioFormat.WAV) {
                 openDirectWavDecoder(context, uri)?.let { return it }
@@ -491,49 +501,60 @@ class MediaCodecAudioDecoder private constructor(
                 decoder.primeOutputFormat()
                 return decoder
             } catch (e: AudioDecodeException) {
-                runCatching { codec?.release() }
-                runCatching { extractor.release() }
+                releaseInitResources(codec, extractor)
                 throw e
             } catch (e: IOException) {
-                runCatching { codec?.release() }
-                runCatching { extractor.release() }
+                releaseInitResources(codec, extractor)
                 throw AudioDecodeException.IoError("I/O error opening media source: ${e.message}", e)
-            } catch (e: Exception) {
-                runCatching { codec?.release() }
-                runCatching { extractor.release() }
-                throw AudioDecodeException.DecoderInitFailed("Failed to initialize decoder: ${e.message}", e)
+            } catch (e: IllegalStateException) {
+                failDecoderInit(codec, extractor, e)
+            } catch (e: IllegalArgumentException) {
+                failDecoderInit(codec, extractor, e)
+            } catch (e: MediaCodec.CryptoException) {
+                failDecoderInit(codec, extractor, e)
+            } catch (e: SecurityException) {
+                failDecoderInit(codec, extractor, e)
             }
         }
 
-        private fun createAndConfigureCodec(
-            mime: String,
-            trackFormat: MediaFormat,
-            pcmEncodingKeySet: Boolean,
-        ): MediaCodec {
+        private fun failDecoderInit(codec: MediaCodec?, extractor: MediaExtractor, cause: Throwable): Nothing {
+            releaseInitResources(codec, extractor)
+            throw AudioDecodeException.DecoderInitFailed("Failed to initialize decoder: ${cause.message}", cause)
+        }
+
+        private fun releaseInitResources(codec: MediaCodec?, extractor: MediaExtractor) {
+            runCatching { codec?.release() }
+            runCatching { extractor.release() }
+        }
+
+        private fun createAndConfigureCodec(mime: String, trackFormat: MediaFormat, pcmEncodingKeySet: Boolean): MediaCodec {
             val codec = MediaCodec.createDecoderByType(mime)
-            try {
-                codec.configure(trackFormat, null, null, 0)
-                return codec
-            } catch (firstFailure: Exception) {
-                if (pcmEncodingKeySet || trackFormat.containsKey(MediaFormat.KEY_PCM_ENCODING)) {
-                    runCatching { codec.release() }
-                    val fallbackCodec = MediaCodec.createDecoderByType(mime)
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        trackFormat.removeKey(MediaFormat.KEY_PCM_ENCODING)
-                    } else {
-                        trackFormat.setInteger(MediaFormat.KEY_PCM_ENCODING, AudioFormat.ENCODING_PCM_16BIT)
-                    }
-                    try {
-                        fallbackCodec.configure(trackFormat, null, null, 0)
-                        return fallbackCodec
-                    } catch (retryFailure: Exception) {
-                        runCatching { fallbackCodec.release() }
-                        throw retryFailure
-                    }
-                }
-                runCatching { codec.release() }
-                throw firstFailure
+            val firstFailure = tryConfigureCodec(codec, trackFormat) ?: return codec
+            runCatching { codec.release() }
+
+            val hasPcmKey = pcmEncodingKeySet || trackFormat.containsKey(MediaFormat.KEY_PCM_ENCODING)
+            if (!hasPcmKey) throw firstFailure
+
+            val fallbackCodec = MediaCodec.createDecoderByType(mime)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                trackFormat.removeKey(MediaFormat.KEY_PCM_ENCODING)
+            } else {
+                trackFormat.setInteger(MediaFormat.KEY_PCM_ENCODING, AudioFormat.ENCODING_PCM_16BIT)
             }
+            val retryFailure = tryConfigureCodec(fallbackCodec, trackFormat) ?: return fallbackCodec
+            runCatching { fallbackCodec.release() }
+            throw retryFailure
+        }
+
+        private fun tryConfigureCodec(codec: MediaCodec, trackFormat: MediaFormat): Throwable? = try {
+            codec.configure(trackFormat, null, null, 0)
+            null
+        } catch (e: IllegalArgumentException) {
+            e
+        } catch (e: IllegalStateException) {
+            e
+        } catch (e: MediaCodec.CryptoException) {
+            e
         }
 
         private fun validateAllowedMime(mime: String, fileName: String?) {

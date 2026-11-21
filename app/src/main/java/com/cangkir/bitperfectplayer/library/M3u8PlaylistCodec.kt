@@ -12,15 +12,9 @@ data class M3u8ParsedEntry(
     val hintFingerprint: String? = null,
 )
 
-data class M3u8ParsedPlaylist(
-    val titleHint: String?,
-    val entries: List<M3u8ParsedEntry>,
-)
+data class M3u8ParsedPlaylist(val titleHint: String?, val entries: List<M3u8ParsedEntry>)
 
-data class M3u8ImportMatchResult(
-    val matchedTracks: List<PlaybackTrack>,
-    val unmatchedLocations: List<String>,
-)
+data class M3u8ImportMatchResult(val matchedTracks: List<PlaybackTrack>, val unmatchedLocations: List<String>)
 
 /**
  * Pure-Kotlin `.m3u8` playlist exporter, fault-tolerant parser, local library matcher, and
@@ -39,10 +33,7 @@ object M3u8PlaylistCodec {
      * `#EXTINF:` directives plus portable relative-path/filename locations and optional
      * BitPerfectPlayer URI/SHA-256 comment hints for lossless re-import.
      */
-    fun exportToM3u8(
-        playlistName: String,
-        tracks: List<PlaybackTrack>,
-    ): String = buildString {
+    fun exportToM3u8(playlistName: String, tracks: List<PlaybackTrack>): String = buildString {
         appendLine(HEADER_EXTM3U)
         val cleanName = playlistName.replace("\r", " ").replace("\n", " ").trim()
         if (cleanName.isNotEmpty()) {
@@ -138,10 +129,7 @@ object M3u8PlaylistCodec {
      * 3. Normalized relative path match (handles `/` & `\`, `%20` decoding, case-insensitive)
      * 4. Case-insensitive exact filename match (`fileName`)
      */
-    fun matchEntriesToLibrary(
-        entries: List<M3u8ParsedEntry>,
-        libraryTracks: List<PlaybackTrack>,
-    ): M3u8ImportMatchResult {
+    fun matchEntriesToLibrary(entries: List<M3u8ParsedEntry>, libraryTracks: List<PlaybackTrack>): M3u8ImportMatchResult {
         if (entries.isEmpty()) return M3u8ImportMatchResult(emptyList(), emptyList())
 
         val byFingerprint = HashMap<String, PlaybackTrack>(libraryTracks.size)
@@ -224,34 +212,30 @@ object M3u8PlaylistCodec {
         byFileName: Map<String, PlaybackTrack>,
         libraryTracks: List<PlaybackTrack>,
     ): PlaybackTrack? {
-        entry.hintFingerprint?.let { fp ->
-            byFingerprint[fp.lowercase(Locale.ROOT)]?.let { return it }
-        }
-        byUri[entry.location.trim()]?.let { return it }
-        entry.hintUri?.let { uri ->
-            byUri[uri.trim()]?.let { return it }
-        }
+        val directMatch = entry.hintFingerprint?.let { byFingerprint[it.lowercase(Locale.ROOT)] }
+            ?: byUri[entry.location.trim()]
+            ?: entry.hintUri?.let { byUri[it.trim()] }
+        if (directMatch != null) return directMatch
 
         val normalizedLoc = normalizePath(entry.location)
-        if (normalizedLoc.isNotEmpty()) {
-            byRelativePath[normalizedLoc]?.let { return it }
-            // Suffix path match (e.g., `/storage/emulated/0/Music/Jazz/01.flac` matching `music/jazz/01.flac`)
-            for (track in libraryTracks) {
-                val trackRel = normalizePath(formatExportLocation(track))
-                if (trackRel.contains('/') &&
-                    (normalizedLoc.endsWith("/$trackRel") || trackRel.endsWith("/$normalizedLoc"))
-                ) {
-                    return track
-                }
-            }
+        val pathMatch = if (normalizedLoc.isNotEmpty()) {
+            byRelativePath[normalizedLoc] ?: findByRelativePathSuffix(normalizedLoc, libraryTracks)
+        } else {
+            null
         }
+        if (pathMatch != null) return pathMatch
 
         val extractedName = normalizeFileName(normalizedLoc.substringAfterLast('/'))
-        if (extractedName.isNotEmpty()) {
-            byFileName[extractedName]?.let { return it }
-        }
-        return null
+        return extractedName.takeIf { it.isNotEmpty() }?.let { byFileName[it] }
     }
+
+    private fun findByRelativePathSuffix(normalizedLoc: String, libraryTracks: List<PlaybackTrack>): PlaybackTrack? =
+        // Suffix path match (e.g., `/storage/emulated/0/Music/Jazz/01.flac` matching `music/jazz/01.flac`)
+        libraryTracks.firstOrNull { track ->
+            val trackRel = normalizePath(formatExportLocation(track))
+            trackRel.contains('/') &&
+                (normalizedLoc.endsWith("/$trackRel") || trackRel.endsWith("/$normalizedLoc"))
+        }
 
     private fun formatExportLocation(track: PlaybackTrack): String {
         val rel = track.relativePath?.trim()?.replace('\\', '/')?.trim('/')
@@ -270,6 +254,5 @@ object M3u8PlaylistCodec {
         return decoded.trim('/').lowercase(Locale.ROOT)
     }
 
-    private fun normalizeFileName(raw: String): String =
-        raw.trim().substringAfterLast('/').substringAfterLast('\\').lowercase(Locale.ROOT)
+    private fun normalizeFileName(raw: String): String = raw.trim().substringAfterLast('/').substringAfterLast('\\').lowercase(Locale.ROOT)
 }

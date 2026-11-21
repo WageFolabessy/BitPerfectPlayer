@@ -128,11 +128,7 @@ class AudioSafetyController {
      * and triggers immediate [SafetyEventType.AUTO_PAUSE].
      */
     @Synchronized
-    fun onAudioDeviceConnected(
-        deviceName: String,
-        isUsbAudio: Boolean,
-        isHardwareVolumeVerified: Boolean = false,
-    ): SafetyCommand {
+    fun onAudioDeviceConnected(deviceName: String, isUsbAudio: Boolean, isHardwareVolumeVerified: Boolean = false): SafetyCommand {
         val wasBitPerfect = currentState.mode == AudioOutputMode.BIT_PERFECT_OPT_IN
         val reason = if (isUsbAudio) {
             AutoPauseReason.USB_CONNECTED_ROUTE_CHANGE
@@ -187,11 +183,7 @@ class AudioSafetyController {
     }
 
     @Synchronized
-    fun onOutputRouteChanged(
-        deviceName: String,
-        isUsbAudio: Boolean,
-        isHardwareVolumeVerified: Boolean = false,
-    ): SafetyCommand {
+    fun onOutputRouteChanged(deviceName: String, isUsbAudio: Boolean, isHardwareVolumeVerified: Boolean = false): SafetyCommand {
         val wasBitPerfect = currentState.mode == AudioOutputMode.BIT_PERFECT_OPT_IN
         currentState = currentState.copy(
             mode = AudioOutputMode.SAFE_VOLUME_MODE,
@@ -218,11 +210,7 @@ class AudioSafetyController {
      * [AudioOutputMode.SAFE_VOLUME_MODE] and without emitting a spurious auto-pause event.
      */
     @Synchronized
-    fun syncInitialOutputDevice(
-        deviceName: String,
-        isUsbAudio: Boolean,
-        isHardwareVolumeVerified: Boolean = false,
-    ) {
+    fun syncInitialOutputDevice(deviceName: String, isUsbAudio: Boolean, isHardwareVolumeVerified: Boolean = false) {
         currentState = currentState.copy(
             mode = AudioOutputMode.SAFE_VOLUME_MODE,
             isPendingSafetyWarning = false,

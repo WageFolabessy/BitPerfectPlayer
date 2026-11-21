@@ -94,11 +94,7 @@ object FavoriteStateReducer {
         )
     }
 
-    fun isFavorited(
-        track: PlaybackTrack,
-        favoriteUris: Set<String>,
-        favoriteFingerprints: Set<String>,
-    ): Boolean {
+    fun isFavorited(track: PlaybackTrack, favoriteUris: Set<String>, favoriteFingerprints: Set<String>): Boolean {
         if (track.uriString in favoriteUris) return true
         val fp = track.contentFingerprint?.lowercase()
         return fp != null && fp in favoriteFingerprints

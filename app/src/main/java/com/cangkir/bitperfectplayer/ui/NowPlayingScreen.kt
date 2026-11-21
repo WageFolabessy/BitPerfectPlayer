@@ -1,5 +1,6 @@
 package com.cangkir.bitperfectplayer.ui
 
+import android.graphics.Bitmap
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -63,7 +64,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
-import android.graphics.Bitmap
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -193,14 +193,15 @@ fun NowPlayingScreen(
         }
         val bitmap = albumArtworkLoader.loadArtwork(track, AlbumArtworkLoader.THUMBNAIL_SIZE_PX)
         val extracted = withContext(Dispatchers.Default) {
-            if (bitmap == null || bitmap.isRecycled || bitmap.width <= 0 || bitmap.height <= 0) {
+            val validBitmap = bitmap?.takeIf { !it.isRecycled && it.width > 0 && it.height > 0 }
+            if (validBitmap == null) {
                 AlbumPaletteExtractor.FALLBACK_STUDIO_PALETTE
             } else {
                 runCatching {
-                    val readableBitmap = if (bitmap.config == Bitmap.Config.HARDWARE) {
-                        bitmap.copy(Bitmap.Config.ARGB_8888, false)
+                    val readableBitmap = if (validBitmap.config == Bitmap.Config.HARDWARE) {
+                        validBitmap.copy(Bitmap.Config.ARGB_8888, false)
                     } else {
-                        bitmap
+                        validBitmap
                     }
                     try {
                         val w = readableBitmap.width
@@ -209,7 +210,7 @@ fun NowPlayingScreen(
                         readableBitmap.getPixels(pixels, 0, w, 0, 0, w, h)
                         AlbumPaletteExtractor.extractAccentPalette(pixels, w, h)
                     } finally {
-                        if (readableBitmap !== bitmap) {
+                        if (readableBitmap !== validBitmap) {
                             readableBitmap.recycle()
                         }
                     }
@@ -1025,11 +1026,7 @@ private fun AudioModeSheetContent(
 }
 
 @Composable
-private fun SafetyAlertBanner(
-    message: String,
-    isError: Boolean,
-    onDismiss: (() -> Unit)?,
-) {
+private fun SafetyAlertBanner(message: String, isError: Boolean, onDismiss: (() -> Unit)?) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(10.dp),
@@ -1078,11 +1075,7 @@ private fun SafetyAlertBanner(
  * USB hardware volume control is unverified (SPEC Section 3.3).
  */
 @Composable
-fun HearingSafetyWarningDialog(
-    deviceName: String,
-    onConfirmBitPerfect: () -> Unit,
-    onDismissStaySafe: () -> Unit,
-) {
+fun HearingSafetyWarningDialog(deviceName: String, onConfirmBitPerfect: () -> Unit, onDismissStaySafe: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismissStaySafe,
         containerColor = MaterialTheme.colorScheme.surfaceVariant,

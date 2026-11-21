@@ -84,8 +84,8 @@ import com.cangkir.bitperfectplayer.ui.theme.IcePrimary
 import com.cangkir.bitperfectplayer.ui.theme.IcePrimaryContainer
 import com.cangkir.bitperfectplayer.ui.theme.OnIcePrimaryContainer
 import com.cangkir.bitperfectplayer.ui.theme.TextMuted
-import kotlinx.coroutines.flow.StateFlow
 import kotlin.math.roundToInt
+import kotlinx.coroutines.flow.StateFlow
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -494,7 +494,8 @@ fun SettingsScreen(
                             )
                             Spacer(modifier = Modifier.height(3.dp))
                             Text(
-                                text = "Choose spinning turntable disc with rotational scrub seeking, or static square cover with swipe-to-skip.",
+                                text = "Choose spinning turntable disc with rotational scrub seeking, " +
+                                    "or static square cover with swipe-to-skip.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -562,7 +563,8 @@ fun SettingsScreen(
                                 )
                                 Spacer(modifier = Modifier.height(2.dp))
                                 Text(
-                                    text = "Read-only local FFT ring around Now Playing artwork. Zero microphone permissions; safe in Bit-Perfect mode.",
+                                    text = "Read-only local FFT ring around Now Playing artwork. " +
+                                        "Zero microphone permissions; safe in Bit-Perfect mode.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
@@ -711,7 +713,8 @@ fun SettingsScreen(
 
                         if (sortedFolders.isEmpty()) {
                             Text(
-                                text = "No SAF folders linked. MediaStore tracks are scanned automatically; link additional local folders anytime without broad storage permissions.",
+                                text = "No SAF folders linked. MediaStore tracks are scanned automatically; " +
+                                    "link additional local folders anytime without broad storage permissions.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = TextMuted,
                                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
@@ -787,7 +790,8 @@ fun SettingsScreen(
                             )
                             Spacer(modifier = Modifier.height(3.dp))
                             Text(
-                                text = "Export a portable offline .json backup via Android Storage Access Framework, or restore with non-destructive merge.",
+                                text = "Export a portable offline .json backup via Android Storage Access Framework, " +
+                                    "or restore with non-destructive merge.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -860,7 +864,8 @@ fun SettingsScreen(
                             }
                             Spacer(modifier = Modifier.height(6.dp))
                             Text(
-                                text = "BitPerfectPlayer declares no INTERNET permission, collects zero telemetry, and keeps all audio indexing, playlists, lyrics, and listening statistics strictly on-device.",
+                                text = "BitPerfectPlayer declares no INTERNET permission, collects zero telemetry, " +
+                                    "and keeps all audio indexing, playlists, lyrics, and listening statistics strictly on-device.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )

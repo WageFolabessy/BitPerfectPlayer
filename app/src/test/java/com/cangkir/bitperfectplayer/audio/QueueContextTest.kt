@@ -9,16 +9,15 @@ import org.junit.Test
 
 class QueueContextTest {
 
-    private fun track(id: Int, title: String, album: String = "Album A"): PlaybackTrack =
-        PlaybackTrack(
-            uriString = "content://media/$id",
-            title = title,
-            artist = "Artist",
-            album = album,
-            folderName = "Folder",
-            fileName = "$id.flac",
-            trackNumber = id,
-        )
+    private fun track(id: Int, title: String, album: String = "Album A"): PlaybackTrack = PlaybackTrack(
+        uriString = "content://media/$id",
+        title = title,
+        artist = "Artist",
+        album = album,
+        folderName = "Folder",
+        fileName = "$id.flac",
+        trackNumber = id,
+    )
 
     @Test
     fun queueContextFormattingAndEquality_matchExpectedLabels() {

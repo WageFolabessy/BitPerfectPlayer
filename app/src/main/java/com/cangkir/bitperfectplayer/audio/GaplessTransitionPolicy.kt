@@ -27,11 +27,7 @@ enum class GaplessTransitionAction {
  * Immutable PCM stream signature used to determine whether two adjacent tracks can share the
  * exact same running AudioTrack instance without reconfiguration.
  */
-data class PcmStreamSignature(
-    val sampleRateHz: Int,
-    val channelCount: Int,
-    val encoding: PcmEncodingType,
-)
+data class PcmStreamSignature(val sampleRateHz: Int, val channelCount: Int, val encoding: PcmEncodingType)
 
 fun DecodedPcmFormat.toStreamSignature(): PcmStreamSignature = PcmStreamSignature(
     sampleRateHz = sampleRateHz,
@@ -95,10 +91,7 @@ object GaplessTransitionPolicy {
      * Computes a bounded drain timeout (in ms) based on how many PCM frames remain queued inside
      * AudioTrack ahead of its hardware playback head.
      */
-    fun computeDrainTimeoutMs(
-        remainingBufferedFrames: Long,
-        sampleRateHz: Int,
-    ): Long {
+    fun computeDrainTimeoutMs(remainingBufferedFrames: Long, sampleRateHz: Int): Long {
         if (sampleRateHz <= 0 || remainingBufferedFrames <= 0L) {
             return MIN_DRAIN_WAIT_MS
         }

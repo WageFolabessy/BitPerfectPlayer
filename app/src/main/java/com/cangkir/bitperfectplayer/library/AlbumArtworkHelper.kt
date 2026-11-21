@@ -59,9 +59,7 @@ object AlbumArtworkHelper {
      * thumbnails & mini-player, `600px` for Now Playing & MediaSession) to prevent duplicate
      * decoding and keep disk/memory usage minimal.
      */
-    fun normalizeSizeBucket(targetSizePx: Int): Int {
-        return if (targetSizePx <= 240) THUMBNAIL_BUCKET_PX else HERO_BUCKET_PX
-    }
+    fun normalizeSizeBucket(targetSizePx: Int): Int = if (targetSizePx <= 240) THUMBNAIL_BUCKET_PX else HERO_BUCKET_PX
 
     /**
      * Returns `true` when [album] identifies a real album name eligible for album-level artwork
@@ -129,12 +127,7 @@ object AlbumArtworkHelper {
     /**
      * Legacy track-level disk hash helper retained for deterministic compatibility.
      */
-    fun buildCacheKey(
-        trackUri: String,
-        dateModifiedSeconds: Long,
-        fileSizeBytes: Long,
-        targetSizePx: Int,
-    ): String {
+    fun buildCacheKey(trackUri: String, dateModifiedSeconds: Long, fileSizeBytes: Long, targetSizePx: Int): String {
         val memKey = buildMemoryCacheKey(
             trackUri = trackUri,
             artist = null,
@@ -153,34 +146,26 @@ object AlbumArtworkHelper {
      * OS-indexed `ContentResolver.loadThumbnail(...)` BEFORE opening large FLAC files with
      * `MediaMetadataRetriever`. Hero artwork (`600px`) continues to prefer embedded full-res tags first.
      */
-    fun shouldPreferMediaStoreThumbnailFirst(
-        targetSizePx: Int,
-        isMediaStoreUri: Boolean,
-        supportsApi29LoadThumbnail: Boolean,
-    ): Boolean = normalizeSizeBucket(targetSizePx) == THUMBNAIL_BUCKET_PX &&
-        isMediaStoreUri &&
-        supportsApi29LoadThumbnail
+    fun shouldPreferMediaStoreThumbnailFirst(targetSizePx: Int, isMediaStoreUri: Boolean, supportsApi29LoadThumbnail: Boolean): Boolean =
+        normalizeSizeBucket(targetSizePx) == THUMBNAIL_BUCKET_PX &&
+            isMediaStoreUri &&
+            supportsApi29LoadThumbnail
 
     /**
      * Throttles filesystem directory listing (`diskCacheDir.listFiles()`) to run at most once
      * every [interval] disk writes.
      */
-    fun shouldPruneDiskCache(
-        completedWriteCount: Int,
-        interval: Int = DISK_PRUNE_WRITE_INTERVAL,
-    ): Boolean = completedWriteCount > 0 && interval > 0 && (completedWriteCount % interval == 0)
+    fun shouldPruneDiskCache(completedWriteCount: Int, interval: Int = DISK_PRUNE_WRITE_INTERVAL): Boolean =
+        completedWriteCount > 0 && interval > 0 && (completedWriteCount % interval == 0)
 
     /**
      * Computes a power-of-2 `BitmapFactory.Options.inSampleSize` so decoded bitmap dimensions stay
      * at or above `[reqWidth] x [reqHeight]` while avoiding excessive memory allocation.
      */
-    fun computeInSampleSize(
-        srcWidth: Int,
-        srcHeight: Int,
-        reqWidth: Int,
-        reqHeight: Int,
-    ): Int {
-        if (srcWidth <= 0 || srcHeight <= 0 || reqWidth <= 0 || reqHeight <= 0) {
+    fun computeInSampleSize(srcWidth: Int, srcHeight: Int, reqWidth: Int, reqHeight: Int): Int {
+        val invalidSourceSize = srcWidth <= 0 || srcHeight <= 0
+        val invalidRequestedSize = reqWidth <= 0 || reqHeight <= 0
+        if (invalidSourceSize || invalidRequestedSize) {
             return 1
         }
         var inSampleSize = 1

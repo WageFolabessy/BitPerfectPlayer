@@ -4,11 +4,7 @@ package com.cangkir.bitperfectplayer.audio
  * Pure-Kotlin flush payload emitted by [PlayCountTracker] when a track qualifies for a play count
  * increment and/or accumulated real listening time should be persisted to `track_stats`.
  */
-data class PlayCountFlushEvent(
-    val trackUri: String,
-    val incrementPlayCount: Boolean,
-    val playTimeDeltaMs: Long,
-)
+data class PlayCountFlushEvent(val trackUri: String, val incrementPlayCount: Boolean, val playTimeDeltaMs: Long)
 
 /**
  * Pure-Kotlin anti-skip play count & real listening-time engine (zero `android.*` imports).
@@ -119,8 +115,7 @@ class PlayCountTracker {
      * resetting the session's qualification state (pause/resume continues the same session).
      */
     @Synchronized
-    fun flushPendingPlayTime(): PlayCountFlushEvent? =
-        drainUnflushedLocked(incrementPlayCount = false)
+    fun flushPendingPlayTime(): PlayCountFlushEvent? = drainUnflushedLocked(incrementPlayCount = false)
 
     /**
      * Resets the current track's session so replaying from start after completion or looping under

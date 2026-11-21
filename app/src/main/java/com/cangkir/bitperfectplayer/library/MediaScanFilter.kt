@@ -124,20 +124,33 @@ object MediaScanFilter {
     )
 
     fun shouldIncludeInAutoScan(candidate: MediaStoreScanCandidate): Boolean {
-        if (candidate.sizeBytes <= 0L) return false
-        if (candidate.isRingtone || candidate.isAlarm || candidate.isNotification || candidate.isRecording) {
-            return false
-        }
+        if (candidate.sizeBytes <= 0L || isExcludedMediaType(candidate)) return false
 
         val normalizedName = candidate.displayName.trim()
-        if (normalizedName.isEmpty() || normalizedName.startsWith(".")) return false
-
-        // Reject WhatsApp / call recorder / voice note filename patterns regardless of folder.
-        if (excludedFileNameRegexes.any { it.containsMatchIn(normalizedName) }) {
+        val isHiddenOrRejectedName = normalizedName.isEmpty() ||
+            normalizedName.startsWith(".") ||
+            excludedFileNameRegexes.any { it.containsMatchIn(normalizedName) }
+        if (isHiddenOrRejectedName || isExcludedPath(candidate)) {
             return false
         }
 
-        // Normalize all path fields to forward-slash lowercase for deterministic matching.
+        val isLossless = candidate.format == SupportedAudioFormat.FLAC ||
+            candidate.format == SupportedAudioFormat.WAV
+
+        // Filter out short SFX/notification/voice clips (< 15 seconds).
+        // Allow durationMs == 0 only for lossless FLAC/WAV where MediaStore may omit duration until header read.
+        val isTooShort = candidate.durationMs in 1L until MIN_AUTO_SCAN_DURATION_MS
+        val missingLossyDuration = candidate.durationMs <= 0L && !isLossless
+        val lacksMusicClassification = !candidate.isMusic && !isLossless
+        return !isTooShort && !missingLossyDuration && !lacksMusicClassification
+    }
+
+    private fun isExcludedMediaType(candidate: MediaStoreScanCandidate): Boolean {
+        val isSystemAlert = candidate.isRingtone || candidate.isAlarm || candidate.isNotification
+        return isSystemAlert || candidate.isRecording
+    }
+
+    private fun isExcludedPath(candidate: MediaStoreScanCandidate): Boolean {
         val pathCombined = buildList {
             candidate.relativePath?.takeIf { it.isNotBlank() }?.let { add(it) }
             candidate.legacyDataPath?.takeIf { it.isNotBlank() }?.let { add(it) }
@@ -146,42 +159,23 @@ object MediaScanFilter {
             .replace('\\', '/')
             .lowercase()
 
-        if (pathCombined.isNotEmpty()) {
-            val wrappedPath = "/$pathCombined/"
-            if (excludedPathSubstrings.any { wrappedPath.contains(it) }) {
-                return false
-            }
-            val segments = pathCombined.split('/').filter { it.isNotBlank() }
-            if (segments.any { seg ->
-                    seg.startsWith(".") ||
-                        seg in excludedPathSegments ||
-                        seg.contains("whatsapp") ||
-                        seg.contains("sound_recorder") ||
-                        seg.contains("call_rec") ||
-                        seg.contains("voicerecorder")
-                }
-            ) {
-                return false
-            }
-        }
+        if (pathCombined.isEmpty()) return false
+        val wrappedPath = "/$pathCombined/"
+        if (excludedPathSubstrings.any { wrappedPath.contains(it) }) return true
 
-        val isLossless = candidate.format == SupportedAudioFormat.FLAC ||
-            candidate.format == SupportedAudioFormat.WAV
-
-        // Filter out short SFX/notification/voice clips (< 15 seconds).
-        // Allow durationMs == 0 only for lossless FLAC/WAV where MediaStore may omit duration until header read.
-        if (candidate.durationMs in 1L until MIN_AUTO_SCAN_DURATION_MS) {
-            return false
-        }
-        if (candidate.durationMs <= 0L && !isLossless) {
-            return false
-        }
-
-        // Require IS_MUSIC unless the file is an explicit lossless music file (FLAC/WAV) in a non-excluded folder.
-        if (!candidate.isMusic && !isLossless) {
-            return false
-        }
-
-        return true
+        val segments = pathCombined.split('/').filter { it.isNotBlank() }
+        return segments.any { isExcludedPathSegment(it) }
     }
+
+    private fun isExcludedPathSegment(segment: String): Boolean {
+        if (segment.startsWith(".") || segment in excludedPathSegments) return true
+        return excludedSegmentSubstrings.any { segment.contains(it) }
+    }
+
+    private val excludedSegmentSubstrings = listOf(
+        "whatsapp",
+        "sound_recorder",
+        "call_rec",
+        "voicerecorder",
+    )
 }

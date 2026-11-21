@@ -44,13 +44,8 @@ data class QueueSnapshot<T>(
  * Maintains an internal unique entry ID per queued slot so duplicate tracks remain unambiguous
  * across reordering, removal, and non-destructive Shuffle toggling.
  */
-class PlaybackQueueManager<T : Any>(
-    private val defaultRandom: Random = Random.Default,
-) {
-    private data class QueueEntry<T>(
-        val id: Long,
-        val item: T,
-    )
+class PlaybackQueueManager<T : Any>(private val defaultRandom: Random = Random.Default) {
+    private data class QueueEntry<T>(val id: Long, val item: T)
 
     private var nextEntryId: Long = 1L
     private val originalOrder = mutableListOf<QueueEntry<T>>()
@@ -75,11 +70,7 @@ class PlaybackQueueManager<T : Any>(
 
     fun isEmpty(): Boolean = activeOrder.isEmpty()
 
-    fun setQueue(
-        items: List<T>,
-        startIndex: Int = 0,
-        random: Random = defaultRandom,
-    ): QueueSnapshot<T> {
+    fun setQueue(items: List<T>, startIndex: Int = 0, random: Random = defaultRandom): QueueSnapshot<T> {
         originalOrder.clear()
         activeOrder.clear()
         if (items.isEmpty()) {

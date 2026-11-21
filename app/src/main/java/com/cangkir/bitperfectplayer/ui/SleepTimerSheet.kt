@@ -46,10 +46,7 @@ import kotlinx.coroutines.flow.StateFlow
  * TopAppBar action so neither NowPlayingScreen's hero art nor LibraryScreen ever recomposes.
  */
 @Composable
-fun SleepTimerTopBarButton(
-    sleepTimerStateFlow: StateFlow<SleepTimerState>,
-    onClick: () -> Unit,
-) {
+fun SleepTimerTopBarButton(sleepTimerStateFlow: StateFlow<SleepTimerState>, onClick: () -> Unit) {
     val timerState by sleepTimerStateFlow.collectAsStateWithLifecycle()
     if (timerState.isActive) {
         Surface(
@@ -100,9 +97,7 @@ fun SleepTimerTopBarButton(
  * recomposing the surrounding Settings LazyColumn on 1-second countdown ticks.
  */
 @Composable
-fun SleepTimerSettingsValueLeaf(
-    sleepTimerStateFlow: StateFlow<SleepTimerState>,
-) {
+fun SleepTimerSettingsValueLeaf(sleepTimerStateFlow: StateFlow<SleepTimerState>) {
     val timerState by sleepTimerStateFlow.collectAsStateWithLifecycle()
     val summary = when {
         !timerState.isActive -> "Off"

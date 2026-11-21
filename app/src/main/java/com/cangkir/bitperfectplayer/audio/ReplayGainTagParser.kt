@@ -53,7 +53,9 @@ object ReplayGainTagParser {
         fun buildOrNull(): ReplayGainMetadata? {
             val resolvedTrackGain = trackGainDb ?: r128TrackGainDb ?: iTunNormTrackGainDb
             val resolvedAlbumGain = albumGainDb ?: r128AlbumGainDb
-            if (resolvedTrackGain == null && resolvedAlbumGain == null && trackPeak == null && albumPeak == null) {
+            val hasAnyGain = resolvedTrackGain != null || resolvedAlbumGain != null
+            val hasAnyPeak = trackPeak != null || albumPeak != null
+            if (!hasAnyGain && !hasAnyPeak) {
                 return null
             }
             return ReplayGainMetadata(
@@ -65,10 +67,7 @@ object ReplayGainTagParser {
         }
     }
 
-    fun parse(
-        source: SeekableByteSource,
-        formatHint: SupportedAudioFormat? = null,
-    ): ReplayGainMetadata? {
+    fun parse(source: SeekableByteSource, formatHint: SupportedAudioFormat? = null): ReplayGainMetadata? {
         if (source.size < 12L) return null
         val probe = ByteArray(16)
         val probeLen = readFully(source, 0L, probe, minOf(16, source.size.toInt()))
@@ -79,28 +78,15 @@ object ReplayGainTagParser {
         val isId3 = matchesAscii(probe, 0, "ID3")
         val isMp4 = probeLen >= 8 && matchesAscii(probe, 4, "ftyp")
 
-        // FLAC files can occasionally carry a leading ID3v2 prefix before "fLaC".
-        if (isFlac || formatHint == SupportedAudioFormat.FLAC) {
-            parseFlac(source)?.let { return it }
-            if (isId3) {
-                parseId3v2(source)?.let { return it }
-            }
-            return null
+        return when {
+            // FLAC files can occasionally carry a leading ID3v2 prefix before "fLaC".
+            isFlac || formatHint == SupportedAudioFormat.FLAC ->
+                parseFlac(source) ?: if (isId3) parseId3v2(source) else null
+            isOgg || formatHint == SupportedAudioFormat.OGG -> parseOgg(source)
+            isMp4 || formatHint == SupportedAudioFormat.M4A -> parseMp4(source)
+            isId3 || formatHint == SupportedAudioFormat.MP3 -> parseId3v2(source)
+            else -> null
         }
-
-        if (isOgg || formatHint == SupportedAudioFormat.OGG) {
-            return parseOgg(source)
-        }
-
-        if (isMp4 || formatHint == SupportedAudioFormat.M4A) {
-            return parseMp4(source)
-        }
-
-        if (isId3 || formatHint == SupportedAudioFormat.MP3) {
-            return parseId3v2(source)
-        }
-
-        return null
     }
 
     // -------------------------------------------------------------------------
@@ -157,6 +143,8 @@ object ReplayGainTagParser {
     // 2. OGG Vorbis (\x03vorbis) & Opus (OpusTags) Comment Headers
     // -------------------------------------------------------------------------
 
+    private data class OggPageHeader(val isContinued: Boolean, val lacing: ByteArray, val bodyOffset: Long)
+
     private fun parseOgg(source: SeekableByteSource): ReplayGainMetadata? {
         var offset = 0L
         var pagesScanned = 0
@@ -168,30 +156,19 @@ object ReplayGainTagParser {
             offset < MAX_HEADER_SCAN_BYTES
         ) {
             pagesScanned++
-            if (readFully(source, offset, pageHeader, 27) < 27) break
-            if (!matchesAscii(pageHeader, 0, "OggS")) break
+            val page = readOggPageHeader(source, offset, pageHeader) ?: break
+            offset = page.bodyOffset
 
-            val headerType = pageHeader[5].toInt() and 0xFF
-            val isContinued = (headerType and 0x01) != 0
-            val segmentCount = pageHeader[26].toInt() and 0xFF
-            offset += 27L
-            if (offset + segmentCount.toLong() > source.size) break
-
-            val lacing = ByteArray(segmentCount)
-            if (readFully(source, offset, lacing, segmentCount) < segmentCount) break
-            offset += segmentCount.toLong()
-
-            if (!isContinued) {
+            if (!page.isContinued) {
                 packetBuilder.reset()
             }
 
-            for (segIdx in 0 until segmentCount) {
-                val segLen = lacing[segIdx].toInt() and 0xFF
+            for (segIdx in page.lacing.indices) {
+                val segLen = page.lacing[segIdx].toInt() and 0xFF
                 if (offset + segLen.toLong() > source.size) return null
 
                 if (segLen > 0) {
-                    val remainingCap = packetBuilder.remainingCapacity()
-                    val toRead = minOf(segLen, remainingCap)
+                    val toRead = minOf(segLen, packetBuilder.remainingCapacity())
                     if (toRead > 0) {
                         val tmp = ByteArray(toRead)
                         if (readFully(source, offset, tmp, toRead) < toRead) return null
@@ -211,6 +188,23 @@ object ReplayGainTagParser {
         return null
     }
 
+    private fun readOggPageHeader(source: SeekableByteSource, offset: Long, pageHeader: ByteArray): OggPageHeader? {
+        if (readFully(source, offset, pageHeader, 27) < 27 || !matchesAscii(pageHeader, 0, "OggS")) {
+            return null
+        }
+        val headerType = pageHeader[5].toInt() and 0xFF
+        val segmentCount = pageHeader[26].toInt() and 0xFF
+        val lacingOffset = offset + 27L
+        if (lacingOffset + segmentCount.toLong() > source.size) return null
+        val lacing = ByteArray(segmentCount)
+        if (readFully(source, lacingOffset, lacing, segmentCount) < segmentCount) return null
+        return OggPageHeader(
+            isContinued = (headerType and 0x01) != 0,
+            lacing = lacing,
+            bodyOffset = lacingOffset + segmentCount.toLong(),
+        )
+    }
+
     private fun parseOggCommentPacket(packet: ByteArray): ReplayGainMetadata? {
         if (packet.size < 16) return null
         val acc = TagAccumulator()
@@ -227,12 +221,7 @@ object ReplayGainTagParser {
         return null
     }
 
-    private fun parseVorbisCommentVector(
-        data: ByteArray,
-        startOffset: Int,
-        endOffset: Int,
-        acc: TagAccumulator,
-    ) {
+    private fun parseVorbisCommentVector(data: ByteArray, startOffset: Int, endOffset: Int, acc: TagAccumulator) {
         var pos = startOffset
         if (pos + 4 > endOffset) return
         val vendorLen = readInt32LE(data, pos)
@@ -267,27 +256,19 @@ object ReplayGainTagParser {
 
     private fun parseId3v2(source: SeekableByteSource): ReplayGainMetadata? {
         val header = ByteArray(10)
-        if (readFully(source, 0L, header, 10) < 10) return null
-        if (!matchesAscii(header, 0, "ID3")) return null
+        if (readFully(source, 0L, header, 10) < 10 || !matchesAscii(header, 0, "ID3")) return null
 
         val majorVersion = header[3].toInt() and 0xFF
-        if (majorVersion != 3 && majorVersion != 4) return null
+        val tagSize = readSynchsafeInt(header, 6)
+        if ((majorVersion != 3 && majorVersion != 4) || tagSize <= 0) return null
+
         val flags = header[5].toInt() and 0xFF
         val hasExtendedHeader = (flags and 0x40) != 0
-        val tagSize = readSynchsafeInt(header, 6)
-        if (tagSize <= 0) return null
-
         val tagEnd = minOf(10L + tagSize.toLong(), source.size, MAX_HEADER_SCAN_BYTES)
-        var offset = 10L
-
-        if (hasExtendedHeader && offset + 4L <= tagEnd) {
-            val extBuf = ByteArray(4)
-            if (readFully(source, offset, extBuf, 4) == 4) {
-                val extSize = if (majorVersion == 4) readSynchsafeInt(extBuf, 0) else readInt32BE(extBuf, 0)
-                if (extSize >= 4) {
-                    offset += if (majorVersion == 4) extSize.toLong() else (4L + extSize.toLong())
-                }
-            }
+        var offset = if (hasExtendedHeader) {
+            skipId3ExtendedHeader(source, 10L, tagEnd, majorVersion)
+        } else {
+            10L
         }
 
         val acc = TagAccumulator()
@@ -297,39 +278,55 @@ object ReplayGainTagParser {
         while (offset + 10L <= tagEnd && framesVisited < 512) {
             framesVisited++
             if (readFully(source, offset, frameHeader, 10) < 10) break
-
             // Padding reached (0x00 bytes)
             if (frameHeader[0] == 0.toByte() && frameHeader[1] == 0.toByte()) break
 
-            val frameId = String(frameHeader, 0, 4, Charsets.ISO_8859_1)
-            val frameSize = if (majorVersion == 4) {
-                readSynchsafeInt(frameHeader, 4)
-            } else {
-                readInt32BE(frameHeader, 4)
-            }
+            val frameSize = readId3FrameSize(frameHeader, majorVersion)
             offset += 10L
-
             if (frameSize <= 0 || offset + frameSize.toLong() > tagEnd) break
 
-            if (frameId == "TXXX" && frameSize <= MAX_METADATA_BLOCK_BYTES) {
-                val frameFlags = ((frameHeader[8].toInt() and 0xFF) shl 8) or (frameHeader[9].toInt() and 0xFF)
-                val isCompressedOrEncrypted = if (majorVersion == 4) {
-                    (frameFlags and 0x000C) != 0
-                } else {
-                    (frameFlags and 0x00C0) != 0
-                }
-                if (!isCompressedOrEncrypted) {
-                    val payload = ByteArray(frameSize)
-                    if (readFully(source, offset, payload, frameSize) == frameSize) {
-                        parseId3TxxxPayload(payload, acc)
-                    }
-                }
-            }
-
+            parseId3FrameIfTxxx(source, offset, frameHeader, frameSize, majorVersion, acc)
             offset += frameSize.toLong()
         }
 
         return acc.buildOrNull()
+    }
+
+    private fun skipId3ExtendedHeader(source: SeekableByteSource, offset: Long, tagEnd: Long, majorVersion: Int): Long {
+        if (offset + 4L > tagEnd) return offset
+        val extBuf = ByteArray(4)
+        if (readFully(source, offset, extBuf, 4) < 4) return offset
+        val extSize = if (majorVersion == 4) readSynchsafeInt(extBuf, 0) else readInt32BE(extBuf, 0)
+        if (extSize < 4) return offset
+        return offset + if (majorVersion == 4) extSize.toLong() else (4L + extSize.toLong())
+    }
+
+    private fun readId3FrameSize(frameHeader: ByteArray, majorVersion: Int): Int =
+        if (majorVersion == 4) readSynchsafeInt(frameHeader, 4) else readInt32BE(frameHeader, 4)
+
+    private fun parseId3FrameIfTxxx(
+        source: SeekableByteSource,
+        payloadOffset: Long,
+        frameHeader: ByteArray,
+        frameSize: Int,
+        majorVersion: Int,
+        acc: TagAccumulator,
+    ) {
+        val frameId = String(frameHeader, 0, 4, Charsets.ISO_8859_1)
+        if (frameId != "TXXX" || frameSize > MAX_METADATA_BLOCK_BYTES) return
+
+        val frameFlags = ((frameHeader[8].toInt() and 0xFF) shl 8) or (frameHeader[9].toInt() and 0xFF)
+        val isCompressedOrEncrypted = if (majorVersion == 4) {
+            (frameFlags and 0x000C) != 0
+        } else {
+            (frameFlags and 0x00C0) != 0
+        }
+        if (isCompressedOrEncrypted) return
+
+        val payload = ByteArray(frameSize)
+        if (readFully(source, payloadOffset, payload, frameSize) == frameSize) {
+            parseId3TxxxPayload(payload, acc)
+        }
     }
 
     private fun parseId3TxxxPayload(payload: ByteArray, acc: TagAccumulator) {
@@ -362,12 +359,7 @@ object ReplayGainTagParser {
         }
     }
 
-    private fun decodeId3Utf16(
-        data: ByteArray,
-        offset: Int,
-        length: Int,
-        forceBigEndian: Boolean,
-    ): String {
+    private fun decodeId3Utf16(data: ByteArray, offset: Int, length: Int, forceBigEndian: Boolean): String {
         if (length <= 0) return ""
         val charset: Charset
         var start = offset
@@ -424,12 +416,7 @@ object ReplayGainTagParser {
         return acc.buildOrNull()
     }
 
-    private fun parseMp4FreeformAtom(
-        source: SeekableByteSource,
-        start: Long,
-        end: Long,
-        acc: TagAccumulator,
-    ) {
+    private fun parseMp4FreeformAtom(source: SeekableByteSource, start: Long, end: Long, acc: TagAccumulator) {
         var nameValue: String? = null
         var dataValue: String? = null
         var cursor = start
@@ -468,18 +455,9 @@ object ReplayGainTagParser {
         }
     }
 
-    private data class Mp4Box(
-        val type: String,
-        val payloadStart: Long,
-        val boxEnd: Long,
-    )
+    private data class Mp4Box(val type: String, val payloadStart: Long, val boxEnd: Long)
 
-    private fun findMp4Box(
-        source: SeekableByteSource,
-        rangeStart: Long,
-        rangeEnd: Long,
-        targetType: String,
-    ): Mp4Box? {
+    private fun findMp4Box(source: SeekableByteSource, rangeStart: Long, rangeEnd: Long, targetType: String): Mp4Box? {
         var cursor = rangeStart
         var boxesVisited = 0
         while (cursor + 8L <= rangeEnd && boxesVisited < 256) {
@@ -492,17 +470,17 @@ object ReplayGainTagParser {
         return null
     }
 
-    private fun readMp4BoxHeader(
-        source: SeekableByteSource,
-        offset: Long,
-        rangeEnd: Long,
-    ): Mp4Box? {
+    private fun readMp4BoxHeader(source: SeekableByteSource, offset: Long, rangeEnd: Long): Mp4Box? {
         if (offset + 8L > rangeEnd) return null
         val hdr = ByteArray(8)
         if (readFully(source, offset, hdr, 8) < 8) return null
         val rawSize = readUInt32BE(hdr, 0)
         val type = String(hdr, 4, 4, Charsets.ISO_8859_1)
+        val bounds = resolveMp4BoxBounds(source, offset, rawSize, rangeEnd) ?: return null
+        return Mp4Box(type = type, payloadStart = bounds.first, boxEnd = bounds.second)
+    }
 
+    private fun resolveMp4BoxBounds(source: SeekableByteSource, offset: Long, rawSize: Long, rangeEnd: Long): Pair<Long, Long>? {
         val payloadStart: Long
         val boxEnd: Long
         when (rawSize) {
@@ -525,8 +503,7 @@ object ReplayGainTagParser {
                 boxEnd = minOf(offset + rawSize, rangeEnd)
             }
         }
-        if (payloadStart > boxEnd) return null
-        return Mp4Box(type = type, payloadStart = payloadStart, boxEnd = boxEnd)
+        return if (payloadStart <= boxEnd) payloadStart to boxEnd else null
     }
 
     // -------------------------------------------------------------------------
@@ -600,36 +577,31 @@ object ReplayGainTagParser {
         return true
     }
 
-    private fun readSynchsafeInt(buf: ByteArray, offset: Int): Int =
-        ((buf[offset].toInt() and 0x7F) shl 21) or
-            ((buf[offset + 1].toInt() and 0x7F) shl 14) or
-            ((buf[offset + 2].toInt() and 0x7F) shl 7) or
-            (buf[offset + 3].toInt() and 0x7F)
+    private fun readSynchsafeInt(buf: ByteArray, offset: Int): Int = ((buf[offset].toInt() and 0x7F) shl 21) or
+        ((buf[offset + 1].toInt() and 0x7F) shl 14) or
+        ((buf[offset + 2].toInt() and 0x7F) shl 7) or
+        (buf[offset + 3].toInt() and 0x7F)
 
-    private fun readInt32BE(buf: ByteArray, offset: Int): Int =
-        ((buf[offset].toInt() and 0xFF) shl 24) or
-            ((buf[offset + 1].toInt() and 0xFF) shl 16) or
-            ((buf[offset + 2].toInt() and 0xFF) shl 8) or
-            (buf[offset + 3].toInt() and 0xFF)
+    private fun readInt32BE(buf: ByteArray, offset: Int): Int = ((buf[offset].toInt() and 0xFF) shl 24) or
+        ((buf[offset + 1].toInt() and 0xFF) shl 16) or
+        ((buf[offset + 2].toInt() and 0xFF) shl 8) or
+        (buf[offset + 3].toInt() and 0xFF)
 
-    private fun readUInt32BE(buf: ByteArray, offset: Int): Long =
-        readInt32BE(buf, offset).toLong() and 0xFFFFFFFFL
+    private fun readUInt32BE(buf: ByteArray, offset: Int): Long = readInt32BE(buf, offset).toLong() and 0xFFFFFFFFL
 
-    private fun readInt64BE(buf: ByteArray, offset: Int): Long =
-        ((buf[offset].toLong() and 0xFF) shl 56) or
-            ((buf[offset + 1].toLong() and 0xFF) shl 48) or
-            ((buf[offset + 2].toLong() and 0xFF) shl 40) or
-            ((buf[offset + 3].toLong() and 0xFF) shl 32) or
-            ((buf[offset + 4].toLong() and 0xFF) shl 24) or
-            ((buf[offset + 5].toLong() and 0xFF) shl 16) or
-            ((buf[offset + 6].toLong() and 0xFF) shl 8) or
-            (buf[offset + 7].toLong() and 0xFF)
+    private fun readInt64BE(buf: ByteArray, offset: Int): Long = ((buf[offset].toLong() and 0xFF) shl 56) or
+        ((buf[offset + 1].toLong() and 0xFF) shl 48) or
+        ((buf[offset + 2].toLong() and 0xFF) shl 40) or
+        ((buf[offset + 3].toLong() and 0xFF) shl 32) or
+        ((buf[offset + 4].toLong() and 0xFF) shl 24) or
+        ((buf[offset + 5].toLong() and 0xFF) shl 16) or
+        ((buf[offset + 6].toLong() and 0xFF) shl 8) or
+        (buf[offset + 7].toLong() and 0xFF)
 
-    private fun readInt32LE(buf: ByteArray, offset: Int): Int =
-        (buf[offset].toInt() and 0xFF) or
-            ((buf[offset + 1].toInt() and 0xFF) shl 8) or
-            ((buf[offset + 2].toInt() and 0xFF) shl 16) or
-            ((buf[offset + 3].toInt() and 0xFF) shl 24)
+    private fun readInt32LE(buf: ByteArray, offset: Int): Int = (buf[offset].toInt() and 0xFF) or
+        ((buf[offset + 1].toInt() and 0xFF) shl 8) or
+        ((buf[offset + 2].toInt() and 0xFF) shl 16) or
+        ((buf[offset + 3].toInt() and 0xFF) shl 24)
 
     private fun findSingleByteNul(data: ByteArray, start: Int, end: Int): Int {
         for (i in start until end) {

@@ -24,18 +24,22 @@ interface SeekableByteSource : Closeable {
     fun readAt(offset: Long, buffer: ByteArray, destOffset: Int, length: Int): Int
 }
 
+private fun validateReadAtRange(offset: Long, bufferSize: Int, destOffset: Int, length: Int) {
+    val negativeArg = offset < 0L || destOffset < 0 || length < 0
+    if (negativeArg || destOffset + length > bufferSize) {
+        throw IllegalArgumentException(
+            "Invalid readAt parameters: offset=$offset, destOffset=$destOffset, length=$length",
+        )
+    }
+}
+
 /**
  * [SeekableByteSource] backed by a [FileChannel] using positional reads so large audio files
  * never need to be loaded into memory.
  */
-class FileChannelSeekableByteSource(
-    private val channel: FileChannel,
-    override val size: Long = channel.size(),
-) : SeekableByteSource {
+class FileChannelSeekableByteSource(private val channel: FileChannel, override val size: Long = channel.size()) : SeekableByteSource {
     override fun readAt(offset: Long, buffer: ByteArray, destOffset: Int, length: Int): Int {
-        if (offset < 0 || destOffset < 0 || length < 0 || destOffset + length > buffer.size) {
-            throw IllegalArgumentException("Invalid readAt parameters: offset=$offset, destOffset=$destOffset, length=$length")
-        }
+        validateReadAtRange(offset, buffer.size, destOffset, length)
         if (length == 0) return 0
         val byteBuffer = ByteBuffer.wrap(buffer, destOffset, length)
         return channel.read(byteBuffer, offset)
@@ -49,15 +53,11 @@ class FileChannelSeekableByteSource(
 /**
  * In-memory [SeekableByteSource] useful for tests and small buffers.
  */
-class ByteArraySeekableByteSource(
-    private val data: ByteArray,
-) : SeekableByteSource {
+class ByteArraySeekableByteSource(private val data: ByteArray) : SeekableByteSource {
     override val size: Long = data.size.toLong()
 
     override fun readAt(offset: Long, buffer: ByteArray, destOffset: Int, length: Int): Int {
-        if (offset < 0 || destOffset < 0 || length < 0 || destOffset + length > buffer.size) {
-            throw IllegalArgumentException("Invalid readAt parameters: offset=$offset, destOffset=$destOffset, length=$length")
-        }
+        validateReadAtRange(offset, buffer.size, destOffset, length)
         if (length == 0) return 0
         if (offset >= data.size) return -1
         val toCopy = minOf(length.toLong(), data.size.toLong() - offset).toInt()
@@ -87,8 +87,7 @@ object ContentFingerprintGenerator {
     )
 
     @Throws(IOException::class)
-    fun computeFromBytes(bytes: ByteArray): String =
-        ByteArraySeekableByteSource(bytes).use { computeFromSeekable(it) }
+    fun computeFromBytes(bytes: ByteArray): String = ByteArraySeekableByteSource(bytes).use { computeFromSeekable(it) }
 
     /**
      * Computes the deterministic fingerprint using OOM-safe positional reads.
@@ -196,12 +195,7 @@ object ContentFingerprintGenerator {
     }
 
     @Throws(IOException::class)
-    private fun readFullyAt(
-        source: SeekableByteSource,
-        startOffset: Long,
-        target: ByteArray,
-        expectedBytes: Int,
-    ) {
+    private fun readFullyAt(source: SeekableByteSource, startOffset: Long, target: ByteArray, expectedBytes: Int) {
         var filled = 0
         while (filled < expectedBytes) {
             val read = source.readAt(startOffset + filled, target, filled, expectedBytes - filled)
@@ -214,11 +208,10 @@ object ContentFingerprintGenerator {
         }
     }
 
-    internal fun encodeBigEndianUint64(value: Long): ByteArray =
-        ByteBuffer.allocate(8)
-            .order(ByteOrder.BIG_ENDIAN)
-            .putLong(value)
-            .array()
+    internal fun encodeBigEndianUint64(value: Long): ByteArray = ByteBuffer.allocate(8)
+        .order(ByteOrder.BIG_ENDIAN)
+        .putLong(value)
+        .array()
 
     private fun toLowerHex(bytes: ByteArray): String {
         val out = CharArray(bytes.size * 2)

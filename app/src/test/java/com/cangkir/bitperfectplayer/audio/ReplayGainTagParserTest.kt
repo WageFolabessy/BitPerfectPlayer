@@ -1,13 +1,13 @@
 package com.cangkir.bitperfectplayer.audio
 
 import com.cangkir.bitperfectplayer.lyrics.ByteArraySeekableByteSource
+import java.io.ByteArrayOutputStream
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Test
-import java.io.ByteArrayOutputStream
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 
 class ReplayGainTagParserTest {
 
@@ -271,11 +271,9 @@ class ReplayGainTagParserTest {
         return mp4Box("----", meanBox + nameBox + dataBox)
     }
 
-    private fun int32LE(v: Int): ByteArray =
-        ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(v).array()
+    private fun int32LE(v: Int): ByteArray = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(v).array()
 
-    private fun int32BE(v: Int): ByteArray =
-        ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN).putInt(v).array()
+    private fun int32BE(v: Int): ByteArray = ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN).putInt(v).array()
 
     private fun synchsafeInt(v: Int): ByteArray = byteArrayOf(
         ((v shr 21) and 0x7F).toByte(),

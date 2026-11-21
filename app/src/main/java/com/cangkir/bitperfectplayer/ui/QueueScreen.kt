@@ -466,12 +466,7 @@ private fun AddTrackToQueueDialog(
 }
 
 @Composable
-private fun QueueDialogScopeChip(
-    label: String,
-    selected: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
+private fun QueueDialogScopeChip(label: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
     Surface(
         modifier = modifier
             .sizeIn(minHeight = 48.dp)

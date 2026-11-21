@@ -54,10 +54,7 @@ object VinylScrubMath {
      * so positive deltas represent clockwise (forward) motion and negative deltas counter-clockwise
      * (backward) motion.
      */
-    fun computeShortestAngleDeltaDegrees(
-        prevAngleDeg: Float,
-        currentAngleDeg: Float,
-    ): Float {
+    fun computeShortestAngleDeltaDegrees(prevAngleDeg: Float, currentAngleDeg: Float): Float {
         if (!prevAngleDeg.isFinite() || !currentAngleDeg.isFinite()) return 0f
         var delta = (currentAngleDeg - prevAngleDeg) % 360f
         if (delta > 180f) {
@@ -73,12 +70,7 @@ object VinylScrubMath {
      * interactive scrub ring `[innerDeadZonePx, outerRadiusPx]`, rejecting touches outside the
      * disc boundary or too close to the center spindle where `atan2` jitters.
      */
-    fun isWithinScrubRing(
-        dx: Float,
-        dy: Float,
-        outerRadiusPx: Float,
-        innerDeadZonePx: Float,
-    ): Boolean {
+    fun isWithinScrubRing(dx: Float, dy: Float, outerRadiusPx: Float, innerDeadZonePx: Float): Boolean {
         if (!dx.isFinite() || !dy.isFinite()) return false
         if (!outerRadiusPx.isFinite() || !innerDeadZonePx.isFinite()) return false
         if (outerRadiusPx <= 0f || innerDeadZonePx < 0f || innerDeadZonePx >= outerRadiusPx) return false
@@ -122,10 +114,7 @@ object VinylScrubMath {
      * travel [deltaDegrees] at [angularVelocityDegPerSec]. Returning `Double` preserves sub-ms
      * fractional increments across 120 Hz slow-drag frames so accumulation never stalls at zero.
      */
-    fun computeIncrementalScrubDeltaMs(
-        deltaDegrees: Float,
-        angularVelocityDegPerSec: Float,
-    ): Double {
+    fun computeIncrementalScrubDeltaMs(deltaDegrees: Float, angularVelocityDegPerSec: Float): Double {
         if (!deltaDegrees.isFinite()) return 0.0
         val msPerRotation = computeMsPerFullRotation(abs(angularVelocityDegPerSec))
         return (deltaDegrees.toDouble() / 360.0) * msPerRotation
@@ -154,11 +143,7 @@ object VinylScrubMath {
      * Decays angular velocity smoothly via exponential turntable friction:
      * `velocity * exp(-damping * dtSeconds)`.
      */
-    fun decayInertiaVelocity(
-        velocityDegPerSec: Float,
-        dtSeconds: Float,
-        damping: Float = DEFAULT_INERTIA_DAMPING,
-    ): Float {
+    fun decayInertiaVelocity(velocityDegPerSec: Float, dtSeconds: Float, damping: Float = DEFAULT_INERTIA_DAMPING): Float {
         if (!velocityDegPerSec.isFinite()) return 0f
         if (!dtSeconds.isFinite() || dtSeconds <= 0f) return velocityDegPerSec
         val safeDamping = if (damping.isFinite()) damping.coerceAtLeast(0f).toDouble() else DEFAULT_INERTIA_DAMPING.toDouble()
@@ -169,9 +154,8 @@ object VinylScrubMath {
      * Returns `true` only for deliberate fast flicks (`|velocity| >= 120 deg/s`) so careful slow
      * precision scrubs commit immediately on finger release with zero coast lag.
      */
-    fun shouldStartInertiaCoast(releaseVelocityDegPerSec: Float): Boolean =
-        releaseVelocityDegPerSec.isFinite() &&
-            abs(releaseVelocityDegPerSec) >= INERTIA_MIN_RELEASE_VELOCITY_DEG_PER_SEC
+    fun shouldStartInertiaCoast(releaseVelocityDegPerSec: Float): Boolean = releaseVelocityDegPerSec.isFinite() &&
+        abs(releaseVelocityDegPerSec) >= INERTIA_MIN_RELEASE_VELOCITY_DEG_PER_SEC
 
     /**
      * Clamps an accumulated floating-point scrub position cleanly within `[0.0, durationMs]`.
@@ -192,8 +176,7 @@ object VinylScrubMath {
     /**
      * Formats a live turntable playback rate concisely (`"2.1×"`, `"-1.4×"`, `"HOLD"`).
      */
-    fun formatPlaybackRateBadge(playbackRate: Float): String =
-        TurntableSpeedController.formatSpeedBadge(playbackRate)
+    fun formatPlaybackRateBadge(playbackRate: Float): String = TurntableSpeedController.formatSpeedBadge(playbackRate)
 
     /**
      * Formats a signed millisecond scrub delta concisely for the live turntable HUD badge

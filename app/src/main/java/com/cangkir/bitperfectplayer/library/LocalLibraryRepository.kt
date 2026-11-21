@@ -5,6 +5,8 @@ import android.content.ContentUris
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.database.Cursor
+import android.database.sqlite.SQLiteException
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
@@ -21,10 +23,13 @@ import com.cangkir.bitperfectplayer.data.CachedTrackSourceKind
 import com.cangkir.bitperfectplayer.data.FavoriteTrackRecord
 import com.cangkir.bitperfectplayer.data.LocalPersistenceRepository
 import com.cangkir.bitperfectplayer.data.TrackPositionBackfill
+import com.cangkir.bitperfectplayer.data.UserPreferences
 import com.cangkir.bitperfectplayer.data.UserPreferencesRepository
 import com.cangkir.bitperfectplayer.data.toCachedEntity
 import com.cangkir.bitperfectplayer.data.toPlaybackTrack
 import com.cangkir.bitperfectplayer.lyrics.AndroidContentFingerprintProvider
+import java.io.IOException
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -128,6 +133,16 @@ class LocalLibraryRepository(
             initialValue = LibrarySnapshot(),
         )
 
+    private data class DiscoveredLibrarySnapshot(
+        val mediaStorePass: MediaStoreDiscoveryResult,
+        val safTreeEntries: List<DiscoveredSafEntry>,
+        val safFileEntries: List<DiscoveredSafEntry>,
+        val signatures: List<DiscoveredAudioSignature>,
+        val scannedSources: Set<CachedTrackSourceKind>,
+    )
+
+    private data class SyncMutations(val entitiesToUpsert: List<CachedTrackEntity>, val positionBackfills: List<TrackPositionBackfill>)
+
     /**
      * Runs an incremental background library synchronization without ever clearing the displayed
      * track list. Only newly added or modified (`size` / `dateModified`) files incur metadata parsing.
@@ -137,163 +152,200 @@ class LocalLibraryRepository(
             isScanning.value = true
             scanWarning.value = null
             try {
-                val cachedEntities = persistenceRepository.getAllCachedTracks()
-                val cachedByUri = cachedEntities.associateBy { it.uriString }
-                val cachedSignatures = cachedEntities.map { entity ->
-                    CachedTrackSignature(
-                        track = entity.toPlaybackTrack(),
-                        sourceKind = CachedTrackSourceKind.fromStoredName(entity.sourceKind),
-                    )
-                }
-
-                val prefs = runCatching { preferencesRepository.getSnapshot() }.getOrNull()
-                val discoveredSignatures = mutableListOf<DiscoveredAudioSignature>()
-                val scannedSources = linkedSetOf<CachedTrackSourceKind>()
-
-                // 1. Fast MediaStore scan pass (does not run per-file header parsing yet).
-                val mediaStorePass = discoverMediaStoreCandidates()
-                if (mediaStorePass.permissionGranted) {
-                    scannedSources.add(CachedTrackSourceKind.MEDIA_STORE)
-                    mediaStorePass.candidates.forEach { item ->
-                        discoveredSignatures.add(
-                            DiscoveredAudioSignature(
-                                uriString = item.uriString,
-                                fileSizeBytes = item.sizeBytes,
-                                dateModifiedSeconds = item.dateModifiedSeconds,
-                                sourceKind = CachedTrackSourceKind.MEDIA_STORE,
-                            ),
-                        )
-                    }
-                }
-
-                // 2. Fast SAF tree & single-file discovery pass.
-                val safTreeDiscovered = mutableListOf<DiscoveredSafEntry>()
-                prefs?.persistedSafTreeUris?.forEach { uriStr ->
-                    safTreeDiscovered.addAll(discoverSafTreeCandidates(uriStr.toUri()))
-                }
-                scannedSources.add(CachedTrackSourceKind.SAF_TREE)
-                safTreeDiscovered.forEach { entry ->
-                    discoveredSignatures.add(
-                        DiscoveredAudioSignature(
-                            uriString = entry.uriString,
-                            fileSizeBytes = entry.sizeBytes,
-                            dateModifiedSeconds = entry.dateModifiedSeconds,
-                            sourceKind = CachedTrackSourceKind.SAF_TREE,
-                        ),
-                    )
-                }
-
-                val safFileDiscovered = mutableListOf<DiscoveredSafEntry>()
-                prefs?.persistedSafFileUris?.forEach { uriStr ->
-                    discoverSingleSafFileCandidate(uriStr.toUri())?.let { safFileDiscovered.add(it) }
-                }
-                scannedSources.add(CachedTrackSourceKind.SAF_FILE)
-                safFileDiscovered.forEach { entry ->
-                    discoveredSignatures.add(
-                        DiscoveredAudioSignature(
-                            uriString = entry.uriString,
-                            fileSizeBytes = entry.sizeBytes,
-                            dateModifiedSeconds = entry.dateModifiedSeconds,
-                            sourceKind = CachedTrackSourceKind.SAF_FILE,
-                        ),
-                    )
-                }
-
-                // 3. Diff against Room cache: parse ONLY added/modified entries, prune ONLY deleted ones.
-                val plan = LibrarySyncDiffer.computePlan(
-                    cached = cachedSignatures,
-                    discovered = discoveredSignatures,
-                    scannedSourceKinds = scannedSources,
-                )
-
-                val nowEpoch = System.currentTimeMillis()
-                val entitiesToUpsert = mutableListOf<CachedTrackEntity>()
-                val positionBackfills = mutableListOf<TrackPositionBackfill>()
-
-                // Parse only new/changed MediaStore files; cursor-only backfill for unchanged rows missing disc/track numbers
-                for (candidate in mediaStorePass.candidates) {
-                    val existing = cachedByUri[candidate.uriString]
-                    if (candidate.uriString in plan.toParseUris) {
-                        entitiesToUpsert.add(
-                            parseMediaStoreCandidate(candidate, existingFingerprint = existing?.contentFingerprint)
-                                .toCachedEntity(CachedTrackSourceKind.MEDIA_STORE, nowEpoch),
-                        )
-                    } else if (existing != null && existing.discNumber == 0 && existing.trackNumber == 0) {
-                        val resolved = TrackNumberParser.resolve(
-                            mediaStorePackedTrack = candidate.packedTrack,
-                            trackNumberTag = candidate.cdTrackNumber,
-                            discNumberTag = candidate.discNumber,
-                            fileName = candidate.displayName,
-                        )
-                        if (resolved.hasPosition) {
-                            positionBackfills.add(
-                                TrackPositionBackfill(
-                                    uriString = candidate.uriString,
-                                    discNumber = resolved.discNumber,
-                                    trackNumber = resolved.trackNumber,
-                                ),
-                            )
-                        }
-                    }
-                }
-
-                // Parse only new/changed SAF tree files; zero-I/O filename backfill for unchanged SAF rows missing disc/track numbers
-                for (entry in safTreeDiscovered) {
-                    val existing = cachedByUri[entry.uriString]
-                    if (entry.uriString in plan.toParseUris) {
-                        entitiesToUpsert.add(
-                            parseSafEntry(entry, existingFingerprint = existing?.contentFingerprint)
-                                .toCachedEntity(CachedTrackSourceKind.SAF_TREE, nowEpoch),
-                        )
-                    } else if (existing != null && existing.discNumber == 0 && existing.trackNumber == 0) {
-                        val resolved = TrackNumberParser.parseFilenamePosition(entry.fileName)
-                        if (resolved.hasPosition) {
-                            positionBackfills.add(
-                                TrackPositionBackfill(
-                                    uriString = entry.uriString,
-                                    discNumber = resolved.discNumber,
-                                    trackNumber = resolved.trackNumber,
-                                ),
-                            )
-                        }
-                    }
-                }
-
-                // Parse only new/changed single SAF files; zero-I/O filename backfill for unchanged rows
-                for (entry in safFileDiscovered) {
-                    val existing = cachedByUri[entry.uriString]
-                    if (entry.uriString in plan.toParseUris) {
-                        entitiesToUpsert.add(
-                            parseSafEntry(entry, existingFingerprint = existing?.contentFingerprint)
-                                .toCachedEntity(CachedTrackSourceKind.SAF_FILE, nowEpoch),
-                        )
-                    } else if (existing != null && existing.discNumber == 0 && existing.trackNumber == 0) {
-                        val resolved = TrackNumberParser.parseFilenamePosition(entry.fileName)
-                        if (resolved.hasPosition) {
-                            positionBackfills.add(
-                                TrackPositionBackfill(
-                                    uriString = entry.uriString,
-                                    discNumber = resolved.discNumber,
-                                    trackNumber = resolved.trackNumber,
-                                ),
-                            )
-                        }
-                    }
-                }
-
-                if (entitiesToUpsert.isNotEmpty()) {
-                    persistenceRepository.upsertCachedTracks(entitiesToUpsert)
-                }
-                if (positionBackfills.isNotEmpty()) {
-                    persistenceRepository.backfillCachedTrackPositions(positionBackfills)
-                }
-                if (plan.toPruneUris.isNotEmpty()) {
-                    persistenceRepository.deleteCachedTracksByUris(plan.toPruneUris)
-                }
-            } catch (e: Exception) {
+                syncLibraryOnceLocked()
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (e: IOException) {
+                scanWarning.value = "Library sync issue: ${e.message}"
+            } catch (e: SecurityException) {
+                scanWarning.value = "Library sync issue: ${e.message}"
+            } catch (e: SQLiteException) {
+                scanWarning.value = "Library sync issue: ${e.message}"
+            } catch (e: IllegalStateException) {
+                scanWarning.value = "Library sync issue: ${e.message}"
+            } catch (e: IllegalArgumentException) {
                 scanWarning.value = "Library sync issue: ${e.message}"
             } finally {
                 isScanning.value = false
+            }
+        }
+    }
+
+    private suspend fun syncLibraryOnceLocked() {
+        val cachedEntities = persistenceRepository.getAllCachedTracks()
+        val cachedByUri = cachedEntities.associateBy { it.uriString }
+        val cachedSignatures = cachedEntities.map { entity ->
+            CachedTrackSignature(
+                track = entity.toPlaybackTrack(),
+                sourceKind = CachedTrackSourceKind.fromStoredName(entity.sourceKind),
+            )
+        }
+
+        val prefs = runCatching { preferencesRepository.getSnapshot() }.getOrNull()
+        val discovered = discoverLibrarySnapshot(prefs)
+        val plan = LibrarySyncDiffer.computePlan(
+            cached = cachedSignatures,
+            discovered = discovered.signatures,
+            scannedSourceKinds = discovered.scannedSources,
+        )
+        val mutations = collectSyncMutations(
+            discovered = discovered,
+            cachedByUri = cachedByUri,
+            toParseUris = plan.toParseUris,
+            nowEpoch = System.currentTimeMillis(),
+        )
+
+        if (mutations.entitiesToUpsert.isNotEmpty()) {
+            persistenceRepository.upsertCachedTracks(mutations.entitiesToUpsert)
+        }
+        if (mutations.positionBackfills.isNotEmpty()) {
+            persistenceRepository.backfillCachedTrackPositions(mutations.positionBackfills)
+        }
+        if (plan.toPruneUris.isNotEmpty()) {
+            persistenceRepository.deleteCachedTracksByUris(plan.toPruneUris)
+        }
+    }
+
+    private fun discoverLibrarySnapshot(prefs: UserPreferences?): DiscoveredLibrarySnapshot {
+        val signatures = mutableListOf<DiscoveredAudioSignature>()
+        val scannedSources = linkedSetOf<CachedTrackSourceKind>()
+
+        val mediaStorePass = discoverMediaStoreCandidates()
+        if (mediaStorePass.permissionGranted) {
+            scannedSources.add(CachedTrackSourceKind.MEDIA_STORE)
+            mediaStorePass.candidates.forEach { item ->
+                signatures.add(
+                    DiscoveredAudioSignature(
+                        uriString = item.uriString,
+                        fileSizeBytes = item.sizeBytes,
+                        dateModifiedSeconds = item.dateModifiedSeconds,
+                        sourceKind = CachedTrackSourceKind.MEDIA_STORE,
+                    ),
+                )
+            }
+        }
+
+        val safTreeEntries = buildList {
+            prefs?.persistedSafTreeUris?.forEach { uriStr ->
+                addAll(discoverSafTreeCandidates(uriStr.toUri()))
+            }
+        }
+        scannedSources.add(CachedTrackSourceKind.SAF_TREE)
+        safTreeEntries.forEach { entry ->
+            signatures.add(entry.toDiscoveredSignature(CachedTrackSourceKind.SAF_TREE))
+        }
+
+        val safFileEntries = buildList {
+            prefs?.persistedSafFileUris?.forEach { uriStr ->
+                discoverSingleSafFileCandidate(uriStr.toUri())?.let { add(it) }
+            }
+        }
+        scannedSources.add(CachedTrackSourceKind.SAF_FILE)
+        safFileEntries.forEach { entry ->
+            signatures.add(entry.toDiscoveredSignature(CachedTrackSourceKind.SAF_FILE))
+        }
+
+        return DiscoveredLibrarySnapshot(
+            mediaStorePass = mediaStorePass,
+            safTreeEntries = safTreeEntries,
+            safFileEntries = safFileEntries,
+            signatures = signatures,
+            scannedSources = scannedSources,
+        )
+    }
+
+    private fun DiscoveredSafEntry.toDiscoveredSignature(sourceKind: CachedTrackSourceKind): DiscoveredAudioSignature =
+        DiscoveredAudioSignature(
+            uriString = uriString,
+            fileSizeBytes = sizeBytes,
+            dateModifiedSeconds = dateModifiedSeconds,
+            sourceKind = sourceKind,
+        )
+
+    private fun collectSyncMutations(
+        discovered: DiscoveredLibrarySnapshot,
+        cachedByUri: Map<String, CachedTrackEntity>,
+        toParseUris: Set<String>,
+        nowEpoch: Long,
+    ): SyncMutations {
+        val entitiesToUpsert = mutableListOf<CachedTrackEntity>()
+        val positionBackfills = mutableListOf<TrackPositionBackfill>()
+
+        for (candidate in discovered.mediaStorePass.candidates) {
+            val existing = cachedByUri[candidate.uriString]
+            if (candidate.uriString in toParseUris) {
+                entitiesToUpsert.add(
+                    parseMediaStoreCandidate(candidate, existingFingerprint = existing?.contentFingerprint)
+                        .toCachedEntity(CachedTrackSourceKind.MEDIA_STORE, nowEpoch),
+                )
+            } else if (existing != null && existing.discNumber == 0 && existing.trackNumber == 0) {
+                val resolved = TrackNumberParser.resolve(
+                    mediaStorePackedTrack = candidate.packedTrack,
+                    trackNumberTag = candidate.cdTrackNumber,
+                    discNumberTag = candidate.discNumber,
+                    fileName = candidate.displayName,
+                )
+                if (resolved.hasPosition) {
+                    positionBackfills.add(
+                        TrackPositionBackfill(
+                            uriString = candidate.uriString,
+                            discNumber = resolved.discNumber,
+                            trackNumber = resolved.trackNumber,
+                        ),
+                    )
+                }
+            }
+        }
+
+        collectSafSyncMutations(
+            entries = discovered.safTreeEntries,
+            sourceKind = CachedTrackSourceKind.SAF_TREE,
+            cachedByUri = cachedByUri,
+            toParseUris = toParseUris,
+            nowEpoch = nowEpoch,
+            entitiesToUpsert = entitiesToUpsert,
+            positionBackfills = positionBackfills,
+        )
+        collectSafSyncMutations(
+            entries = discovered.safFileEntries,
+            sourceKind = CachedTrackSourceKind.SAF_FILE,
+            cachedByUri = cachedByUri,
+            toParseUris = toParseUris,
+            nowEpoch = nowEpoch,
+            entitiesToUpsert = entitiesToUpsert,
+            positionBackfills = positionBackfills,
+        )
+
+        return SyncMutations(entitiesToUpsert = entitiesToUpsert, positionBackfills = positionBackfills)
+    }
+
+    private fun collectSafSyncMutations(
+        entries: List<DiscoveredSafEntry>,
+        sourceKind: CachedTrackSourceKind,
+        cachedByUri: Map<String, CachedTrackEntity>,
+        toParseUris: Set<String>,
+        nowEpoch: Long,
+        entitiesToUpsert: MutableList<CachedTrackEntity>,
+        positionBackfills: MutableList<TrackPositionBackfill>,
+    ) {
+        for (entry in entries) {
+            val existing = cachedByUri[entry.uriString]
+            if (entry.uriString in toParseUris) {
+                entitiesToUpsert.add(
+                    parseSafEntry(entry, existingFingerprint = existing?.contentFingerprint)
+                        .toCachedEntity(sourceKind, nowEpoch),
+                )
+            } else if (existing != null && existing.discNumber == 0 && existing.trackNumber == 0) {
+                val resolved = TrackNumberParser.parseFilenamePosition(entry.fileName)
+                if (resolved.hasPosition) {
+                    positionBackfills.add(
+                        TrackPositionBackfill(
+                            uriString = entry.uriString,
+                            discNumber = resolved.discNumber,
+                            trackNumber = resolved.trackNumber,
+                        ),
+                    )
+                }
             }
         }
     }
@@ -364,18 +416,34 @@ class LocalLibraryRepository(
                     targetFavorite = targetFavorite,
                 )
 
-                // Clear override only if it still reflects our target state (respect newer taps).
-                optimisticFavorites.update { current ->
-                    if (current[track.uriString] == targetFavorite) current - track.uriString else current
-                }
+                clearOptimisticFavorite(track.uriString, targetFavorite)
                 Result.success(targetFavorite)
-            } catch (e: Exception) {
-                // Roll back optimistic toggle on persistence failure.
-                optimisticFavorites.update { current ->
-                    if (current[track.uriString] == targetFavorite) current - track.uriString else current
-                }
+            } catch (ce: CancellationException) {
+                clearOptimisticFavorite(track.uriString, targetFavorite)
+                throw ce
+            } catch (e: IOException) {
+                clearOptimisticFavorite(track.uriString, targetFavorite)
+                Result.failure(e)
+            } catch (e: SecurityException) {
+                clearOptimisticFavorite(track.uriString, targetFavorite)
+                Result.failure(e)
+            } catch (e: SQLiteException) {
+                clearOptimisticFavorite(track.uriString, targetFavorite)
+                Result.failure(e)
+            } catch (e: IllegalStateException) {
+                clearOptimisticFavorite(track.uriString, targetFavorite)
+                Result.failure(e)
+            } catch (e: IllegalArgumentException) {
+                clearOptimisticFavorite(track.uriString, targetFavorite)
                 Result.failure(e)
             }
+        }
+    }
+
+    private fun clearOptimisticFavorite(uriString: String, expectedState: Boolean) {
+        // Clear override only if it still reflects our target state (respect newer taps).
+        optimisticFavorites.update { current ->
+            if (current[uriString] == expectedState) current - uriString else current
         }
     }
 
@@ -388,10 +456,7 @@ class LocalLibraryRepository(
         }
     }
 
-    private data class MediaStoreDiscoveryResult(
-        val permissionGranted: Boolean,
-        val candidates: List<RawMediaStoreCandidate>,
-    )
+    private data class MediaStoreDiscoveryResult(val permissionGranted: Boolean, val candidates: List<RawMediaStoreCandidate>)
 
     private data class RawMediaStoreCandidate(
         val uri: Uri,
@@ -433,50 +498,62 @@ class LocalLibraryRepository(
         return ContextCompat.checkSelfPermission(appContext, permission) == PackageManager.PERMISSION_GRANTED
     }
 
+    private class MediaStoreColumnIndices(cursor: Cursor) {
+        val id = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
+        val name = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DISPLAY_NAME)
+        val title = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)
+        val artist = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST)
+        val album = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM)
+        val track = cursor.getColumnIndex(MediaStore.Audio.Media.TRACK)
+        val cdTrack = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            cursor.getColumnIndex(MediaStore.Audio.Media.CD_TRACK_NUMBER)
+        } else {
+            -1
+        }
+        val disc = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            cursor.getColumnIndex(MediaStore.Audio.Media.DISC_NUMBER)
+        } else {
+            -1
+        }
+        val duration = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
+        val size = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.SIZE)
+        val dateModified = cursor.getColumnIndex(MediaStore.Audio.Media.DATE_MODIFIED)
+        val mime = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.MIME_TYPE)
+        val isMusic = cursor.getColumnIndex(MediaStore.Audio.Media.IS_MUSIC)
+        val isRingtone = cursor.getColumnIndex(MediaStore.Audio.Media.IS_RINGTONE)
+        val isAlarm = cursor.getColumnIndex(MediaStore.Audio.Media.IS_ALARM)
+        val isNotification = cursor.getColumnIndex(MediaStore.Audio.Media.IS_NOTIFICATION)
+        val isRecording = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            cursor.getColumnIndex(MediaStore.Audio.Media.IS_RECORDING)
+        } else {
+            -1
+        }
+        val relPath = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            cursor.getColumnIndex(MediaStore.Audio.Media.RELATIVE_PATH)
+        } else {
+            -1
+        }
+        val bucket = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            cursor.getColumnIndex(MediaStore.Audio.Media.BUCKET_DISPLAY_NAME)
+        } else {
+            -1
+        }
+
+        @Suppress("DEPRECATION")
+        val legacyData = if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            cursor.getColumnIndex(MediaStore.Audio.Media.DATA)
+        } else {
+            -1
+        }
+    }
+
     private fun discoverMediaStoreCandidates(): MediaStoreDiscoveryResult {
         if (!hasMediaStoreAudioPermission()) {
             return MediaStoreDiscoveryResult(permissionGranted = false, candidates = emptyList())
         }
         val results = mutableListOf<RawMediaStoreCandidate>()
-        val projection = buildList {
-            add(MediaStore.Audio.Media._ID)
-            add(MediaStore.Audio.Media.DISPLAY_NAME)
-            add(MediaStore.Audio.Media.TITLE)
-            add(MediaStore.Audio.Media.ARTIST)
-            add(MediaStore.Audio.Media.ALBUM)
-            add(MediaStore.Audio.Media.TRACK)
-            add(MediaStore.Audio.Media.DURATION)
-            add(MediaStore.Audio.Media.SIZE)
-            add(MediaStore.Audio.Media.DATE_MODIFIED)
-            add(MediaStore.Audio.Media.MIME_TYPE)
-            add(MediaStore.Audio.Media.IS_MUSIC)
-            add(MediaStore.Audio.Media.IS_RINGTONE)
-            add(MediaStore.Audio.Media.IS_ALARM)
-            add(MediaStore.Audio.Media.IS_NOTIFICATION)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                add(MediaStore.Audio.Media.CD_TRACK_NUMBER)
-                add(MediaStore.Audio.Media.DISC_NUMBER)
-            }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                add(MediaStore.Audio.Media.IS_RECORDING)
-            }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                add(MediaStore.Audio.Media.RELATIVE_PATH)
-                add(MediaStore.Audio.Media.BUCKET_DISPLAY_NAME)
-            } else {
-                @Suppress("DEPRECATION")
-                add(MediaStore.Audio.Media.DATA)
-            }
-        }.toTypedArray()
-
-        val selection = buildString {
-            append("${MediaStore.Audio.Media.IS_RINGTONE} = 0 ")
-            append("AND ${MediaStore.Audio.Media.IS_ALARM} = 0 ")
-            append("AND ${MediaStore.Audio.Media.IS_NOTIFICATION} = 0")
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                append(" AND ${MediaStore.Audio.Media.IS_RECORDING} = 0")
-            }
-        }
+        val projection = buildMediaStoreProjection()
+        val selection = buildMediaStoreSelection()
         val sortOrder = "${MediaStore.Audio.Media.TITLE} ASC"
 
         return try {
@@ -487,129 +564,9 @@ class LocalLibraryRepository(
                 null,
                 sortOrder,
             )?.use { cursor ->
-                val idCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
-                val nameCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DISPLAY_NAME)
-                val titleCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)
-                val artistCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST)
-                val albumCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM)
-                val trackCol = cursor.getColumnIndex(MediaStore.Audio.Media.TRACK)
-                val cdTrackCol = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                    cursor.getColumnIndex(MediaStore.Audio.Media.CD_TRACK_NUMBER)
-                } else {
-                    -1
-                }
-                val discCol = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                    cursor.getColumnIndex(MediaStore.Audio.Media.DISC_NUMBER)
-                } else {
-                    -1
-                }
-                val durationCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
-                val sizeCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.SIZE)
-                val dateModCol = cursor.getColumnIndex(MediaStore.Audio.Media.DATE_MODIFIED)
-                val mimeCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.MIME_TYPE)
-                val isMusicCol = cursor.getColumnIndex(MediaStore.Audio.Media.IS_MUSIC)
-                val isRingtoneCol = cursor.getColumnIndex(MediaStore.Audio.Media.IS_RINGTONE)
-                val isAlarmCol = cursor.getColumnIndex(MediaStore.Audio.Media.IS_ALARM)
-                val isNotificationCol = cursor.getColumnIndex(MediaStore.Audio.Media.IS_NOTIFICATION)
-                val isRecordingCol = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    cursor.getColumnIndex(MediaStore.Audio.Media.IS_RECORDING)
-                } else {
-                    -1
-                }
-                val relPathCol = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    cursor.getColumnIndex(MediaStore.Audio.Media.RELATIVE_PATH)
-                } else {
-                    -1
-                }
-                val bucketCol = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    cursor.getColumnIndex(MediaStore.Audio.Media.BUCKET_DISPLAY_NAME)
-                } else {
-                    -1
-                }
-                @Suppress("DEPRECATION")
-                val dataCol = if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-                    cursor.getColumnIndex(MediaStore.Audio.Media.DATA)
-                } else {
-                    -1
-                }
-
+                val cols = MediaStoreColumnIndices(cursor)
                 while (cursor.moveToNext()) {
-                    val id = cursor.getLong(idCol)
-                    val displayName = cursor.getString(nameCol)?.trim().orEmpty()
-                    val mimeType = cursor.getString(mimeCol)?.trim()
-                    val format = AudioFormatClassifier.classify(displayName, mimeType) ?: continue
-
-                    val sizeBytes = cursor.getLong(sizeCol).coerceAtLeast(0L)
-                    val dateModifiedSeconds = if (dateModCol >= 0) cursor.getLong(dateModCol).coerceAtLeast(0L) else 0L
-                    val durationMs = cursor.getLong(durationCol).coerceAtLeast(0L)
-                    val relativePath = if (relPathCol >= 0) cursor.getString(relPathCol)?.trim() else null
-                    val bucketName = if (bucketCol >= 0) cursor.getString(bucketCol)?.trim() else null
-                    val legacyDataPath = if (dataCol >= 0) cursor.getString(dataCol)?.trim() else null
-
-                    val scanCandidate = MediaScanFilter.MediaStoreScanCandidate(
-                        displayName = displayName,
-                        relativePath = relativePath,
-                        legacyDataPath = legacyDataPath,
-                        bucketName = bucketName,
-                        durationMs = durationMs,
-                        sizeBytes = sizeBytes,
-                        format = format,
-                        isMusic = isMusicCol < 0 || cursor.getInt(isMusicCol) != 0,
-                        isRingtone = isRingtoneCol >= 0 && cursor.getInt(isRingtoneCol) != 0,
-                        isAlarm = isAlarmCol >= 0 && cursor.getInt(isAlarmCol) != 0,
-                        isNotification = isNotificationCol >= 0 && cursor.getInt(isNotificationCol) != 0,
-                        isRecording = isRecordingCol >= 0 && cursor.getInt(isRecordingCol) != 0,
-                    )
-                    if (!MediaScanFilter.shouldIncludeInAutoScan(scanCandidate)) continue
-
-                    val contentUri = ContentUris.withAppendedId(
-                        MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
-                        id,
-                    )
-                    val legacyFolder = legacyDataPath
-                        ?.substringBeforeLast('/', "")
-                        ?.substringAfterLast('/', "")
-                    val folderName = bucketName?.takeIf { it.isNotEmpty() }
-                        ?: relativePath?.trimEnd('/')?.substringAfterLast('/')?.takeIf { it.isNotEmpty() }
-                        ?: legacyFolder?.takeIf { it.isNotEmpty() }
-                        ?: "Internal Storage"
-
-                    val packedTrack = if (trackCol >= 0 && !cursor.isNull(trackCol)) {
-                        cursor.getInt(trackCol)
-                    } else {
-                        0
-                    }
-                    val cdTrackNumber = if (cdTrackCol >= 0 && !cursor.isNull(cdTrackCol)) {
-                        cursor.getString(cdTrackCol)?.trim()
-                    } else {
-                        null
-                    }
-                    val discNumber = if (discCol >= 0 && !cursor.isNull(discCol)) {
-                        cursor.getString(discCol)?.trim()
-                    } else {
-                        null
-                    }
-
-                    results.add(
-                        RawMediaStoreCandidate(
-                            uri = contentUri,
-                            uriString = contentUri.toString(),
-                            displayName = displayName,
-                            mimeType = mimeType,
-                            format = format,
-                            sizeBytes = sizeBytes,
-                            dateModifiedSeconds = dateModifiedSeconds,
-                            durationMs = durationMs,
-                            rawTitle = cursor.getString(titleCol)?.trim(),
-                            rawArtist = cursor.getString(artistCol)?.trim(),
-                            rawAlbum = cursor.getString(albumCol)?.trim(),
-                            packedTrack = packedTrack,
-                            cdTrackNumber = cdTrackNumber,
-                            discNumber = discNumber,
-                            folderName = folderName,
-                            relativePath = relativePath,
-                        ),
-                    )
+                    readMediaStoreCandidateRow(cursor, cols)?.let { results.add(it) }
                 }
             }
             MediaStoreDiscoveryResult(permissionGranted = true, candidates = results)
@@ -618,10 +575,117 @@ class LocalLibraryRepository(
         }
     }
 
-    private fun parseMediaStoreCandidate(
-        candidate: RawMediaStoreCandidate,
-        existingFingerprint: String?,
-    ): PlaybackTrack {
+    private fun buildMediaStoreProjection(): Array<String> = buildList {
+        add(MediaStore.Audio.Media._ID)
+        add(MediaStore.Audio.Media.DISPLAY_NAME)
+        add(MediaStore.Audio.Media.TITLE)
+        add(MediaStore.Audio.Media.ARTIST)
+        add(MediaStore.Audio.Media.ALBUM)
+        add(MediaStore.Audio.Media.TRACK)
+        add(MediaStore.Audio.Media.DURATION)
+        add(MediaStore.Audio.Media.SIZE)
+        add(MediaStore.Audio.Media.DATE_MODIFIED)
+        add(MediaStore.Audio.Media.MIME_TYPE)
+        add(MediaStore.Audio.Media.IS_MUSIC)
+        add(MediaStore.Audio.Media.IS_RINGTONE)
+        add(MediaStore.Audio.Media.IS_ALARM)
+        add(MediaStore.Audio.Media.IS_NOTIFICATION)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            add(MediaStore.Audio.Media.CD_TRACK_NUMBER)
+            add(MediaStore.Audio.Media.DISC_NUMBER)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            add(MediaStore.Audio.Media.IS_RECORDING)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            add(MediaStore.Audio.Media.RELATIVE_PATH)
+            add(MediaStore.Audio.Media.BUCKET_DISPLAY_NAME)
+        } else {
+            @Suppress("DEPRECATION")
+            add(MediaStore.Audio.Media.DATA)
+        }
+    }.toTypedArray()
+
+    private fun buildMediaStoreSelection(): String = buildString {
+        append("${MediaStore.Audio.Media.IS_RINGTONE} = 0 ")
+        append("AND ${MediaStore.Audio.Media.IS_ALARM} = 0 ")
+        append("AND ${MediaStore.Audio.Media.IS_NOTIFICATION} = 0")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            append(" AND ${MediaStore.Audio.Media.IS_RECORDING} = 0")
+        }
+    }
+
+    private fun readMediaStoreCandidateRow(cursor: Cursor, cols: MediaStoreColumnIndices): RawMediaStoreCandidate? {
+        val displayName = cursor.getString(cols.name)?.trim().orEmpty()
+        val mimeType = cursor.getString(cols.mime)?.trim()
+        val format = AudioFormatClassifier.classify(displayName, mimeType) ?: return null
+
+        val sizeBytes = cursor.getLong(cols.size).coerceAtLeast(0L)
+        val dateModifiedSeconds = if (cols.dateModified >= 0) cursor.getLong(cols.dateModified).coerceAtLeast(0L) else 0L
+        val durationMs = cursor.getLong(cols.duration).coerceAtLeast(0L)
+        val relativePath = cursor.getTrimmedStringOrNull(cols.relPath)
+        val bucketName = cursor.getTrimmedStringOrNull(cols.bucket)
+        val legacyDataPath = cursor.getTrimmedStringOrNull(cols.legacyData)
+
+        val scanCandidate = MediaScanFilter.MediaStoreScanCandidate(
+            displayName = displayName,
+            relativePath = relativePath,
+            legacyDataPath = legacyDataPath,
+            bucketName = bucketName,
+            durationMs = durationMs,
+            sizeBytes = sizeBytes,
+            format = format,
+            isMusic = cols.isMusic < 0 || cursor.getInt(cols.isMusic) != 0,
+            isRingtone = cols.isRingtone >= 0 && cursor.getInt(cols.isRingtone) != 0,
+            isAlarm = cols.isAlarm >= 0 && cursor.getInt(cols.isAlarm) != 0,
+            isNotification = cols.isNotification >= 0 && cursor.getInt(cols.isNotification) != 0,
+            isRecording = cols.isRecording >= 0 && cursor.getInt(cols.isRecording) != 0,
+        )
+        if (!MediaScanFilter.shouldIncludeInAutoScan(scanCandidate)) return null
+
+        val contentUri = ContentUris.withAppendedId(
+            MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+            cursor.getLong(cols.id),
+        )
+        val folderName = resolveMediaStoreFolderName(bucketName, relativePath, legacyDataPath)
+        val packedTrack = if (cols.track >= 0 && !cursor.isNull(cols.track)) cursor.getInt(cols.track) else 0
+
+        return RawMediaStoreCandidate(
+            uri = contentUri,
+            uriString = contentUri.toString(),
+            displayName = displayName,
+            mimeType = mimeType,
+            format = format,
+            sizeBytes = sizeBytes,
+            dateModifiedSeconds = dateModifiedSeconds,
+            durationMs = durationMs,
+            rawTitle = cursor.getString(cols.title)?.trim(),
+            rawArtist = cursor.getString(cols.artist)?.trim(),
+            rawAlbum = cursor.getString(cols.album)?.trim(),
+            packedTrack = packedTrack,
+            cdTrackNumber = cursor.getNonNullTrimmedStringOrNull(cols.cdTrack),
+            discNumber = cursor.getNonNullTrimmedStringOrNull(cols.disc),
+            folderName = folderName,
+            relativePath = relativePath,
+        )
+    }
+
+    private fun resolveMediaStoreFolderName(bucketName: String?, relativePath: String?, legacyDataPath: String?): String {
+        val legacyFolder = legacyDataPath
+            ?.substringBeforeLast('/', "")
+            ?.substringAfterLast('/', "")
+        return bucketName?.takeIf { it.isNotEmpty() }
+            ?: relativePath?.trimEnd('/')?.substringAfterLast('/')?.takeIf { it.isNotEmpty() }
+            ?: legacyFolder?.takeIf { it.isNotEmpty() }
+            ?: "Internal Storage"
+    }
+
+    private fun Cursor.getTrimmedStringOrNull(columnIndex: Int): String? = if (columnIndex >= 0) getString(columnIndex)?.trim() else null
+
+    private fun Cursor.getNonNullTrimmedStringOrNull(columnIndex: Int): String? =
+        if (columnIndex >= 0 && !isNull(columnIndex)) getString(columnIndex)?.trim() else null
+
+    private fun parseMediaStoreCandidate(candidate: RawMediaStoreCandidate, existingFingerprint: String?): PlaybackTrack {
         // Fast path: reads direct FileChannel header for FLAC/WAV and skips MediaMetadataRetriever
         // completely when cursor tags + direct header already supply sampleRateHz & durationMs.
         val meta = metadataReader.readMetadataForMediaStore(
@@ -730,10 +794,7 @@ class LocalLibraryRepository(
         )
     }
 
-    private fun parseSafEntry(
-        entry: DiscoveredSafEntry,
-        existingFingerprint: String?,
-    ): PlaybackTrack {
+    private fun parseSafEntry(entry: DiscoveredSafEntry, existingFingerprint: String?): PlaybackTrack {
         val meta = metadataReader.readMetadata(entry.uri, entry.fileName, entry.mimeType)
         return PlaybackTrack(
             uriString = entry.uriString,

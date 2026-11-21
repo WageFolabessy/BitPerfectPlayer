@@ -1,6 +1,9 @@
 package com.cangkir.bitperfectplayer.audio
 
 import com.cangkir.bitperfectplayer.lyrics.ByteArraySeekableByteSource
+import java.io.ByteArrayOutputStream
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -9,17 +12,12 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
-import java.io.ByteArrayOutputStream
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 
 class WavHeaderParserTest {
 
-    private fun le16(v: Int): ByteArray =
-        ByteBuffer.allocate(2).order(ByteOrder.LITTLE_ENDIAN).putShort(v.toShort()).array()
+    private fun le16(v: Int): ByteArray = ByteBuffer.allocate(2).order(ByteOrder.LITTLE_ENDIAN).putShort(v.toShort()).array()
 
-    private fun le32(v: Int): ByteArray =
-        ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(v).array()
+    private fun le32(v: Int): ByteArray = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(v).array()
 
     private fun buildStandardWav(
         sampleRate: Int,
@@ -112,14 +110,14 @@ class WavHeaderParserTest {
         // 4 stereo frames of 24-bit PCM = 4 * 2 * 3 = 24 bytes
         // Sample values: 0, +8388607 (0x7FFFFF), -8388608 (0x800000), -1 (0xFFFFFF), +1 (0x000001), -4194304 (0xC00000), +4194304 (0x400000), +123456
         val pcm24 = byteArrayOf(
-            0x00, 0x00, 0x00,                   // 0
+            0x00, 0x00, 0x00, // 0
             0xFF.toByte(), 0xFF.toByte(), 0x7F, // +8388607
-            0x00, 0x00, 0x80.toByte(),          // -8388608 (-1.0f exact)
+            0x00, 0x00, 0x80.toByte(), // -8388608 (-1.0f exact)
             0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(), // -1
-            0x01, 0x00, 0x00,                   // +1 (LSB preserved!)
-            0x00, 0x00, 0xC0.toByte(),          // -4194304 (-0.5f exact)
-            0x00, 0x00, 0x40,                   // +4194304 (+0.5f exact)
-            0x40, 0xE2.toByte(), 0x01,          // +123456
+            0x01, 0x00, 0x00, // +1 (LSB preserved!)
+            0x00, 0x00, 0xC0.toByte(), // -4194304 (-0.5f exact)
+            0x00, 0x00, 0x40, // +4194304 (+0.5f exact)
+            0x40, 0xE2.toByte(), 0x01, // +123456
         )
         val wavBytes = buildStandardWav(96_000, 2, 24, pcm24)
 

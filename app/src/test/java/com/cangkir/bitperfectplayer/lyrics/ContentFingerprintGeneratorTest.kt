@@ -1,9 +1,5 @@
 package com.cangkir.bitperfectplayer.lyrics
 
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotEquals
-import org.junit.Assert.assertTrue
-import org.junit.Test
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.IOException
@@ -12,6 +8,10 @@ import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.security.MessageDigest
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertTrue
+import org.junit.Test
 
 class ContentFingerprintGeneratorTest {
 
@@ -137,9 +137,8 @@ class ContentFingerprintGeneratorTest {
     fun ioFailure_returnsFailureResultWithoutCrashing() {
         val failingSource = object : SeekableByteSource {
             override val size: Long = 1024L
-            override fun readAt(offset: Long, buffer: ByteArray, destOffset: Int, length: Int): Int {
+            override fun readAt(offset: Long, buffer: ByteArray, destOffset: Int, length: Int): Int =
                 throw IOException("Simulated disk read error")
-            }
 
             override fun close() = Unit
         }

@@ -263,8 +263,11 @@ fun PlaylistsScreen(
                                 "${openedPlaylist.trackCount} ${if (openedPlaylist.trackCount == 1) "track" else "tracks"}"
                             showMostPlayedDetail ->
                                 "${playlistsState.totalPlays} total ${if (playlistsState.totalPlays == 1) "play" else "plays"}"
-                            else ->
-                                "${playlistsState.playlists.size} ${if (playlistsState.playlists.size == 1) "playlist" else "playlists"} · ${playlistsState.totalPlays} total ${if (playlistsState.totalPlays == 1) "play" else "plays"}"
+                            else -> {
+                                val listUnit = if (playlistsState.playlists.size == 1) "playlist" else "playlists"
+                                val playUnit = if (playlistsState.totalPlays == 1) "play" else "plays"
+                                "${playlistsState.playlists.size} $listUnit · ${playlistsState.totalPlays} total $playUnit"
+                            }
                         }
                         Text(
                             text = subtitle,
@@ -518,7 +521,8 @@ private fun PlaylistsOverviewList(
                     border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.55f)),
                 ) {
                     Text(
-                        text = "No qualified plays yet. Songs played for at least 30s (or half duration for shorter tracks) are counted automatically.",
+                        text = "No qualified plays yet. Songs played for at least 30s " +
+                            "(or half duration for shorter tracks) are counted automatically.",
                         style = MaterialTheme.typography.bodySmall,
                         color = TextMuted,
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),

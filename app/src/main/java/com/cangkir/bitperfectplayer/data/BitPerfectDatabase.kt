@@ -101,7 +101,8 @@ abstract class BitPerfectDatabase : RoomDatabase() {
                     """.trimIndent(),
                 )
                 db.execSQL(
-                    "CREATE INDEX IF NOT EXISTS `index_playlist_tracks_playlist_id_position_index` ON `playlist_tracks` (`playlist_id`, `position_index`)",
+                    "CREATE INDEX IF NOT EXISTS `index_playlist_tracks_playlist_id_position_index` " +
+                        "ON `playlist_tracks` (`playlist_id`, `position_index`)",
                 )
                 db.execSQL(
                     """
@@ -147,16 +148,15 @@ abstract class BitPerfectDatabase : RoomDatabase() {
         @Volatile
         private var instance: BitPerfectDatabase? = null
 
-        fun getInstance(context: Context): BitPerfectDatabase =
-            instance ?: synchronized(this) {
-                instance ?: Room.databaseBuilder(
-                    context.applicationContext,
-                    BitPerfectDatabase::class.java,
-                    DATABASE_NAME,
-                )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
-                    .build()
-                    .also { instance = it }
-            }
+        fun getInstance(context: Context): BitPerfectDatabase = instance ?: synchronized(this) {
+            instance ?: Room.databaseBuilder(
+                context.applicationContext,
+                BitPerfectDatabase::class.java,
+                DATABASE_NAME,
+            )
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                .build()
+                .also { instance = it }
+        }
     }
 }

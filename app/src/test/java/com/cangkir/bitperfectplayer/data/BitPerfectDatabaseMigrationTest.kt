@@ -4,6 +4,7 @@ import android.app.Application
 import android.database.sqlite.SQLiteDatabase
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
+import java.io.File
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -14,7 +15,6 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import java.io.File
 
 /**
  * End-to-end SQLite schema & migration verification test across Room v1 -> v2 -> v3 -> v4.
@@ -112,13 +112,16 @@ class BitPerfectDatabaseMigrationTest {
                 "CREATE INDEX IF NOT EXISTS `index_favorite_tracks_added_at_epoch_ms` ON `favorite_tracks` (`added_at_epoch_ms`)",
             )
             sqlite.execSQL(
-                "INSERT INTO `lyrics` VALUES ('$sampleFp1', '[00:01.00]Hello Audiophile', 1, 'LRC_FILE', '01 - Hello.flac', 35000000, 210000, 1700000000000)",
+                "INSERT INTO `lyrics` VALUES ('$sampleFp1', '[00:01.00]Hello Audiophile', " +
+                    "1, 'LRC_FILE', '01 - Hello.flac', 35000000, 210000, 1700000000000)",
             )
             sqlite.execSQL(
-                "INSERT INTO `track_history` VALUES ('$sampleFp1', 'content://media/external/audio/media/101', 'Hello', 'Artist A', 'Album A', '01 - Hello.flac', 210000, 1700000005000)",
+                "INSERT INTO `track_history` VALUES ('$sampleFp1', 'content://media/external/audio/media/101', " +
+                    "'Hello', 'Artist A', 'Album A', '01 - Hello.flac', 210000, 1700000005000)",
             )
             sqlite.execSQL(
-                "INSERT INTO `favorite_tracks` VALUES ('$sampleFp1', 'content://media/external/audio/media/101', 'Hello', 'Artist A', 'Album A', '01 - Hello.flac', 210000, 1700000009000)",
+                "INSERT INTO `favorite_tracks` VALUES ('$sampleFp1', 'content://media/external/audio/media/101', " +
+                    "'Hello', 'Artist A', 'Album A', '01 - Hello.flac', 210000, 1700000009000)",
             )
             sqlite.version = 1
         }
@@ -182,112 +185,7 @@ class BitPerfectDatabaseMigrationTest {
     fun migrateV2AndV3ToV4_preservesCachedTracksPlaylistsAndStatsWithDefaultDiscAndTrackNumbers() = runTest {
         // 1. Seed a Room v2 database with existing cached_tracks (19 columns, before disc_number/track_number)
         SQLiteDatabase.openOrCreateDatabase(dbFile, null).use { sqlite ->
-            sqlite.execSQL(
-                """
-                CREATE TABLE IF NOT EXISTS `lyrics` (
-                    `content_fingerprint` TEXT NOT NULL,
-                    `raw_lyrics_text` TEXT NOT NULL,
-                    `is_synced_lrc` INTEGER NOT NULL,
-                    `source_type` TEXT NOT NULL,
-                    `file_name` TEXT NOT NULL,
-                    `file_size_bytes` INTEGER NOT NULL,
-                    `duration_ms` INTEGER NOT NULL,
-                    `updated_at_epoch_ms` INTEGER NOT NULL,
-                    PRIMARY KEY(`content_fingerprint`)
-                )
-                """.trimIndent(),
-            )
-            sqlite.execSQL(
-                """
-                CREATE TABLE IF NOT EXISTS `track_history` (
-                    `content_fingerprint` TEXT NOT NULL,
-                    `track_uri` TEXT NOT NULL,
-                    `title` TEXT NOT NULL,
-                    `artist` TEXT NOT NULL,
-                    `album` TEXT NOT NULL,
-                    `file_name` TEXT NOT NULL,
-                    `duration_ms` INTEGER NOT NULL,
-                    `played_at_epoch_ms` INTEGER NOT NULL,
-                    PRIMARY KEY(`content_fingerprint`)
-                )
-                """.trimIndent(),
-            )
-            sqlite.execSQL(
-                "CREATE INDEX IF NOT EXISTS `index_track_history_played_at_epoch_ms` ON `track_history` (`played_at_epoch_ms`)",
-            )
-            sqlite.execSQL(
-                """
-                CREATE TABLE IF NOT EXISTS `favorite_tracks` (
-                    `content_fingerprint` TEXT NOT NULL,
-                    `track_uri` TEXT NOT NULL,
-                    `title` TEXT NOT NULL,
-                    `artist` TEXT NOT NULL,
-                    `album` TEXT NOT NULL,
-                    `file_name` TEXT NOT NULL,
-                    `duration_ms` INTEGER NOT NULL,
-                    `added_at_epoch_ms` INTEGER NOT NULL,
-                    PRIMARY KEY(`content_fingerprint`)
-                )
-                """.trimIndent(),
-            )
-            sqlite.execSQL(
-                "CREATE INDEX IF NOT EXISTS `index_favorite_tracks_added_at_epoch_ms` ON `favorite_tracks` (`added_at_epoch_ms`)",
-            )
-            sqlite.execSQL(
-                """
-                CREATE TABLE IF NOT EXISTS `cached_tracks` (
-                    `uri_string` TEXT NOT NULL,
-                    `title` TEXT NOT NULL,
-                    `artist` TEXT NOT NULL,
-                    `album` TEXT NOT NULL,
-                    `folder_name` TEXT NOT NULL,
-                    `file_name` TEXT NOT NULL,
-                    `mime_type` TEXT,
-                    `file_size_bytes` INTEGER NOT NULL,
-                    `date_modified_seconds` INTEGER NOT NULL,
-                    `duration_ms` INTEGER NOT NULL,
-                    `sample_rate_hz` INTEGER NOT NULL,
-                    `bit_depth` INTEGER,
-                    `container` TEXT NOT NULL,
-                    `codec` TEXT NOT NULL,
-                    `content_fingerprint` TEXT,
-                    `parent_tree_uri_string` TEXT,
-                    `relative_path` TEXT,
-                    `source_kind` TEXT NOT NULL,
-                    `last_synced_epoch_ms` INTEGER NOT NULL,
-                    PRIMARY KEY(`uri_string`)
-                )
-                """.trimIndent(),
-            )
-            sqlite.execSQL(
-                "CREATE INDEX IF NOT EXISTS `index_cached_tracks_title` ON `cached_tracks` (`title`)",
-            )
-            sqlite.execSQL(
-                """
-                INSERT INTO `cached_tracks` VALUES (
-                    'content://media/external/audio/media/202',
-                    'Peacemaker',
-                    'Green Day',
-                    '21st Century Breakdown',
-                    'Music',
-                    '07 - Peacemaker.flac',
-                    'audio/flac',
-                    42500000,
-                    1700000000,
-                    204000,
-                    96000,
-                    24,
-                    'FLAC',
-                    'FLAC',
-                    '$sampleFp2',
-                    NULL,
-                    'Music/Green Day/',
-                    'MEDIA_STORE',
-                    1700000000000
-                )
-                """.trimIndent(),
-            )
-            sqlite.version = 2
+            seedV2SchemaAndRow(sqlite)
         }
 
         // 2. Open with Room v4 (runs MIGRATION_2_3 and MIGRATION_3_4)
@@ -338,5 +236,114 @@ class BitPerfectDatabaseMigrationTest {
         assertEquals(1, db.playlistDao().getTracksForPlaylist(playlistId).size)
         db.playlistDao().deletePlaylistById(playlistId)
         assertEquals(0, db.playlistDao().getTracksForPlaylist(playlistId).size)
+    }
+
+    private fun seedV2SchemaAndRow(sqlite: SQLiteDatabase) {
+        sqlite.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `lyrics` (
+                `content_fingerprint` TEXT NOT NULL,
+                `raw_lyrics_text` TEXT NOT NULL,
+                `is_synced_lrc` INTEGER NOT NULL,
+                `source_type` TEXT NOT NULL,
+                `file_name` TEXT NOT NULL,
+                `file_size_bytes` INTEGER NOT NULL,
+                `duration_ms` INTEGER NOT NULL,
+                `updated_at_epoch_ms` INTEGER NOT NULL,
+                PRIMARY KEY(`content_fingerprint`)
+            )
+            """.trimIndent(),
+        )
+        sqlite.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `track_history` (
+                `content_fingerprint` TEXT NOT NULL,
+                `track_uri` TEXT NOT NULL,
+                `title` TEXT NOT NULL,
+                `artist` TEXT NOT NULL,
+                `album` TEXT NOT NULL,
+                `file_name` TEXT NOT NULL,
+                `duration_ms` INTEGER NOT NULL,
+                `played_at_epoch_ms` INTEGER NOT NULL,
+                PRIMARY KEY(`content_fingerprint`)
+            )
+            """.trimIndent(),
+        )
+        sqlite.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_track_history_played_at_epoch_ms` ON `track_history` (`played_at_epoch_ms`)",
+        )
+        sqlite.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `favorite_tracks` (
+                `content_fingerprint` TEXT NOT NULL,
+                `track_uri` TEXT NOT NULL,
+                `title` TEXT NOT NULL,
+                `artist` TEXT NOT NULL,
+                `album` TEXT NOT NULL,
+                `file_name` TEXT NOT NULL,
+                `duration_ms` INTEGER NOT NULL,
+                `added_at_epoch_ms` INTEGER NOT NULL,
+                PRIMARY KEY(`content_fingerprint`)
+            )
+            """.trimIndent(),
+        )
+        sqlite.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_favorite_tracks_added_at_epoch_ms` ON `favorite_tracks` (`added_at_epoch_ms`)",
+        )
+        sqlite.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `cached_tracks` (
+                `uri_string` TEXT NOT NULL,
+                `title` TEXT NOT NULL,
+                `artist` TEXT NOT NULL,
+                `album` TEXT NOT NULL,
+                `folder_name` TEXT NOT NULL,
+                `file_name` TEXT NOT NULL,
+                `mime_type` TEXT,
+                `file_size_bytes` INTEGER NOT NULL,
+                `date_modified_seconds` INTEGER NOT NULL,
+                `duration_ms` INTEGER NOT NULL,
+                `sample_rate_hz` INTEGER NOT NULL,
+                `bit_depth` INTEGER,
+                `container` TEXT NOT NULL,
+                `codec` TEXT NOT NULL,
+                `content_fingerprint` TEXT,
+                `parent_tree_uri_string` TEXT,
+                `relative_path` TEXT,
+                `source_kind` TEXT NOT NULL,
+                `last_synced_epoch_ms` INTEGER NOT NULL,
+                PRIMARY KEY(`uri_string`)
+            )
+            """.trimIndent(),
+        )
+        sqlite.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_cached_tracks_title` ON `cached_tracks` (`title`)",
+        )
+        sqlite.execSQL(
+            """
+            INSERT INTO `cached_tracks` VALUES (
+                'content://media/external/audio/media/202',
+                'Peacemaker',
+                'Green Day',
+                '21st Century Breakdown',
+                'Music',
+                '07 - Peacemaker.flac',
+                'audio/flac',
+                42500000,
+                1700000000,
+                204000,
+                96000,
+                24,
+                'FLAC',
+                'FLAC',
+                '$sampleFp2',
+                NULL,
+                'Music/Green Day/',
+                'MEDIA_STORE',
+                1700000000000
+            )
+            """.trimIndent(),
+        )
+        sqlite.version = 2
     }
 }

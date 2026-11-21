@@ -1,10 +1,10 @@
 package com.cangkir.bitperfectplayer.audio
 
+import kotlin.math.abs
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import kotlin.math.abs
 
 class VinylScrubMathTest {
 
@@ -80,7 +80,8 @@ class VinylScrubMathTest {
         // Simulate 120 Hz ultra-slow precision drag: 0.02 deg per frame @ 2.4 deg/s (8,000 ms / 360 deg)
         // Each frame is 0.4444... ms (< 1 ms): Long rounding per frame would lose everything to 0!
         var accumulated = 0.0
-        repeat(180) { // 3.6 degrees total -> exact 80.0 ms
+        repeat(180) {
+            // 3.6 degrees total -> exact 80.0 ms
             accumulated += VinylScrubMath.computeIncrementalScrubDeltaMs(
                 deltaDegrees = 0.02f,
                 angularVelocityDegPerSec = 2.4f,

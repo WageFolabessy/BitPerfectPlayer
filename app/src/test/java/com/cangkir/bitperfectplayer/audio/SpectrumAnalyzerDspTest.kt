@@ -1,21 +1,17 @@
 package com.cangkir.bitperfectplayer.audio
 
+import kotlin.math.PI
+import kotlin.math.sin
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import kotlin.math.PI
-import kotlin.math.sin
 
 class SpectrumAnalyzerDspTest {
 
-    private fun generateSine(
-        sampleRateHz: Int,
-        freqHz: Double,
-        sampleCount: Int,
-        amplitude: Float = 0.5f,
-    ): FloatArray = FloatArray(sampleCount) { n ->
-        (amplitude * sin(2.0 * PI * freqHz * n / sampleRateHz)).toFloat()
-    }
+    private fun generateSine(sampleRateHz: Int, freqHz: Double, sampleCount: Int, amplitude: Float = 0.5f): FloatArray =
+        FloatArray(sampleCount) { n ->
+            (amplitude * sin(2.0 * PI * freqHz * n / sampleRateHz)).toFloat()
+        }
 
     private fun indexOfMax(values: FloatArray): Int {
         var bestIdx = 0

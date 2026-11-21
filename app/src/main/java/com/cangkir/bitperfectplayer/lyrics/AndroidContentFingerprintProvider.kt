@@ -13,9 +13,7 @@ import java.io.IOException
  * to avoid scanning multi-hundred-megabyte lossless files, and falls back transparently to the
  * fixed-size 64 KB ring-buffer streaming path for non-seekable providers.
  */
-class AndroidContentFingerprintProvider(
-    private val contentResolver: ContentResolver,
-) {
+class AndroidContentFingerprintProvider(private val contentResolver: ContentResolver) {
     fun computeFingerprint(uri: Uri): Result<String> {
         val seekableResult = tryComputeViaParcelFileDescriptor(uri)
         if (seekableResult != null) {

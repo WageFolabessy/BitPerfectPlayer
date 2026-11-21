@@ -13,13 +13,6 @@ import androidx.core.graphics.scale
 import androidx.core.net.toUri
 import androidx.documentfile.provider.DocumentFile
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
-import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
@@ -27,6 +20,13 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.max
 import kotlin.math.roundToInt
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
 
 /**
  * 100% offline local album cover art extractor & two-tier cache (in-memory [LruCache] + async
@@ -55,17 +55,16 @@ class AlbumArtworkLoader(context: Context) {
     /**
      * Lightweight plain-string cache identity key safe to call synchronously on the Main Thread.
      */
-    fun memoryKeyFor(track: PlaybackTrack, targetSizePx: Int = THUMBNAIL_SIZE_PX): String =
-        AlbumArtworkHelper.buildMemoryCacheKey(
-            trackUri = track.uriString,
-            artist = track.artist,
-            album = track.album,
-            parentTreeUriString = track.parentTreeUriString,
-            folderName = track.folderName,
-            dateModifiedSeconds = track.dateModifiedSeconds,
-            fileSizeBytes = track.fileSizeBytes,
-            targetSizePx = targetSizePx,
-        )
+    fun memoryKeyFor(track: PlaybackTrack, targetSizePx: Int = THUMBNAIL_SIZE_PX): String = AlbumArtworkHelper.buildMemoryCacheKey(
+        trackUri = track.uriString,
+        artist = track.artist,
+        album = track.album,
+        parentTreeUriString = track.parentTreeUriString,
+        folderName = track.folderName,
+        dateModifiedSeconds = track.dateModifiedSeconds,
+        fileSizeBytes = track.fileSizeBytes,
+        targetSizePx = targetSizePx,
+    )
 
     /**
      * Fast synchronous memory lookup for zero-flicker initial Compose rendering (zero crypto/IO).
@@ -139,25 +138,23 @@ class AlbumArtworkLoader(context: Context) {
             supportsApi29LoadThumbnail = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q,
         )
 
-        if (preferThumbnailFirst) {
+        val primaryArtwork = if (preferThumbnailFirst) {
             // Fast path for list/mini-player 160px thumbnails on MediaStore: try OS-indexed thumbnail first.
-            extractMediaStoreThumbnail(uri, bucketPx)?.let { return it }
-            // Fallback to embedded tags only if MediaStore did not have a cached thumbnail.
-            extractEmbeddedPicture(uri, bucketPx)?.let { return it }
+            extractMediaStoreThumbnail(uri, bucketPx) ?: extractEmbeddedPicture(uri, bucketPx)
         } else {
             // Hero (600px) & SAF/legacy path: prefer full-resolution embedded tags first.
-            extractEmbeddedPicture(uri, bucketPx)?.let { return it }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && isMediaStore) {
-                extractMediaStoreThumbnail(uri, bucketPx)?.let { return it }
+            val embedded = extractEmbeddedPicture(uri, bucketPx)
+            if (embedded == null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && isMediaStore) {
+                extractMediaStoreThumbnail(uri, bucketPx)
+            } else {
+                embedded
             }
         }
 
         // Tertiary: SAF sibling cover image in the same folder
-        if (!track.parentTreeUriString.isNullOrBlank()) {
-            extractSafSiblingCover(uri, track.parentTreeUriString, bucketPx)?.let { return it }
-        }
-
-        return null
+        return primaryArtwork ?: track.parentTreeUriString
+            ?.takeIf { it.isNotBlank() }
+            ?.let { extractSafSiblingCover(uri, it, bucketPx) }
     }
 
     private fun extractEmbeddedPicture(uri: Uri, bucketPx: Int): Bitmap? {
@@ -180,11 +177,7 @@ class AlbumArtworkLoader(context: Context) {
         }.getOrNull()
     }
 
-    private fun extractSafSiblingCover(
-        trackUri: Uri,
-        treeUriString: String,
-        bucketPx: Int,
-    ): Bitmap? {
+    private fun extractSafSiblingCover(trackUri: Uri, treeUriString: String, bucketPx: Int): Bitmap? {
         val treeUri = runCatching { treeUriString.toUri() }.getOrNull() ?: return null
         val docId = runCatching {
             if (DocumentsContract.isDocumentUri(appContext, trackUri)) {
@@ -370,16 +363,14 @@ class AlbumArtworkLoader(context: Context) {
         }
     }
 
-    private fun isMediaStoreUri(uri: Uri): Boolean =
-        uri.scheme == "content" && uri.authority == "media"
+    private fun isMediaStoreUri(uri: Uri): Boolean = uri.scheme == "content" && uri.authority == "media"
 
     private fun createMemoryCache(): LruCache<String, Bitmap> {
         val maxKb = (Runtime.getRuntime().maxMemory() / 1024L / 8L)
             .toInt()
             .coerceIn(MIN_MEM_CACHE_KB, MAX_MEM_CACHE_KB)
         return object : LruCache<String, Bitmap>(maxKb) {
-            override fun sizeOf(key: String, value: Bitmap): Int =
-                (value.byteCount / 1024).coerceAtLeast(1)
+            override fun sizeOf(key: String, value: Bitmap): Int = (value.byteCount / 1024).coerceAtLeast(1)
         }
     }
 

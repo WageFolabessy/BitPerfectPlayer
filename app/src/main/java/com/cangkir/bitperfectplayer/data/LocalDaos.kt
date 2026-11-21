@@ -7,11 +7,7 @@ import androidx.room.Query
 import androidx.room.Transaction
 import kotlinx.coroutines.flow.Flow
 
-data class TrackPositionBackfill(
-    val uriString: String,
-    val discNumber: Int,
-    val trackNumber: Int,
-)
+data class TrackPositionBackfill(val uriString: String, val discNumber: Int, val trackNumber: Int)
 
 @Dao
 interface CachedTrackDao {
@@ -158,18 +154,17 @@ interface PlaylistDao {
     @Query("UPDATE playlist_tracks SET position_index = :positionIndex WHERE id = :entryId")
     suspend fun updatePlaylistTrackPosition(entryId: Long, positionIndex: Int)
 
-    @Query("UPDATE playlist_tracks SET content_fingerprint = :fingerprint WHERE track_uri = :trackUri AND (content_fingerprint IS NULL OR content_fingerprint = '')")
+    @Query(
+        "UPDATE playlist_tracks SET content_fingerprint = :fingerprint " +
+            "WHERE track_uri = :trackUri AND (content_fingerprint IS NULL OR content_fingerprint = '')",
+    )
     suspend fun backfillFingerprintByUri(trackUri: String, fingerprint: String)
 
     @Query("DELETE FROM playlist_tracks WHERE id = :entryId")
     suspend fun deletePlaylistTrackById(entryId: Long): Int
 
     @Transaction
-    suspend fun replacePlaylistTrackOrder(
-        playlistId: Long,
-        orderedEntryIds: List<Long>,
-        updatedAtEpochMs: Long,
-    ) {
+    suspend fun replacePlaylistTrackOrder(playlistId: Long, orderedEntryIds: List<Long>, updatedAtEpochMs: Long) {
         orderedEntryIds.forEachIndexed { index, entryId ->
             updatePlaylistTrackPosition(entryId = entryId, positionIndex = index)
         }
@@ -177,11 +172,7 @@ interface PlaylistDao {
     }
 
     @Transaction
-    suspend fun removeEntryAndCompact(
-        playlistId: Long,
-        entryId: Long,
-        updatedAtEpochMs: Long,
-    ) {
+    suspend fun removeEntryAndCompact(playlistId: Long, entryId: Long, updatedAtEpochMs: Long) {
         deletePlaylistTrackById(entryId)
         val remaining = getTracksForPlaylist(playlistId)
         remaining.forEachIndexed { index, entity ->

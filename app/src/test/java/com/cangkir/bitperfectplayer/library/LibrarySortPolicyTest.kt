@@ -88,12 +88,12 @@ class LibrarySortPolicyTest {
         val fpC = "c".repeat(64)
 
         val cd = track(1, "CD Track", sampleRateHz = 44_100, bitDepth = 16, dateMod = 3000L, fp = fpA)
-        val hires96_16 = track(2, "96k 16-bit", sampleRateHz = 96_000, bitDepth = 16, dateMod = 1000L, fp = fpB)
-        val hires96_24 = track(3, "96k 24-bit", sampleRateHz = 96_000, bitDepth = 24, dateMod = 2000L, fp = fpC)
-        val hires192_24 = track(4, "192k 24-bit", sampleRateHz = 192_000, bitDepth = 24, dateMod = 500L)
+        val hires96Bit16 = track(2, "96k 16-bit", sampleRateHz = 96_000, bitDepth = 16, dateMod = 1000L, fp = fpB)
+        val hires96Bit24 = track(3, "96k 24-bit", sampleRateHz = 96_000, bitDepth = 24, dateMod = 2000L, fp = fpC)
+        val hires192Bit24 = track(4, "192k 24-bit", sampleRateHz = 192_000, bitDepth = 24, dateMod = 500L)
 
         val byHiRes = LibrarySortPolicy.sortTracks(
-            tracks = listOf(cd, hires96_16, hires192_24, hires96_24),
+            tracks = listOf(cd, hires96Bit16, hires192Bit24, hires96Bit24),
             spec = TrackSortSpec(TrackSortOption.SAMPLE_RATE, SortDirection.DESC),
         )
         assertEquals(
@@ -102,7 +102,7 @@ class LibrarySortPolicyTest {
         )
 
         val byMostPlayed = LibrarySortPolicy.sortTracks(
-            tracks = listOf(cd, hires96_16, hires96_24, hires192_24),
+            tracks = listOf(cd, hires96Bit16, hires96Bit24, hires192Bit24),
             spec = TrackSortSpec(TrackSortOption.MOST_PLAYED, SortDirection.DESC),
             playCountsByKey = mapOf(fpB to 12, fpA to 4, "content://media/4" to 25),
         )
@@ -112,7 +112,7 @@ class LibrarySortPolicyTest {
         )
 
         val byDateDesc = LibrarySortPolicy.sortTracks(
-            tracks = listOf(cd, hires96_16, hires96_24, hires192_24),
+            tracks = listOf(cd, hires96Bit16, hires96Bit24, hires192Bit24),
             spec = TrackSortSpec(TrackSortOption.DATE_MODIFIED, SortDirection.DESC),
         )
         assertEquals(

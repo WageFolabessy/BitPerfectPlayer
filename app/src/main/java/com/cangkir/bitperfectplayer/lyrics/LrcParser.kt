@@ -7,20 +7,12 @@ import java.nio.charset.CodingErrorAction
 /**
  * Metadata extracted from standard `.lrc` header tags (`[ti:]`, `[ar:]`, `[al:]`, `[offset:]`).
  */
-data class LrcMetadata(
-    val title: String? = null,
-    val artist: String? = null,
-    val album: String? = null,
-    val offsetMs: Long = 0L,
-)
+data class LrcMetadata(val title: String? = null, val artist: String? = null, val album: String? = null, val offsetMs: Long = 0L)
 
 /**
  * A single synchronized lyric line with its effective playback timestamp in milliseconds.
  */
-data class LrcLine(
-    val timestampMs: Long,
-    val text: String,
-)
+data class LrcLine(val timestampMs: Long, val text: String)
 
 /**
  * Result of parsing `.lrc` or plain-text lyrics.
@@ -47,6 +39,7 @@ object LrcParser {
 
     // Matches leading or inline bracket tokens like [01:23.45], [ti:Song], [offset:-250], or malformed tags.
     private val BRACKET_TAG_REGEX = Regex("""\[([^\[\]\r\n]+)]""")
+
     // Strict timestamp syntax: mm:ss, mm:ss.x, mm:ss.xx, mm:ss.xxx, or mm:ss:xx (colon fraction variant).
     private val TIMESTAMP_REGEX = Regex("""^(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?$""")
     private val METADATA_TAG_REGEX = Regex("""^(ti|ar|al|offset|by|length|re|ve)\s*:\s*(.*)$""", RegexOption.IGNORE_CASE)
@@ -59,11 +52,7 @@ object LrcParser {
         if (bytes.isEmpty()) return ""
 
         // 1. UTF-8 BOM (EF BB BF)
-        if (bytes.size >= 3 &&
-            (bytes[0].toInt() and 0xFF) == 0xEF &&
-            (bytes[1].toInt() and 0xFF) == 0xBB &&
-            (bytes[2].toInt() and 0xFF) == 0xBF
-        ) {
+        if (hasUtf8Bom(bytes)) {
             return decodeUtf8OrLatin1(bytes, offset = 3)
         }
 
@@ -92,6 +81,13 @@ object LrcParser {
         return decodeUtf8OrLatin1(bytes, offset = 0)
     }
 
+    private fun hasUtf8Bom(bytes: ByteArray): Boolean {
+        if (bytes.size < 3) return false
+        return (bytes[0].toInt() and 0xFF) == 0xEF &&
+            (bytes[1].toInt() and 0xFF) == 0xBB &&
+            (bytes[2].toInt() and 0xFF) == 0xBF
+    }
+
     /**
      * Parses raw `.lrc` bytes directly without crashing on any encoding or malformed content.
      */
@@ -117,11 +113,7 @@ object LrcParser {
             )
         }
 
-        var title: String? = null
-        var artist: String? = null
-        var album: String? = null
-        var offsetMs = 0L
-
+        val metadataBuilder = MutableLrcMetadata()
         val rawTimedEntries = mutableListOf<RawTimedEntry>()
         val staticCandidates = mutableListOf<String>()
         var sequenceCounter = 0
@@ -133,64 +125,22 @@ object LrcParser {
                 continue
             }
 
-            val timestampsOnLine = mutableListOf<Long>()
-            var matchedMetadataOnly = false
-            var idx = 0
-
-            // Consume leading consecutive bracket tokens (multi-timestamp or metadata headers).
-            while (idx < trimmed.length && trimmed[idx] == '[') {
-                val match = BRACKET_TAG_REGEX.matchAt(trimmed, idx) ?: break
-                val token = match.groupValues[1].trim()
-                val parsedTs = parseTimestampToken(token)
-                if (parsedTs != null) {
-                    timestampsOnLine.add(parsedTs)
-                    idx = match.range.last + 1
-                    while (idx < trimmed.length && trimmed[idx] == ' ') idx++
-                    continue
-                }
-                val metaMatch = METADATA_TAG_REGEX.matchEntire(token)
-                if (metaMatch != null && timestampsOnLine.isEmpty()) {
-                    val key = metaMatch.groupValues[1].lowercase()
-                    val value = metaMatch.groupValues[2].trim()
-                    when (key) {
-                        "ti" -> if (value.isNotEmpty()) title = value
-                        "ar" -> if (value.isNotEmpty()) artist = value
-                        "al" -> if (value.isNotEmpty()) album = value
-                        "offset" -> value.toLongOrNull()?.let { offsetMs = it }
-                    }
-                    idx = match.range.last + 1
-                    while (idx < trimmed.length && trimmed[idx] == ' ') idx++
-                    if (idx >= trimmed.length) {
-                        matchedMetadataOnly = true
-                        break
-                    }
-                    continue
-                }
-                // Malformed/unknown bracket token: stop consuming tags and preserve remaining text safely.
-                break
-            }
-
-            if (timestampsOnLine.isNotEmpty()) {
-                val lyricText = trimmed.substring(idx).trim()
-                for (ts in timestampsOnLine) {
+            val parsedLine = parseLeadingBracketTags(trimmed, metadataBuilder)
+            if (parsedLine.timestamps.isNotEmpty()) {
+                val lyricText = trimmed.substring(parsedLine.textStartIndex).trim()
+                for (ts in parsedLine.timestamps) {
                     rawTimedEntries.add(RawTimedEntry(ts, sequenceCounter++, lyricText))
                 }
-            } else if (!matchedMetadataOnly) {
+            } else if (!parsedLine.matchedMetadataOnly) {
                 staticCandidates.add(trimmed)
             }
         }
 
-        val metadata = LrcMetadata(
-            title = title,
-            artist = artist,
-            album = album,
-            offsetMs = offsetMs,
-        )
-
+        val metadata = metadataBuilder.toImmutable()
         if (rawTimedEntries.isNotEmpty()) {
             val syncedLines = rawTimedEntries
                 .map { entry ->
-                    val adjusted = (entry.rawTimestampMs - offsetMs).coerceAtLeast(0L)
+                    val adjusted = (entry.rawTimestampMs - metadata.offsetMs).coerceAtLeast(0L)
                     IndexedLrcLine(adjusted, entry.order, entry.text)
                 }
                 .sortedWith(compareBy<IndexedLrcLine> { it.timestampMs }.thenBy { it.order })
@@ -215,6 +165,77 @@ object LrcParser {
             rawText = normalized,
         )
     }
+
+    private fun parseLeadingBracketTags(trimmed: String, metadata: MutableLrcMetadata): ParsedLineTags {
+        val timestampsOnLine = mutableListOf<Long>()
+        var matchedMetadataOnly = false
+        var idx = 0
+        var scanning = true
+
+        // Consume leading consecutive bracket tokens (multi-timestamp or metadata headers).
+        while (scanning && idx < trimmed.length && trimmed[idx] == '[') {
+            val match = BRACKET_TAG_REGEX.matchAt(trimmed, idx)
+            if (match == null) {
+                scanning = false
+            } else {
+                val token = match.groupValues[1].trim()
+                val parsedTs = parseTimestampToken(token)
+                val metaMatch = if (parsedTs == null && timestampsOnLine.isEmpty()) {
+                    METADATA_TAG_REGEX.matchEntire(token)
+                } else {
+                    null
+                }
+                when {
+                    parsedTs != null -> {
+                        timestampsOnLine.add(parsedTs)
+                        idx = skipSpaces(trimmed, match.range.last + 1)
+                    }
+                    metaMatch != null -> {
+                        metadata.applyTag(
+                            key = metaMatch.groupValues[1].lowercase(),
+                            value = metaMatch.groupValues[2].trim(),
+                        )
+                        idx = skipSpaces(trimmed, match.range.last + 1)
+                        if (idx >= trimmed.length) {
+                            matchedMetadataOnly = true
+                            scanning = false
+                        }
+                    }
+                    else -> {
+                        // Malformed/unknown bracket token: stop consuming tags and preserve remaining text safely.
+                        scanning = false
+                    }
+                }
+            }
+        }
+        return ParsedLineTags(timestampsOnLine, idx, matchedMetadataOnly)
+    }
+
+    private fun skipSpaces(text: String, startIndex: Int): Int {
+        var idx = startIndex
+        while (idx < text.length && text[idx] == ' ') idx++
+        return idx
+    }
+
+    private class MutableLrcMetadata {
+        var title: String? = null
+        var artist: String? = null
+        var album: String? = null
+        var offsetMs: Long = 0L
+
+        fun applyTag(key: String, value: String) {
+            when (key) {
+                "ti" -> if (value.isNotEmpty()) title = value
+                "ar" -> if (value.isNotEmpty()) artist = value
+                "al" -> if (value.isNotEmpty()) album = value
+                "offset" -> value.toLongOrNull()?.let { offsetMs = it }
+            }
+        }
+
+        fun toImmutable(): LrcMetadata = LrcMetadata(title = title, artist = artist, album = album, offsetMs = offsetMs)
+    }
+
+    private data class ParsedLineTags(val timestamps: List<Long>, val textStartIndex: Int, val matchedMetadataOnly: Boolean)
 
     /**
      * Deterministically resolves the active lyric line index for [positionMs] using binary search.
@@ -295,15 +316,7 @@ object LrcParser {
         return lines.subList(firstNonBlank, lastNonBlank + 1)
     }
 
-    private data class RawTimedEntry(
-        val rawTimestampMs: Long,
-        val order: Int,
-        val text: String,
-    )
+    private data class RawTimedEntry(val rawTimestampMs: Long, val order: Int, val text: String)
 
-    private data class IndexedLrcLine(
-        val timestampMs: Long,
-        val order: Int,
-        val text: String,
-    )
+    private data class IndexedLrcLine(val timestampMs: Long, val order: Int, val text: String)
 }

@@ -4,9 +4,7 @@ package com.cangkir.bitperfectplayer.audio
  * Origin scope of the active playback queue so QueueScreen, NowPlayingScreen, and session
  * restoration remain strictly context-aware instead of reverting to all library songs.
  */
-enum class QueueSourceType(
-    val displayPrefix: String,
-) {
+enum class QueueSourceType(val displayPrefix: String) {
     ALL_SONGS("All Songs"),
     ALBUM("Album"),
     ARTIST("Artist"),
@@ -147,19 +145,12 @@ data class QueueContext(
  * open when the user navigates to `QueueScreen`, allowing real-time context-aware queue switching
  * (loaded paused for hearing safety).
  */
-data class BrowsingQueueContext(
-    val context: QueueContext,
-    val tracks: List<PlaybackTrack>,
-)
+data class BrowsingQueueContext(val context: QueueContext, val tracks: List<PlaybackTrack>)
 
 /**
  * Resolved queue track list, starting index, and effective context for cold-start session restoration.
  */
-data class RestoredQueueSelection(
-    val tracks: List<PlaybackTrack>,
-    val startIndex: Int,
-    val context: QueueContext,
-)
+data class RestoredQueueSelection(val tracks: List<PlaybackTrack>, val startIndex: Int, val context: QueueContext)
 
 /**
  * Pure-Kotlin queue context policy & session restoration resolver ensuring:

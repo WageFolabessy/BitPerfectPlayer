@@ -1,10 +1,10 @@
 package com.cangkir.bitperfectplayer.audio
 
 import com.cangkir.bitperfectplayer.lyrics.ByteArraySeekableByteSource
+import java.io.ByteArrayOutputStream
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Test
-import java.io.ByteArrayOutputStream
 
 class TrackNumberParserTest {
 
@@ -134,7 +134,9 @@ class TrackNumberParserTest {
 
         // Block 0: STREAMINFO (not last -> bit 7 = 0, type = 0, length = 34)
         out.write(0x00)
-        out.write(0x00); out.write(0x00); out.write(34)
+        out.write(0x00)
+        out.write(0x00)
+        out.write(34)
         val streamInfo = ByteArray(34)
         val sr = sampleRateHz.toLong()
         val chMinus1 = (channels - 1).toLong() and 0x07L
@@ -152,7 +154,9 @@ class TrackNumberParserTest {
         if (includeDummyPictureBlockBeforeComments) {
             // Block type 6 (PICTURE), not last, 64 dummy bytes
             out.write(0x06)
-            out.write(0x00); out.write(0x00); out.write(64)
+            out.write(0x00)
+            out.write(0x00)
+            out.write(64)
             out.write(ByteArray(64))
         }
 

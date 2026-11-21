@@ -157,12 +157,7 @@ class SpectrumPcmTap {
      * Safe-Mode live turntable scratch rendering and seamless `1.0x` ring-buffer exit draining.
      * NEVER mutates [srcFloats].
      */
-    fun appendInterleavedFloatsReadOnly(
-        srcFloats: FloatArray,
-        frameCount: Int,
-        channels: Int,
-        trackFrameAfterWrite: Long,
-    ) {
+    fun appendInterleavedFloatsReadOnly(srcFloats: FloatArray, frameCount: Int, channels: Int, trackFrameAfterWrite: Long) {
         if (frameCount <= 0 || channels <= 0 || effectiveSampleRateHz <= 0) return
         val maxFrames = minOf(frameCount, srcFloats.size / channels)
         if (maxFrames <= 0) return
@@ -206,10 +201,7 @@ class SpectrumPcmTap {
      * Returns the effective decimated sample rate in `Hz`, or `0` if inactive / no samples ready /
      * reset raced mid-read. Zero heap allocations.
      */
-    fun sampleWindowAtTrackFrame(
-        playbackHeadFrame: Long,
-        outMonoSamples: FloatArray,
-    ): Int {
+    fun sampleWindowAtTrackFrame(playbackHeadFrame: Long, outMonoSamples: FloatArray): Int {
         val windowSize = outMonoSamples.size
         if (windowSize <= 0) return 0
 

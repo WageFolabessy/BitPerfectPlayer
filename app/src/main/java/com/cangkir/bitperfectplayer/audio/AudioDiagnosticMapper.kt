@@ -95,7 +95,9 @@ data class AudioDiagnosticSnapshot(
 ) {
     companion object {
         const val MAXIMUM_VERIFICATION_CLAIM_NOTICE: String =
-            "Verified up to Android Audio HAL / USB Output boundary; internal USB-C DAC cable firmware processing cannot be verified without external hardware instrumentation."
+            "Verified up to Android Audio HAL / USB Output boundary; " +
+                "internal USB-C DAC cable firmware processing cannot be verified " +
+                "without external hardware instrumentation."
 
         fun idle(): AudioDiagnosticSnapshot = AudioDiagnosticMapper.map(AudioDiagnosticInput())
     }
@@ -137,155 +139,39 @@ object AudioDiagnosticMapper {
                 input.decodedEffectiveBitDepth > 0 &&
                 input.decodedEffectiveBitDepth < input.sourceBitDepth
 
-        val headline = when {
-            input.safetyMode == AudioOutputMode.SAFE_VOLUME_MODE -> SAFE_MODE_LABEL
-            !input.outputConnectionType.isUsb -> NON_USB_FALLBACK_LABEL
-            input.apiLevel < 34 -> API_BELOW_34_FALLBACK_LABEL
-            !isBitPerfectNegotiated -> FALLBACK_UNSUPPORTED_LABEL
-            isDownConverted -> BIT_PERFECT_DOWNCONVERTED_LABEL
-            else -> BIT_PERFECT_ACTIVE_LABEL
-        }
-
+        val headline = resolveHeadline(input, isBitPerfectNegotiated, isDownConverted)
         val sourceLabel = AudioFormatFormatter.formatContainerAndCodec(
             container = input.sourceContainer,
             codec = input.sourceCodec,
         )
-        val sourceSummary = if (!input.isTrackLoaded) {
-            "No active track loaded"
-        } else {
-            val parts = mutableListOf(sourceLabel)
-            if (input.sourceBitDepth != null && input.sourceBitDepth > 0) {
-                parts.add("${input.sourceBitDepth}-bit")
-            } else {
-                parts.add("Lossy / Variable")
-            }
-            parts.add(AudioFormatFormatter.formatSampleRateHz(input.sourceSampleRateHz))
-            parts.joinToString(" · ")
-        }
-
-        val decodedSummary = if (!input.isTrackLoaded || input.decodedSampleRateHz <= 0) {
-            "Idle (no active PCM stream)"
-        } else {
-            val chLabel = formatChannels(input.decodedChannelCount)
-            val downNote = if (isDownConverted) {
-                " [OS decoder down-converted from ${input.sourceBitDepth}-bit]"
-            } else {
-                ""
-            }
-            "${input.decodedPcmEncodingLabel} · ${AudioFormatFormatter.formatSampleRateHz(input.decodedSampleRateHz)} · $chLabel · ${input.decoderName}$downNote"
-        }
-
+        val sourceSummary = buildSourceSummary(input, sourceLabel)
+        val decodedSummary = buildDecodedSummary(input, isDownConverted)
         val deviceSummary = "${input.outputDeviceName} (${input.outputConnectionType.displayName})"
-
         val engineSummary = if (isBitPerfectNegotiated) {
             "Native AudioTrack · API 34+ ${input.negotiatedMixerSummary}"
         } else {
             "Clean Native AudioTrack · ${input.negotiatedMixerSummary}"
         }
 
-        val volumeModeLabel = when {
-            input.safetyMode == AudioOutputMode.SAFE_VOLUME_MODE ->
-                "Safe Mode (System Volume Active)"
-            isBitPerfectNegotiated && input.isHardwareVolumeVerified ->
-                "Bit-Perfect Active (Hardware Volume Verified)"
-            isBitPerfectNegotiated ->
-                "Bit-Perfect Active (Potentially Fixed 100% / 0 dBFS — Unverified HW Volume)"
-            else ->
-                "Bit-Perfect Requested — Fallback Mixer Active (System Volume Active)"
-        }
-        val effectiveReplayGainSummary = if (
-            input.safetyMode == AudioOutputMode.BIT_PERFECT_OPT_IN &&
-            input.replayGainSummary != "ReplayGain: OFF"
-        ) {
-            "ReplayGain: Bypassed (Bit-Perfect Active)"
-        } else {
-            input.replayGainSummary.ifBlank { "ReplayGain: OFF" }
-        }
+        val volumeModeLabel = resolveVolumeModeLabel(input, isBitPerfectNegotiated)
+        val effectiveReplayGainSummary = resolveEffectiveReplayGainSummary(input)
         val replayGainActiveInSafeMode =
             input.safetyMode == AudioOutputMode.SAFE_VOLUME_MODE && input.isReplayGainModifyingSamples
-
         val dspEqVolumeSummary =
             "EQ: OFF · DSP: OFF · Crossfade: OFF · $effectiveReplayGainSummary · $volumeModeLabel"
 
-        val stage1 = DiagnosticStageEntry(
-            stage = AudioPathStage.SOURCE_FILE,
-            summary = sourceSummary,
-            detail = if (input.isTrackLoaded) {
-                "Format=$sourceLabel, Source Rate=${AudioFormatFormatter.formatSampleRateHz(input.sourceSampleRateHz)}, Bit Depth=${input.sourceBitDepth?.let { "$it-bit" } ?: "N/A"}"
-            } else {
-                "Select a local audio file to inspect source stream properties."
-            },
-            verificationLevel = if (input.isTrackLoaded && input.sourceHeaderVerified) {
-                VerificationLevel.VERIFIED
-            } else {
-                VerificationLevel.INDICATED
-            },
-        )
-
-        val stage2 = DiagnosticStageEntry(
-            stage = AudioPathStage.DECODED_PCM,
-            summary = decodedSummary,
-            detail = if (input.isTrackLoaded && input.decodedSampleRateHz > 0) {
-                "Decoder=${input.decoderName}, Actual Output Encoding=${input.decodedPcmEncodingLabel}, Effective Precision=${input.decodedEffectiveBitDepth}-bit, Rate=${AudioFormatFormatter.formatSampleRateHz(input.decodedSampleRateHz)}, Channels=${input.decodedChannelCount}"
-            } else {
-                "PCM decoder inactive."
-            },
-            verificationLevel = if (input.isTrackLoaded && input.decodedSampleRateHz > 0) {
-                VerificationLevel.VERIFIED
-            } else {
-                VerificationLevel.INDICATED
-            },
-        )
-
-        val stage3ProcessingTag = if (replayGainActiveInSafeMode) {
-            effectiveReplayGainSummary
-        } else {
-            "Zero App DSP · $effectiveReplayGainSummary"
-        }
-        val stage3 = DiagnosticStageEntry(
-            stage = AudioPathStage.APP_TO_FRAMEWORK,
-            summary = if (input.isTrackLoaded && input.audioTrackSampleRateHz > 0) {
-                "AudioTrack ${input.audioTrackEncodingLabel} @ ${AudioFormatFormatter.formatSampleRateHz(input.audioTrackSampleRateHz)} · $stage3ProcessingTag"
-            } else {
-                "Clean Native AudioTrack Engine · $stage3ProcessingTag"
-            },
-            detail = if (input.isTrackLoaded && input.audioTrackSampleRateHz > 0) {
-                "AudioTrack Encoding=${input.audioTrackEncodingLabel}, Rate=${AudioFormatFormatter.formatSampleRateHz(input.audioTrackSampleRateHz)} · $dspEqVolumeSummary"
-            } else {
-                dspEqVolumeSummary
-            },
-            verificationLevel = VerificationLevel.VERIFIED,
-        )
-
-        val stage4Level = when {
-            isBitPerfectNegotiated -> VerificationLevel.VERIFIED
-            input.apiLevel >= 34 && input.negotiatedMixerBehavior == NegotiatedMixerBehavior.DEFAULT_MIXER_FALLBACK ->
-                VerificationLevel.VERIFIED
-            else -> VerificationLevel.INDICATED
-        }
-        val stage4 = DiagnosticStageEntry(
-            stage = AudioPathStage.OS_POLICY_MIXER_RESAMPLER,
-            summary = headline,
-            detail = "API ${input.apiLevel} · Mixer=${input.negotiatedMixerSummary}",
-            verificationLevel = stage4Level,
-        )
-
-        val stage5 = DiagnosticStageEntry(
-            stage = AudioPathStage.USB_OUTPUT_DAC_PATH,
-            summary = deviceSummary,
-            detail = if (input.outputConnectionType.isUsb) {
-                "USB audio route reported by Android AudioDeviceInfo; hardware volume verified=${input.isHardwareVolumeVerified}."
-            } else {
-                "Non-USB route reported by Android AudioDeviceInfo."
-            },
-            verificationLevel = VerificationLevel.INDICATED,
-        )
-
-        val stage6 = DiagnosticStageEntry(
-            stage = AudioPathStage.DAC_ANALOG_CONVERSION,
-            summary = "Internal USB-C DAC Firmware & Analog Stage — Unverifiable in Software",
-            detail = AudioDiagnosticSnapshot.MAXIMUM_VERIFICATION_CLAIM_NOTICE,
-            verificationLevel = VerificationLevel.UNVERIFIABLE,
+        val stages = listOf(
+            buildStage1Source(input, sourceLabel, sourceSummary),
+            buildStage2Decoded(input, decodedSummary),
+            buildStage3AppToFramework(
+                input = input,
+                replayGainActiveInSafeMode = replayGainActiveInSafeMode,
+                effectiveReplayGainSummary = effectiveReplayGainSummary,
+                dspEqVolumeSummary = dspEqVolumeSummary,
+            ),
+            buildStage4OsMixer(input, isBitPerfectNegotiated, headline),
+            buildStage5UsbPath(input, deviceSummary),
+            buildStage6DacAnalog(),
         )
 
         return AudioDiagnosticSnapshot(
@@ -297,10 +183,167 @@ object AudioDiagnosticMapper {
             activeOutputDeviceSummary = deviceSummary,
             activeEngineAndMixerSummary = engineSummary,
             dspEqVolumeStatusSummary = dspEqVolumeSummary,
-            stages = listOf(stage1, stage2, stage3, stage4, stage5, stage6),
+            stages = stages,
             maximumClaimNotice = AudioDiagnosticSnapshot.MAXIMUM_VERIFICATION_CLAIM_NOTICE,
         )
     }
+
+    private fun resolveHeadline(input: AudioDiagnosticInput, isBitPerfectNegotiated: Boolean, isDownConverted: Boolean): String = when {
+        input.safetyMode == AudioOutputMode.SAFE_VOLUME_MODE -> SAFE_MODE_LABEL
+        !input.outputConnectionType.isUsb -> NON_USB_FALLBACK_LABEL
+        input.apiLevel < 34 -> API_BELOW_34_FALLBACK_LABEL
+        !isBitPerfectNegotiated -> FALLBACK_UNSUPPORTED_LABEL
+        isDownConverted -> BIT_PERFECT_DOWNCONVERTED_LABEL
+        else -> BIT_PERFECT_ACTIVE_LABEL
+    }
+
+    private fun buildSourceSummary(input: AudioDiagnosticInput, sourceLabel: String): String {
+        if (!input.isTrackLoaded) return "No active track loaded"
+        val parts = mutableListOf(sourceLabel)
+        if (input.sourceBitDepth != null && input.sourceBitDepth > 0) {
+            parts.add("${input.sourceBitDepth}-bit")
+        } else {
+            parts.add("Lossy / Variable")
+        }
+        parts.add(AudioFormatFormatter.formatSampleRateHz(input.sourceSampleRateHz))
+        return parts.joinToString(" · ")
+    }
+
+    private fun buildDecodedSummary(input: AudioDiagnosticInput, isDownConverted: Boolean): String {
+        if (!input.isTrackLoaded || input.decodedSampleRateHz <= 0) {
+            return "Idle (no active PCM stream)"
+        }
+        val chLabel = formatChannels(input.decodedChannelCount)
+        val downNote = if (isDownConverted) {
+            " [OS decoder down-converted from ${input.sourceBitDepth}-bit]"
+        } else {
+            ""
+        }
+        val formattedRate = AudioFormatFormatter.formatSampleRateHz(input.decodedSampleRateHz)
+        return "${input.decodedPcmEncodingLabel} · $formattedRate · $chLabel · ${input.decoderName}$downNote"
+    }
+
+    private fun resolveVolumeModeLabel(input: AudioDiagnosticInput, isBitPerfectNegotiated: Boolean): String = when {
+        input.safetyMode == AudioOutputMode.SAFE_VOLUME_MODE ->
+            "Safe Mode (System Volume Active)"
+        isBitPerfectNegotiated && input.isHardwareVolumeVerified ->
+            "Bit-Perfect Active (Hardware Volume Verified)"
+        isBitPerfectNegotiated ->
+            "Bit-Perfect Active (Potentially Fixed 100% / 0 dBFS — Unverified HW Volume)"
+        else ->
+            "Bit-Perfect Requested — Fallback Mixer Active (System Volume Active)"
+    }
+
+    private fun resolveEffectiveReplayGainSummary(input: AudioDiagnosticInput): String = if (
+        input.safetyMode == AudioOutputMode.BIT_PERFECT_OPT_IN &&
+        input.replayGainSummary != "ReplayGain: OFF"
+    ) {
+        "ReplayGain: Bypassed (Bit-Perfect Active)"
+    } else {
+        input.replayGainSummary.ifBlank { "ReplayGain: OFF" }
+    }
+
+    private fun buildStage1Source(input: AudioDiagnosticInput, sourceLabel: String, sourceSummary: String): DiagnosticStageEntry =
+        DiagnosticStageEntry(
+            stage = AudioPathStage.SOURCE_FILE,
+            summary = sourceSummary,
+            detail = if (input.isTrackLoaded) {
+                val formattedRate = AudioFormatFormatter.formatSampleRateHz(input.sourceSampleRateHz)
+                val depthText = input.sourceBitDepth?.let { "$it-bit" } ?: "N/A"
+                "Format=$sourceLabel, Source Rate=$formattedRate, Bit Depth=$depthText"
+            } else {
+                "Select a local audio file to inspect source stream properties."
+            },
+            verificationLevel = if (input.isTrackLoaded && input.sourceHeaderVerified) {
+                VerificationLevel.VERIFIED
+            } else {
+                VerificationLevel.INDICATED
+            },
+        )
+
+    private fun buildStage2Decoded(input: AudioDiagnosticInput, decodedSummary: String): DiagnosticStageEntry {
+        val activeStream = input.isTrackLoaded && input.decodedSampleRateHz > 0
+        return DiagnosticStageEntry(
+            stage = AudioPathStage.DECODED_PCM,
+            summary = decodedSummary,
+            detail = if (activeStream) {
+                val formattedRate = AudioFormatFormatter.formatSampleRateHz(input.decodedSampleRateHz)
+                "Decoder=${input.decoderName}, " +
+                    "Actual Output Encoding=${input.decodedPcmEncodingLabel}, " +
+                    "Effective Precision=${input.decodedEffectiveBitDepth}-bit, " +
+                    "Rate=$formattedRate, Channels=${input.decodedChannelCount}"
+            } else {
+                "PCM decoder inactive."
+            },
+            verificationLevel = if (activeStream) VerificationLevel.VERIFIED else VerificationLevel.INDICATED,
+        )
+    }
+
+    private fun buildStage3AppToFramework(
+        input: AudioDiagnosticInput,
+        replayGainActiveInSafeMode: Boolean,
+        effectiveReplayGainSummary: String,
+        dspEqVolumeSummary: String,
+    ): DiagnosticStageEntry {
+        val stage3ProcessingTag = if (replayGainActiveInSafeMode) {
+            effectiveReplayGainSummary
+        } else {
+            "Zero App DSP · $effectiveReplayGainSummary"
+        }
+        val hasAudioTrackRate = input.isTrackLoaded && input.audioTrackSampleRateHz > 0
+        val formattedRate = if (hasAudioTrackRate) {
+            AudioFormatFormatter.formatSampleRateHz(input.audioTrackSampleRateHz)
+        } else {
+            ""
+        }
+        return DiagnosticStageEntry(
+            stage = AudioPathStage.APP_TO_FRAMEWORK,
+            summary = if (hasAudioTrackRate) {
+                "AudioTrack ${input.audioTrackEncodingLabel} @ $formattedRate · $stage3ProcessingTag"
+            } else {
+                "Clean Native AudioTrack Engine · $stage3ProcessingTag"
+            },
+            detail = if (hasAudioTrackRate) {
+                "AudioTrack Encoding=${input.audioTrackEncodingLabel}, Rate=$formattedRate · $dspEqVolumeSummary"
+            } else {
+                dspEqVolumeSummary
+            },
+            verificationLevel = VerificationLevel.VERIFIED,
+        )
+    }
+
+    private fun buildStage4OsMixer(input: AudioDiagnosticInput, isBitPerfectNegotiated: Boolean, headline: String): DiagnosticStageEntry {
+        val stage4Level = when {
+            isBitPerfectNegotiated -> VerificationLevel.VERIFIED
+            input.apiLevel >= 34 && input.negotiatedMixerBehavior == NegotiatedMixerBehavior.DEFAULT_MIXER_FALLBACK ->
+                VerificationLevel.VERIFIED
+            else -> VerificationLevel.INDICATED
+        }
+        return DiagnosticStageEntry(
+            stage = AudioPathStage.OS_POLICY_MIXER_RESAMPLER,
+            summary = headline,
+            detail = "API ${input.apiLevel} · Mixer=${input.negotiatedMixerSummary}",
+            verificationLevel = stage4Level,
+        )
+    }
+
+    private fun buildStage5UsbPath(input: AudioDiagnosticInput, deviceSummary: String): DiagnosticStageEntry = DiagnosticStageEntry(
+        stage = AudioPathStage.USB_OUTPUT_DAC_PATH,
+        summary = deviceSummary,
+        detail = if (input.outputConnectionType.isUsb) {
+            "USB audio route reported by Android AudioDeviceInfo; hardware volume verified=${input.isHardwareVolumeVerified}."
+        } else {
+            "Non-USB route reported by Android AudioDeviceInfo."
+        },
+        verificationLevel = VerificationLevel.INDICATED,
+    )
+
+    private fun buildStage6DacAnalog(): DiagnosticStageEntry = DiagnosticStageEntry(
+        stage = AudioPathStage.DAC_ANALOG_CONVERSION,
+        summary = "Internal USB-C DAC Firmware & Analog Stage — Unverifiable in Software",
+        detail = AudioDiagnosticSnapshot.MAXIMUM_VERIFICATION_CLAIM_NOTICE,
+        verificationLevel = VerificationLevel.UNVERIFIABLE,
+    )
 
     private fun formatChannels(count: Int): String = when (count) {
         1 -> "Mono (1ch)"

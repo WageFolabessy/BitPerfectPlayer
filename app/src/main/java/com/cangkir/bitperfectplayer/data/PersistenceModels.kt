@@ -64,12 +64,7 @@ data class FavoriteTrackRecord(
 /**
  * Pure-Kotlin domain record representing a local user-created playlist.
  */
-data class PlaylistRecord(
-    val id: Long = 0L,
-    val name: String,
-    val createdAtEpochMs: Long,
-    val updatedAtEpochMs: Long,
-)
+data class PlaylistRecord(val id: Long = 0L, val name: String, val createdAtEpochMs: Long, val updatedAtEpochMs: Long)
 
 /**
  * Pure-Kotlin domain record representing an ordered track entry inside a user playlist.
@@ -110,9 +105,8 @@ enum class AudioSafetyModePreference {
     ;
 
     companion object {
-        fun fromStoredName(raw: String?): AudioSafetyModePreference =
-            entries.firstOrNull { it.name.equals(raw?.trim(), ignoreCase = true) }
-                ?: SAFE_VOLUME_MODE
+        fun fromStoredName(raw: String?): AudioSafetyModePreference = entries.firstOrNull { it.name.equals(raw?.trim(), ignoreCase = true) }
+            ?: SAFE_VOLUME_MODE
     }
 }
 
@@ -149,9 +143,7 @@ enum class ReplayGainModePreference {
 /**
  * Persisted artwork presentation mode on `NowPlayingScreen` (defaults to [VINYL_DISC]).
  */
-enum class NowPlayingArtworkStyle(
-    val displayName: String,
-) {
+enum class NowPlayingArtworkStyle(val displayName: String) {
     VINYL_DISC("Vinyl Disc"),
     SQUARE_COVER("Square Cover"),
     ;
@@ -166,9 +158,7 @@ enum class NowPlayingArtworkStyle(
  * Persisted color palette mode for the offline read-only FFT spectrum visualizer
  * (defaults to [PRISM]).
  */
-enum class SpectrumColorStyle(
-    val displayName: String,
-) {
+enum class SpectrumColorStyle(val displayName: String) {
     STUDIO("Studio"),
     PRISM("Prism"),
     ALBUM_ADAPTIVE("Album"),
@@ -234,23 +224,18 @@ object PersistenceSanitizer {
 
     fun normalizeFingerprint(raw: String): String = raw.trim().lowercase()
 
-    fun isValidSha256Fingerprint(raw: String): Boolean =
-        HEX_64_REGEX.matches(normalizeFingerprint(raw))
+    fun isValidSha256Fingerprint(raw: String): Boolean = HEX_64_REGEX.matches(normalizeFingerprint(raw))
 
     fun sanitizeNonNegative(value: Long): Long = value.coerceAtLeast(0L)
 
-    fun sanitizeReplayGainPreampDb(value: Float): Float =
-        if (value.isFinite()) value.coerceIn(-6.0f, 6.0f) else 0.0f
+    fun sanitizeReplayGainPreampDb(value: Float): Float = if (value.isFinite()) value.coerceIn(-6.0f, 6.0f) else 0.0f
 
-    fun sanitizeDisplayText(raw: String?, fallback: String): String =
-        raw?.trim()?.takeIf { it.isNotEmpty() } ?: fallback
+    fun sanitizeDisplayText(raw: String?, fallback: String): String = raw?.trim()?.takeIf { it.isNotEmpty() } ?: fallback
 
-    fun sanitizeUriSet(uris: Set<String>): Set<String> =
-        uris.asSequence()
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
-            .toSet()
+    fun sanitizeUriSet(uris: Set<String>): Set<String> = uris.asSequence()
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+        .toSet()
 
-    fun sanitizeLyricsText(raw: String): String =
-        raw.replace("\r\n", "\n").replace('\r', '\n')
+    fun sanitizeLyricsText(raw: String): String = raw.replace("\r\n", "\n").replace('\r', '\n')
 }

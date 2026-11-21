@@ -124,8 +124,7 @@ class LocalPersistenceRepository(
         )
     }
 
-    fun observeAllTrackStats(): Flow<List<TrackStatsRecord>> =
-        trackStatsDao.observeAllStats().map { list -> list.map { it.toDomain() } }
+    fun observeAllTrackStats(): Flow<List<TrackStatsRecord>> = trackStatsDao.observeAllStats().map { list -> list.map { it.toDomain() } }
 
     fun observeMostPlayedStats(limit: Int = 50): Flow<List<TrackStatsRecord>> =
         trackStatsDao.observeMostPlayed(limit).map { list -> list.map { it.toDomain() } }
@@ -138,9 +137,7 @@ class LocalPersistenceRepository(
         return trackStatsDao.getByFingerprint(normalized)?.toDomain()
     }
 
-    suspend fun exportLocalBackupPayload(
-        nowEpochMs: Long = System.currentTimeMillis(),
-    ): LocalBackupPayload {
+    suspend fun exportLocalBackupPayload(nowEpochMs: Long = System.currentTimeMillis()): LocalBackupPayload {
         val playlists = playlistDao.getAllPlaylists()
         val tracksByPlaylist = playlistDao.getAllPlaylistTracks().groupBy { it.playlistId }
         val backupPlaylists = playlists.map { pl ->
@@ -179,9 +176,23 @@ class LocalPersistenceRepository(
         payload: LocalBackupPayload,
         nowEpochMs: Long = System.currentTimeMillis(),
     ): LocalBackupRestoreSummary {
-        // 1. Merge Lyrics (upsert if absent locally or backup is at least as recent)
+        val lyricsCount = mergeBackupLyrics(payload.lyrics)
+        val favoritesCount = mergeBackupFavorites(payload.favorites)
+        val statsCount = mergeBackupTrackStats(payload.trackStats)
+        val (playlistsMerged, playlistTracksAdded) = mergeBackupPlaylists(payload.playlists, nowEpochMs)
+
+        return LocalBackupRestoreSummary(
+            playlistsMerged = playlistsMerged,
+            playlistTracksAdded = playlistTracksAdded,
+            lyricsUpserted = lyricsCount,
+            favoritesMerged = favoritesCount,
+            statsMerged = statsCount,
+        )
+    }
+
+    private suspend fun mergeBackupLyrics(lyrics: List<LyricsRecord>): Int {
         var lyricsCount = 0
-        for (lyric in payload.lyrics) {
+        for (lyric in lyrics) {
             val normalizedFp = PersistenceSanitizer.normalizeFingerprint(lyric.contentFingerprint)
             if (!PersistenceSanitizer.isValidSha256Fingerprint(normalizedFp)) continue
             val existing = lyricsDao.getByFingerprint(normalizedFp)
@@ -190,10 +201,12 @@ class LocalPersistenceRepository(
                 lyricsCount++
             }
         }
+        return lyricsCount
+    }
 
-        // 2. Merge Favorites (union upsert by SHA-256 fingerprint)
+    private suspend fun mergeBackupFavorites(favorites: List<FavoriteTrackRecord>): Int {
         var favoritesCount = 0
-        for (fav in payload.favorites) {
+        for (fav in favorites) {
             val normalizedFp = PersistenceSanitizer.normalizeFingerprint(fav.contentFingerprint)
             if (!PersistenceSanitizer.isValidSha256Fingerprint(normalizedFp)) continue
             if (!favoriteTrackDao.isFavorite(normalizedFp)) {
@@ -201,10 +214,12 @@ class LocalPersistenceRepository(
                 favoritesCount++
             }
         }
+        return favoritesCount
+    }
 
-        // 3. Merge Track Stats (idempotent max merge so re-importing never doubles play counts)
+    private suspend fun mergeBackupTrackStats(trackStats: List<TrackStatsRecord>): Int {
         var statsCount = 0
-        for (stat in payload.trackStats) {
+        for (stat in trackStats) {
             val normalizedFp = PersistenceSanitizer.normalizeFingerprint(stat.contentFingerprint)
             if (!PersistenceSanitizer.isValidSha256Fingerprint(normalizedFp)) continue
             val existing = trackStatsDao.getByFingerprint(normalizedFp)
@@ -226,76 +241,83 @@ class LocalPersistenceRepository(
             trackStatsDao.upsert(merged)
             statsCount++
         }
+        return statsCount
+    }
 
-        // 4. Merge Playlists (match by trimmed case-insensitive name; append only non-duplicate entries)
+    private suspend fun mergeBackupPlaylists(playlists: List<BackupPlaylist>, nowEpochMs: Long): Pair<Int, Int> {
         val existingPlaylistsByName = playlistDao.getAllPlaylists()
             .associateBy { it.name.trim().lowercase() }
             .toMutableMap()
         var playlistsMerged = 0
         var playlistTracksAdded = 0
 
-        for (backupPl in payload.playlists) {
+        for (backupPl in playlists) {
             val cleanName = backupPl.name.trim()
             if (cleanName.isEmpty()) continue
-            val key = cleanName.lowercase()
-            val existing = existingPlaylistsByName[key]
-            val targetPlaylistId = if (existing != null) {
-                existing.id
-            } else {
-                val createdId = playlistDao.insertPlaylist(
-                    PlaylistEntity(
-                        name = cleanName,
-                        createdAtEpochMs = backupPl.createdAtEpochMs.takeIf { it > 0L } ?: nowEpochMs,
-                        updatedAtEpochMs = backupPl.updatedAtEpochMs.takeIf { it > 0L } ?: nowEpochMs,
-                    ),
-                )
-                existingPlaylistsByName[key] = PlaylistEntity(
-                    id = createdId,
-                    name = cleanName,
-                    createdAtEpochMs = backupPl.createdAtEpochMs.takeIf { it > 0L } ?: nowEpochMs,
-                    updatedAtEpochMs = backupPl.updatedAtEpochMs.takeIf { it > 0L } ?: nowEpochMs,
-                )
-                createdId
-            }
+            val targetPlaylistId = resolveOrCreatePlaylistId(existingPlaylistsByName, cleanName, backupPl, nowEpochMs)
             playlistsMerged++
-
-            val existingEntries = playlistDao.getTracksForPlaylist(targetPlaylistId)
-            val existingKeys = existingEntries.map { entry ->
-                entry.contentFingerprint?.lowercase()?.takeIf { it.isNotEmpty() } ?: entry.trackUri
-            }.toMutableSet()
-            var nextPos = (existingEntries.maxOfOrNull { it.positionIndex } ?: -1) + 1
-
-            val toInsert = mutableListOf<PlaylistTrackEntity>()
-            for (tr in backupPl.tracks.sortedBy { it.positionIndex }) {
-                val fp = tr.contentFingerprint?.let { PersistenceSanitizer.normalizeFingerprint(it) }
-                    ?.takeIf { PersistenceSanitizer.isValidSha256Fingerprint(it) }
-                val dedupKey = fp ?: tr.trackUri.trim()
-                if (dedupKey.isEmpty() || !existingKeys.add(dedupKey)) continue
-                toInsert.add(
-                    PlaylistTrackEntity(
-                        playlistId = targetPlaylistId,
-                        contentFingerprint = fp,
-                        trackUri = tr.trackUri.trim(),
-                        fileName = PersistenceSanitizer.sanitizeDisplayText(tr.fileName, "Unknown"),
-                        positionIndex = nextPos++,
-                        addedAtEpochMs = tr.addedAtEpochMs.takeIf { it > 0L } ?: nowEpochMs,
-                    ),
-                )
-            }
-            if (toInsert.isNotEmpty()) {
-                playlistDao.insertPlaylistTracks(toInsert)
-                playlistDao.touchPlaylist(targetPlaylistId, nowEpochMs)
-                playlistTracksAdded += toInsert.size
-            }
+            playlistTracksAdded += appendNonDuplicatePlaylistTracks(targetPlaylistId, backupPl.tracks, nowEpochMs)
         }
+        return playlistsMerged to playlistTracksAdded
+    }
 
-        return LocalBackupRestoreSummary(
-            playlistsMerged = playlistsMerged,
-            playlistTracksAdded = playlistTracksAdded,
-            lyricsUpserted = lyricsCount,
-            favoritesMerged = favoritesCount,
-            statsMerged = statsCount,
+    private suspend fun resolveOrCreatePlaylistId(
+        existingPlaylistsByName: MutableMap<String, PlaylistEntity>,
+        cleanName: String,
+        backupPl: BackupPlaylist,
+        nowEpochMs: Long,
+    ): Long {
+        val key = cleanName.lowercase()
+        val existing = existingPlaylistsByName[key]
+        if (existing != null) return existing.id
+
+        val createdAt = backupPl.createdAtEpochMs.takeIf { it > 0L } ?: nowEpochMs
+        val updatedAt = backupPl.updatedAtEpochMs.takeIf { it > 0L } ?: nowEpochMs
+        val createdId = playlistDao.insertPlaylist(
+            PlaylistEntity(name = cleanName, createdAtEpochMs = createdAt, updatedAtEpochMs = updatedAt),
         )
+        existingPlaylistsByName[key] = PlaylistEntity(
+            id = createdId,
+            name = cleanName,
+            createdAtEpochMs = createdAt,
+            updatedAtEpochMs = updatedAt,
+        )
+        return createdId
+    }
+
+    private suspend fun appendNonDuplicatePlaylistTracks(
+        targetPlaylistId: Long,
+        tracks: List<BackupPlaylistEntry>,
+        nowEpochMs: Long,
+    ): Int {
+        val existingEntries = playlistDao.getTracksForPlaylist(targetPlaylistId)
+        val existingKeys = existingEntries.map { entry ->
+            entry.contentFingerprint?.lowercase()?.takeIf { it.isNotEmpty() } ?: entry.trackUri
+        }.toMutableSet()
+        var nextPos = (existingEntries.maxOfOrNull { it.positionIndex } ?: -1) + 1
+
+        val toInsert = mutableListOf<PlaylistTrackEntity>()
+        for (tr in tracks.sortedBy { it.positionIndex }) {
+            val fp = tr.contentFingerprint?.let { PersistenceSanitizer.normalizeFingerprint(it) }
+                ?.takeIf { PersistenceSanitizer.isValidSha256Fingerprint(it) }
+            val dedupKey = fp ?: tr.trackUri.trim()
+            if (dedupKey.isEmpty() || !existingKeys.add(dedupKey)) continue
+            toInsert.add(
+                PlaylistTrackEntity(
+                    playlistId = targetPlaylistId,
+                    contentFingerprint = fp,
+                    trackUri = tr.trackUri.trim(),
+                    fileName = PersistenceSanitizer.sanitizeDisplayText(tr.fileName, "Unknown"),
+                    positionIndex = nextPos++,
+                    addedAtEpochMs = tr.addedAtEpochMs.takeIf { it > 0L } ?: nowEpochMs,
+                ),
+            )
+        }
+        if (toInsert.isNotEmpty()) {
+            playlistDao.insertPlaylistTracks(toInsert)
+            playlistDao.touchPlaylist(targetPlaylistId, nowEpochMs)
+        }
+        return toInsert.size
     }
 
     /**
@@ -336,8 +358,7 @@ class LocalPersistenceRepository(
     fun observeAllFavorites(): Flow<List<FavoriteTrackRecord>> =
         favoriteTrackDao.observeAllFavorites().map { list -> list.map { it.toDomain() } }
 
-    fun observeFavoriteFingerprints(): Flow<Set<String>> =
-        favoriteTrackDao.observeFavoriteFingerprints().map { it.toSet() }
+    fun observeFavoriteFingerprints(): Flow<Set<String>> = favoriteTrackDao.observeFavoriteFingerprints().map { it.toSet() }
 
     fun observeCachedPlaybackTracks(): Flow<List<PlaybackTrack>> =
         cachedTrackDao.observeAll().map { entities -> entities.map { it.toPlaybackTrack() } }

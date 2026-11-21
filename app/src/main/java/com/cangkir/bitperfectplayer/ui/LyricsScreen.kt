@@ -283,7 +283,8 @@ fun LyricsScreen(
                 else -> {
                     EmptyLyricsPlaceholder(
                         title = "No lyrics attached yet",
-                        subtitle = "Import a local .lrc file via SAF or paste/write lyrics manually. Saved lyrics bind persistently to this track's SHA-256 content fingerprint.",
+                        subtitle = "Import a local .lrc file via SAF or paste/write lyrics manually. " +
+                            "Saved lyrics bind persistently to this track's SHA-256 content fingerprint.",
                         fingerprint = lyricsState?.contentFingerprint,
                         onImportLrc = { lrcPickerLauncher.launch(arrayOf("*/*")) },
                         onOpenEditor = { showManualEditor = true },
@@ -299,11 +300,7 @@ fun LyricsScreen(
  * clock via [distinctUntilChanged], so the list recomposes only when the active line changes.
  */
 @Composable
-private fun SyncedLyricsList(
-    lines: List<LrcLine>,
-    playbackPositionMsFlow: StateFlow<Long>,
-    onSeekTo: (Long) -> Unit,
-) {
+private fun SyncedLyricsList(lines: List<LrcLine>, playbackPositionMsFlow: StateFlow<Long>, onSeekTo: (Long) -> Unit) {
     val activeIndex by remember(lines, playbackPositionMsFlow) {
         playbackPositionMsFlow
             .map { posMs -> LrcParser.findActiveLineIndex(lines = lines, positionMs = posMs) }
@@ -501,12 +498,7 @@ private fun EmptyLyricsPlaceholder(
 }
 
 @Composable
-private fun ManualLyricsEditorDialog(
-    trackTitle: String,
-    initialText: String,
-    onSave: (String) -> Unit,
-    onDismiss: () -> Unit,
-) {
+private fun ManualLyricsEditorDialog(trackTitle: String, initialText: String, onSave: (String) -> Unit, onDismiss: () -> Unit) {
     var draftText by remember(initialText) { mutableStateOf(initialText) }
 
     AlertDialog(
@@ -520,7 +512,8 @@ private fun ManualLyricsEditorDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    text = "Paste plain lyrics or timestamped [mm:ss.xx] .lrc text for \"$trackTitle\". Stored 100% locally by SHA-256 fingerprint.",
+                    text = "Paste plain lyrics or timestamped [mm:ss.xx] .lrc text for \"$trackTitle\". " +
+                        "Stored 100% locally by SHA-256 fingerprint.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

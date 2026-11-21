@@ -44,6 +44,15 @@ object WavHeaderParser {
         0x00, 0x38, 0x9B.toByte(), 0x71,
     )
 
+    private data class ParsedFmtChunk(
+        val audioFormat: Int,
+        val channels: Int,
+        val sampleRate: Int,
+        val blockAlign: Int,
+        val bitsPerSample: Int,
+        val isFloatPcm: Boolean,
+    )
+
     @Throws(AudioDecodeException::class)
     fun parse(source: SeekableByteSource): WavHeaderInfo {
         val totalSize = source.size
@@ -58,14 +67,7 @@ object WavHeaderParser {
             throw AudioDecodeException.UnsupportedFormat("Not a valid RIFF/WAVE container")
         }
 
-        var fmtFound = false
-        var audioFormat = 0
-        var channels = 0
-        var sampleRate = 0
-        var blockAlign = 0
-        var bitsPerSample = 0
-        var isFloatPcm = false
-
+        var fmtChunk: ParsedFmtChunk? = null
         var dataOffset = -1L
         var dataSize = -1L
 
@@ -75,8 +77,7 @@ object WavHeaderParser {
 
         while (cursor + 8L <= totalSize && iterations < MAX_CHUNK_ITERATIONS) {
             iterations++
-            val read = readUpTo(source, cursor, chunkHeader, 8)
-            if (read < 8) break
+            if (readUpTo(source, cursor, chunkHeader, 8) < 8) break
 
             val chunkId = String(chunkHeader, 0, 4, Charsets.US_ASCII)
             val chunkSize = readUint32Le(chunkHeader, 4)
@@ -87,57 +88,12 @@ object WavHeaderParser {
             }
 
             when (chunkId) {
-                "fmt " -> {
-                    if (chunkSize < 16L || chunkBodyOffset + 16L > totalSize) {
-                        throw AudioDecodeException.CorruptedFile("Truncated WAV 'fmt ' chunk ($chunkSize bytes)")
-                    }
-                    val fmtReadSize = minOf(chunkSize, 40L).toInt()
-                    val fmtBytes = ByteArray(fmtReadSize)
-                    readExact(source, chunkBodyOffset, fmtBytes, fmtReadSize, "fmt chunk")
-
-                    val rawFormat = readUint16Le(fmtBytes, 0)
-                    channels = readUint16Le(fmtBytes, 2)
-                    sampleRate = readUint32Le(fmtBytes, 4).toInt()
-                    blockAlign = readUint16Le(fmtBytes, 12)
-                    bitsPerSample = readUint16Le(fmtBytes, 14)
-
-                    when (rawFormat) {
-                        WAVE_FORMAT_PCM -> {
-                            audioFormat = WAVE_FORMAT_PCM
-                            isFloatPcm = false
-                        }
-                        WAVE_FORMAT_IEEE_FLOAT -> {
-                            audioFormat = WAVE_FORMAT_IEEE_FLOAT
-                            isFloatPcm = true
-                        }
-                        WAVE_FORMAT_EXTENSIBLE -> {
-                            if (fmtReadSize < 40) {
-                                throw AudioDecodeException.CorruptedFile("Truncated WAVE_FORMAT_EXTENSIBLE chunk")
-                            }
-                            val subFormatCode = readUint16Le(fmtBytes, 24)
-                            val subFormatHigh = readUint16Le(fmtBytes, 26)
-                            val guidMatches = subFormatHigh == 0 && matchesBytes(fmtBytes, 28, SUBFORMAT_GUID_TAIL)
-                            if (!guidMatches || (subFormatCode != WAVE_FORMAT_PCM && subFormatCode != WAVE_FORMAT_IEEE_FLOAT)) {
-                                throw AudioDecodeException.UnsupportedFormat(
-                                    "Unsupported WAVE_FORMAT_EXTENSIBLE subformat: 0x${subFormatCode.toString(16)}",
-                                )
-                            }
-                            audioFormat = subFormatCode
-                            isFloatPcm = (subFormatCode == WAVE_FORMAT_IEEE_FLOAT)
-                        }
-                        else -> {
-                            throw AudioDecodeException.UnsupportedFormat(
-                                "Unsupported WAV compression format tag: 0x${rawFormat.toString(16)}",
-                            )
-                        }
-                    }
-                    fmtFound = true
-                }
+                "fmt " -> fmtChunk = parseFmtChunk(source, chunkBodyOffset, chunkSize, totalSize)
                 "data" -> {
                     dataOffset = chunkBodyOffset
                     val available = (totalSize - chunkBodyOffset).coerceAtLeast(0L)
                     dataSize = if (chunkSize == 0L || chunkSize > available) available else chunkSize
-                    if (fmtFound) break
+                    if (fmtChunk != null) break
                 }
             }
 
@@ -150,46 +106,106 @@ object WavHeaderParser {
             cursor = nextCursor
         }
 
-        if (!fmtFound) {
+        return buildValidatedHeader(fmtChunk, dataOffset, dataSize)
+    }
+
+    @Throws(AudioDecodeException::class)
+    private fun parseFmtChunk(source: SeekableByteSource, chunkBodyOffset: Long, chunkSize: Long, totalSize: Long): ParsedFmtChunk {
+        if (chunkSize < 16L || chunkBodyOffset + 16L > totalSize) {
+            throw AudioDecodeException.CorruptedFile("Truncated WAV 'fmt ' chunk ($chunkSize bytes)")
+        }
+        val fmtReadSize = minOf(chunkSize, 40L).toInt()
+        val fmtBytes = ByteArray(fmtReadSize)
+        readExact(source, chunkBodyOffset, fmtBytes, fmtReadSize, "fmt chunk")
+
+        val rawFormat = readUint16Le(fmtBytes, 0)
+        val channels = readUint16Le(fmtBytes, 2)
+        val sampleRate = readUint32Le(fmtBytes, 4).toInt()
+        val blockAlign = readUint16Le(fmtBytes, 12)
+        val bitsPerSample = readUint16Le(fmtBytes, 14)
+
+        val (audioFormat, isFloatPcm) = when (rawFormat) {
+            WAVE_FORMAT_PCM -> WAVE_FORMAT_PCM to false
+            WAVE_FORMAT_IEEE_FLOAT -> WAVE_FORMAT_IEEE_FLOAT to true
+            WAVE_FORMAT_EXTENSIBLE -> parseExtensibleSubFormat(fmtBytes)
+            else -> throw AudioDecodeException.UnsupportedFormat(
+                "Unsupported WAV compression format tag: 0x${rawFormat.toString(16)}",
+            )
+        }
+
+        return ParsedFmtChunk(
+            audioFormat = audioFormat,
+            channels = channels,
+            sampleRate = sampleRate,
+            blockAlign = blockAlign,
+            bitsPerSample = bitsPerSample,
+            isFloatPcm = isFloatPcm,
+        )
+    }
+
+    @Throws(AudioDecodeException::class)
+    private fun parseExtensibleSubFormat(fmtBytes: ByteArray): Pair<Int, Boolean> {
+        if (fmtBytes.size < 40) {
+            throw AudioDecodeException.CorruptedFile("Truncated WAVE_FORMAT_EXTENSIBLE chunk")
+        }
+        val subFormatCode = readUint16Le(fmtBytes, 24)
+        val subFormatHigh = readUint16Le(fmtBytes, 26)
+        val guidMatches = subFormatHigh == 0 && matchesBytes(fmtBytes, 28, SUBFORMAT_GUID_TAIL)
+        val isSupportedSubFormat = subFormatCode == WAVE_FORMAT_PCM || subFormatCode == WAVE_FORMAT_IEEE_FLOAT
+        if (!guidMatches || !isSupportedSubFormat) {
+            throw AudioDecodeException.UnsupportedFormat(
+                "Unsupported WAVE_FORMAT_EXTENSIBLE subformat: 0x${subFormatCode.toString(16)}",
+            )
+        }
+        return subFormatCode to (subFormatCode == WAVE_FORMAT_IEEE_FLOAT)
+    }
+
+    @Throws(AudioDecodeException::class)
+    private fun buildValidatedHeader(fmt: ParsedFmtChunk?, dataOffset: Long, dataSize: Long): WavHeaderInfo {
+        if (fmt == null) {
             throw AudioDecodeException.CorruptedFile("Missing 'fmt ' chunk in WAV file")
         }
         if (dataOffset < 0L || dataSize <= 0L) {
             throw AudioDecodeException.CorruptedFile("Missing or empty 'data' chunk in WAV file")
         }
-        if (channels !in 1..8) {
-            throw AudioDecodeException.UnsupportedFormat("Unsupported WAV channel count: $channels")
-        }
-        if (sampleRate !in 8_000..768_000) {
-            throw AudioDecodeException.UnsupportedFormat("Unsupported WAV sample rate: $sampleRate Hz")
-        }
+        validateFmtParams(fmt)
 
-        val supportedBitDepth = if (isFloatPcm) {
-            bitsPerSample == 32
-        } else {
-            bitsPerSample == 16 || bitsPerSample == 24 || bitsPerSample == 32
-        }
-        if (!supportedBitDepth) {
-            throw AudioDecodeException.UnsupportedFormat(
-                "Unsupported WAV bit depth: $bitsPerSample-bit (float=$isFloatPcm, format=$audioFormat)",
-            )
-        }
-
-        val expectedBlockAlign = channels * (bitsPerSample / 8)
-        val effectiveBlockAlign = if (blockAlign == expectedBlockAlign) blockAlign else expectedBlockAlign
+        val expectedBlockAlign = fmt.channels * (fmt.bitsPerSample / 8)
+        val effectiveBlockAlign = if (fmt.blockAlign == expectedBlockAlign) fmt.blockAlign else expectedBlockAlign
         val alignedDataSize = (dataSize / effectiveBlockAlign.toLong()) * effectiveBlockAlign.toLong()
         if (alignedDataSize <= 0L) {
             throw AudioDecodeException.CorruptedFile("WAV 'data' chunk contains zero complete audio frames")
         }
 
         return WavHeaderInfo(
-            sampleRateHz = sampleRate,
-            channelCount = channels,
-            bitsPerSample = bitsPerSample,
+            sampleRateHz = fmt.sampleRate,
+            channelCount = fmt.channels,
+            bitsPerSample = fmt.bitsPerSample,
             blockAlign = effectiveBlockAlign,
-            isFloatPcm = isFloatPcm,
+            isFloatPcm = fmt.isFloatPcm,
             dataOffsetBytes = dataOffset,
             dataSizeBytes = alignedDataSize,
         )
+    }
+
+    @Throws(AudioDecodeException::class)
+    private fun validateFmtParams(fmt: ParsedFmtChunk) {
+        if (fmt.channels !in 1..8) {
+            throw AudioDecodeException.UnsupportedFormat("Unsupported WAV channel count: ${fmt.channels}")
+        }
+        if (fmt.sampleRate !in 8_000..768_000) {
+            throw AudioDecodeException.UnsupportedFormat("Unsupported WAV sample rate: ${fmt.sampleRate} Hz")
+        }
+        val supportedBitDepth = if (fmt.isFloatPcm) {
+            fmt.bitsPerSample == 32
+        } else {
+            fmt.bitsPerSample == 16 || fmt.bitsPerSample == 24 || fmt.bitsPerSample == 32
+        }
+        if (!supportedBitDepth) {
+            throw AudioDecodeException.UnsupportedFormat(
+                "Unsupported WAV bit depth: ${fmt.bitsPerSample}-bit (float=${fmt.isFloatPcm}, format=${fmt.audioFormat})",
+            )
+        }
     }
 
     /**
@@ -197,10 +213,7 @@ object WavHeaderParser {
      * in `[-1.0f, +1.0f)`. Because float32 has a 24-bit significand and division by `2^23` (`8388608f`)
      * only adjusts the exponent, all 24 bits of integer sample precision are preserved without truncation.
      */
-    fun unpackPcm24LeToFloat32(
-        sourceBytes: ByteArray,
-        byteCount: Int = sourceBytes.size,
-    ): FloatArray {
+    fun unpackPcm24LeToFloat32(sourceBytes: ByteArray, byteCount: Int = sourceBytes.size): FloatArray {
         val sampleCount = byteCount / 3
         val out = FloatArray(sampleCount)
         var inIdx = 0
@@ -219,11 +232,7 @@ object WavHeaderParser {
      * Unpacks packed 24-bit signed little-endian PCM bytes directly into little-endian IEEE float32 bytes
      * suitable for [android.media.AudioFormat.ENCODING_PCM_FLOAT] streaming buffers.
      */
-    fun unpackPcm24LeToFloat32Bytes(
-        sourceBytes: ByteArray,
-        sourceByteCount: Int,
-        destBytes: ByteArray,
-    ): Int {
+    fun unpackPcm24LeToFloat32Bytes(sourceBytes: ByteArray, sourceByteCount: Int, destBytes: ByteArray): Int {
         val sampleCount = minOf(sourceByteCount / 3, destBytes.size / 4)
         var inIdx = 0
         var outIdx = 0
@@ -247,11 +256,7 @@ object WavHeaderParser {
      * Converts 32-bit signed little-endian integer PCM bytes to little-endian IEEE float32 bytes
      * (fallback for API 26–30 when `ENCODING_PCM_32BIT` is unavailable).
      */
-    fun unpackPcm32LeToFloat32Bytes(
-        sourceBytes: ByteArray,
-        sourceByteCount: Int,
-        destBytes: ByteArray,
-    ): Int {
+    fun unpackPcm32LeToFloat32Bytes(sourceBytes: ByteArray, sourceByteCount: Int, destBytes: ByteArray): Int {
         val sampleCount = minOf(sourceByteCount / 4, destBytes.size / 4)
         var idx = 0
         for (i in 0 until sampleCount) {
@@ -269,25 +274,14 @@ object WavHeaderParser {
         return sampleCount * 4
     }
 
-    private fun readExact(
-        source: SeekableByteSource,
-        offset: Long,
-        target: ByteArray,
-        length: Int,
-        label: String,
-    ) {
+    private fun readExact(source: SeekableByteSource, offset: Long, target: ByteArray, length: Int, label: String) {
         val read = readUpTo(source, offset, target, length)
         if (read < length) {
             throw AudioDecodeException.CorruptedFile("Unexpected EOF while reading WAV $label")
         }
     }
 
-    private fun readUpTo(
-        source: SeekableByteSource,
-        offset: Long,
-        target: ByteArray,
-        length: Int,
-    ): Int {
+    private fun readUpTo(source: SeekableByteSource, offset: Long, target: ByteArray, length: Int): Int {
         var filled = 0
         try {
             while (filled < length) {
@@ -330,10 +324,7 @@ object WavHeaderParser {
  * @param supportsNative24And32BitPcm `true` on Android 12+ (`Build.VERSION.SDK_INT >= Build.VERSION_CODES.S`),
  * `false` on API 26–30 where 24-bit/32-bit integer WAVs unpack losslessly to [PcmEncodingType.PCM_FLOAT].
  */
-class WavPcmDecoder(
-    private val source: SeekableByteSource,
-    supportsNative24And32BitPcm: Boolean,
-) : PcmAudioDecoder {
+class WavPcmDecoder(private val source: SeekableByteSource, supportsNative24And32BitPcm: Boolean) : PcmAudioDecoder {
 
     val header: WavHeaderInfo = WavHeaderParser.parse(source)
 
@@ -390,42 +381,44 @@ class WavPcmDecoder(
 
         return try {
             if (unpack24ToFloat) {
-                val outFrameBytes = header.channelCount * 4
-                val maxFrames = destination.size / outFrameBytes
-                if (maxFrames <= 0) return 0
-                val rawBytesNeeded = minOf(maxFrames.toLong() * header.blockAlign.toLong(), remainingInputBytes).toInt()
-                val alignedRawBytes = (rawBytesNeeded / header.blockAlign) * header.blockAlign
-                if (alignedRawBytes <= 0) return -1
-                if (scratchRawBuffer.size < alignedRawBytes) {
-                    scratchRawBuffer = ByteArray(alignedRawBytes)
-                }
-                val read = readAligned(scratchRawBuffer, alignedRawBytes)
-                if (read <= 0) return -1
-                dataBytePosition += read.toLong()
-                WavHeaderParser.unpackPcm24LeToFloat32Bytes(scratchRawBuffer, read, destination)
-            } else if (unpack32ToFloat) {
-                val alignedBytes = minOf(
-                    ((destination.size / header.blockAlign) * header.blockAlign).toLong(),
-                    remainingInputBytes,
-                ).toInt()
-                if (alignedBytes <= 0) return -1
-                val read = readAligned(destination, alignedBytes)
-                if (read <= 0) return -1
-                dataBytePosition += read.toLong()
-                WavHeaderParser.unpackPcm32LeToFloat32Bytes(destination, read, destination)
+                readUnpacked24ToFloat(destination, remainingInputBytes)
             } else {
-                val alignedBytes = minOf(
-                    ((destination.size / header.blockAlign) * header.blockAlign).toLong(),
-                    remainingInputBytes,
-                ).toInt()
-                if (alignedBytes <= 0) return -1
-                val read = readAligned(destination, alignedBytes)
-                if (read <= 0) return -1
-                dataBytePosition += read.toLong()
-                read
+                readNativeOr32ToFloat(destination, remainingInputBytes)
             }
         } catch (e: IOException) {
             throw AudioDecodeException.IoError("Failed reading WAV PCM frames: ${e.message}", e)
+        }
+    }
+
+    private fun readUnpacked24ToFloat(destination: ByteArray, remainingInputBytes: Long): Int {
+        val outFrameBytes = header.channelCount * 4
+        val maxFrames = destination.size / outFrameBytes
+        if (maxFrames <= 0) return 0
+        val rawBytesNeeded = minOf(maxFrames.toLong() * header.blockAlign.toLong(), remainingInputBytes).toInt()
+        val alignedRawBytes = (rawBytesNeeded / header.blockAlign) * header.blockAlign
+        if (alignedRawBytes <= 0) return -1
+        if (scratchRawBuffer.size < alignedRawBytes) {
+            scratchRawBuffer = ByteArray(alignedRawBytes)
+        }
+        val read = readAligned(scratchRawBuffer, alignedRawBytes)
+        if (read <= 0) return -1
+        dataBytePosition += read.toLong()
+        return WavHeaderParser.unpackPcm24LeToFloat32Bytes(scratchRawBuffer, read, destination)
+    }
+
+    private fun readNativeOr32ToFloat(destination: ByteArray, remainingInputBytes: Long): Int {
+        val alignedBytes = minOf(
+            ((destination.size / header.blockAlign) * header.blockAlign).toLong(),
+            remainingInputBytes,
+        ).toInt()
+        if (alignedBytes <= 0) return -1
+        val read = readAligned(destination, alignedBytes)
+        if (read <= 0) return -1
+        dataBytePosition += read.toLong()
+        return if (unpack32ToFloat) {
+            WavHeaderParser.unpackPcm32LeToFloat32Bytes(destination, read, destination)
+        } else {
+            read
         }
     }
 

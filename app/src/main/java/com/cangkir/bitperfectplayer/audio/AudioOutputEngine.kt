@@ -21,10 +21,6 @@ import android.util.Log
 import androidx.annotation.RequiresApi
 import androidx.core.content.ContextCompat
 import com.cangkir.bitperfectplayer.lyrics.FileChannelSeekableByteSource
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
 import java.io.FileInputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -37,6 +33,10 @@ import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 import kotlin.math.ceil
 import kotlin.math.roundToLong
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 
 enum class PlaybackStatus {
     IDLE,
@@ -411,12 +411,10 @@ class AudioOutputEngine(
         }
     }
 
-    private fun loadTrackLocked(
-        request: EngineTrackRequest,
-        generation: Long,
-        preserveAutoPauseNotice: Boolean,
-    ) {
-        if (releasedFlag.get() || loadGeneration.get() != generation) return
+    private fun isLoadStale(generation: Long): Boolean = releasedFlag.get() || loadGeneration.get() != generation
+
+    private fun loadTrackLocked(request: EngineTrackRequest, generation: Long, preserveAutoPauseNotice: Boolean) {
+        if (isLoadStale(generation)) return
         clearPreloadedNextLocked()
         stopWorkerAndReleaseTrackLocked(clearMixer = true)
         currentRequest = request
@@ -424,27 +422,8 @@ class AudioOutputEngine(
         recomputeReplayGain()
 
         // Open and prime decoder BEFORE creating AudioTrack so codec.outputFormat is confirmed.
-        val decoder = try {
-            MediaCodecAudioDecoder.open(
-                context = appContext,
-                uri = request.uri,
-                fileName = request.fileName,
-                mimeHint = request.mimeType,
-            )
-        } catch (e: AudioDecodeException) {
-            if (loadGeneration.get() != generation) return
-            activeDecoder = null
-            _state.update {
-                it.copy(
-                    status = PlaybackStatus.ERROR,
-                    errorMessage = e.message ?: "Unable to decode audio file",
-                )
-            }
-            publishDiagnostics()
-            return
-        }
-
-        if (releasedFlag.get() || loadGeneration.get() != generation) {
+        val decoder = openDecoderForTrackLocked(request, generation) ?: return
+        if (isLoadStale(generation)) {
             runCatching { decoder.close() }
             return
         }
@@ -461,30 +440,73 @@ class AudioOutputEngine(
             runCatching { decoder.seekToMs(request.startPositionMs) }
         }
 
-        val audioTrack = try {
-            createConfiguredAudioTrackLocked(decoder.format)
-        } catch (e: Exception) {
-            runCatching { decoder.close() }
-            activeDecoder = null
-            clearPreferredMixerAttributesOnApi34(null)
-            if (loadGeneration.get() != generation) return
-            _state.update {
-                it.copy(
-                    status = PlaybackStatus.ERROR,
-                    errorMessage = "AudioTrack initialization failed: ${e.message}",
-                )
-            }
-            publishDiagnostics()
-            return
-        }
-
-        if (releasedFlag.get() || loadGeneration.get() != generation) {
+        val audioTrack = createAudioTrackForDecoderLocked(decoder, generation) ?: return
+        if (isLoadStale(generation)) {
             safeStopAndReleaseTrack(audioTrack)
             runCatching { decoder.close() }
             clearPreferredMixerAttributesOnApi34(null)
             return
         }
 
+        activateLoadedTrackLocked(request, decoder, audioTrack, generation, preserveAutoPauseNotice)
+    }
+
+    private fun openDecoderForTrackLocked(request: EngineTrackRequest, generation: Long): PcmAudioDecoder? = try {
+        MediaCodecAudioDecoder.open(
+            context = appContext,
+            uri = request.uri,
+            fileName = request.fileName,
+            mimeHint = request.mimeType,
+        )
+    } catch (e: AudioDecodeException) {
+        if (loadGeneration.get() == generation) {
+            activeDecoder = null
+            _state.update {
+                it.copy(
+                    status = PlaybackStatus.ERROR,
+                    errorMessage = e.message ?: "Unable to decode audio file",
+                )
+            }
+            publishDiagnostics()
+        }
+        null
+    }
+
+    private fun createAudioTrackForDecoderLocked(decoder: PcmAudioDecoder, generation: Long): AudioTrack? = try {
+        createConfiguredAudioTrackLocked(decoder.format)
+    } catch (e: UnsupportedOperationException) {
+        handleAudioTrackInitFailureLocked(decoder, generation, e)
+    } catch (e: IllegalArgumentException) {
+        handleAudioTrackInitFailureLocked(decoder, generation, e)
+    } catch (e: IllegalStateException) {
+        handleAudioTrackInitFailureLocked(decoder, generation, e)
+    } catch (e: SecurityException) {
+        handleAudioTrackInitFailureLocked(decoder, generation, e)
+    }
+
+    private fun handleAudioTrackInitFailureLocked(decoder: PcmAudioDecoder, generation: Long, error: RuntimeException): AudioTrack? {
+        runCatching { decoder.close() }
+        activeDecoder = null
+        clearPreferredMixerAttributesOnApi34(null)
+        if (loadGeneration.get() == generation) {
+            _state.update {
+                it.copy(
+                    status = PlaybackStatus.ERROR,
+                    errorMessage = "AudioTrack initialization failed: ${error.message}",
+                )
+            }
+            publishDiagnostics()
+        }
+        return null
+    }
+
+    private fun activateLoadedTrackLocked(
+        request: EngineTrackRequest,
+        decoder: PcmAudioDecoder,
+        audioTrack: AudioTrack,
+        generation: Long,
+        preserveAutoPauseNotice: Boolean,
+    ) {
         activeDecoder = decoder
         activeAudioTrack = audioTrack
         _playbackPositionMs.value = decoder.currentPositionMs
@@ -641,7 +663,8 @@ class AudioOutputEngine(
      * inactive, or uninitialized. Safe to call off the audio thread (`Dispatchers.Default`).
      */
     fun sampleCurrentSpectrumWindow(outMonoSamples: FloatArray): Int {
-        if (!spectrumTapActive.get() || !_state.value.isPlaying || isPausedFlag.get() || releasedFlag.get()) {
+        val isEnginePlaying = _state.value.isPlaying && !isPausedFlag.get() && !releasedFlag.get()
+        if (!spectrumTapActive.get() || !isEnginePlaying) {
             return 0
         }
         val tap = spectrumPcmTap ?: return 0
@@ -830,10 +853,7 @@ class AudioOutputEngine(
         }
     }
 
-    private fun reconfigureTrackIfLoadedLocked(
-        autoResume: Boolean,
-        preserveAutoPauseNotice: Boolean,
-    ) {
+    private fun reconfigureTrackIfLoadedLocked(autoResume: Boolean, preserveAutoPauseNotice: Boolean) {
         clearPreloadedNextLocked()
         val req = currentRequest
         if (req == null || activeDecoder == null) {
@@ -941,17 +961,14 @@ class AudioOutputEngine(
         Log.d(
             TAG,
             "AudioTrack configured: decoder=${pcmFormat.decoderName}, decodedEncoding=${pcmFormat.encoding}, " +
-                "audioTrackEncoding=${audioTrackActualEncodingLabel} (const=$actualEncodingInt), " +
+                "audioTrackEncoding=$audioTrackActualEncodingLabel (const=$actualEncodingInt), " +
                 "sampleRate=${track.sampleRate}Hz, channels=${pcmFormat.channelCount}, " +
                 "bytesPerFrame=$bytesPerFrame, bufferBytes=$alignedBufSize, mixer=${negotiation.behavior}",
         )
         return track
     }
 
-    private data class MixerNegotiationResult(
-        val behavior: NegotiatedMixerBehavior,
-        val summary: String,
-    )
+    private data class MixerNegotiationResult(val behavior: NegotiatedMixerBehavior, val summary: String)
 
     private fun negotiateMixerAttributesLocked(
         pcmFormat: DecodedPcmFormat,
@@ -1016,7 +1033,9 @@ class AudioOutputEngine(
                     }
                 return MixerNegotiationResult(
                     behavior = NegotiatedMixerBehavior.DEFAULT_MIXER_FALLBACK,
-                    summary = "Default System Mixer (No exact bit-perfect match for ${AudioFormatFormatter.formatSampleRateHz(pcmFormat.sampleRateHz)} / ${androidEncodingName(androidEncoding)}; HAL supports: $reported)",
+                    summary = "Default System Mixer (No exact bit-perfect match for ${AudioFormatFormatter.formatSampleRateHz(
+                        pcmFormat.sampleRateHz,
+                    )} / ${androidEncodingName(androidEncoding)}; HAL supports: $reported)",
                 )
             }
 
@@ -1037,7 +1056,9 @@ class AudioOutputEngine(
                 lastConfiguredMixerDevice = usbDevice
                 MixerNegotiationResult(
                     behavior = NegotiatedMixerBehavior.BIT_PERFECT,
-                    summary = "MIXER_BEHAVIOR_BIT_PERFECT (${AudioFormatFormatter.formatSampleRateHz(verified.format.sampleRate)}, ${androidEncodingName(verified.format.encoding)})",
+                    summary = "MIXER_BEHAVIOR_BIT_PERFECT (${AudioFormatFormatter.formatSampleRateHz(
+                        verified.format.sampleRate,
+                    )}, ${androidEncodingName(verified.format.encoding)})",
                 )
             } else {
                 clearPreferredMixerAttributesOnApi34(usbDevice)
@@ -1046,13 +1067,23 @@ class AudioOutputEngine(
                     summary = "Default System Mixer (HAL did not confirm bit-perfect preference)",
                 )
             }
-        } catch (e: Exception) {
-            clearPreferredMixerAttributesOnApi34(usbDevice)
-            MixerNegotiationResult(
-                behavior = NegotiatedMixerBehavior.DEFAULT_MIXER_FALLBACK,
-                summary = "Default System Mixer (API 34 negotiation error: ${e.javaClass.simpleName})",
-            )
+        } catch (e: IllegalArgumentException) {
+            fallbackApi34MixerError(usbDevice, e)
+        } catch (e: IllegalStateException) {
+            fallbackApi34MixerError(usbDevice, e)
+        } catch (e: SecurityException) {
+            fallbackApi34MixerError(usbDevice, e)
+        } catch (e: UnsupportedOperationException) {
+            fallbackApi34MixerError(usbDevice, e)
         }
+    }
+
+    private fun fallbackApi34MixerError(usbDevice: AudioDeviceInfo, error: RuntimeException): MixerNegotiationResult {
+        clearPreferredMixerAttributesOnApi34(usbDevice)
+        return MixerNegotiationResult(
+            behavior = NegotiatedMixerBehavior.DEFAULT_MIXER_FALLBACK,
+            summary = "Default System Mixer (API 34 negotiation error: ${error.javaClass.simpleName})",
+        )
     }
 
     /**
@@ -1074,10 +1105,7 @@ class AudioOutputEngine(
         lastConfiguredMixerDevice = null
     }
 
-    private fun startPlaybackWorkerLocked(
-        initialSeekMs: Long,
-        expectedGeneration: Long,
-    ) {
+    private fun startPlaybackWorkerLocked(initialSeekMs: Long, expectedGeneration: Long) {
         val decoder = activeDecoder ?: return
         val track = activeAudioTrack ?: return
         if (!requestAudioFocusLocked()) {
@@ -1110,6 +1138,34 @@ class AudioOutputEngine(
         NONE,
         REBUILT_CONTINUE,
         STOPPED_BREAK,
+    }
+
+    private enum class LoopStepOutcome {
+        CONTINUE,
+        BREAK,
+    }
+
+    private fun isWorkerActive(): Boolean = !stopWorkerFlag.get() && !releasedFlag.get()
+
+    private fun isSafeModeActivePlayback(): Boolean =
+        isWorkerActive() && !isPausedFlag.get() && safetyController.state().mode == AudioOutputMode.SAFE_VOLUME_MODE
+
+    private fun canContinueTurntableScratch(): Boolean =
+        turntableScratchRequested.get() && pendingSeekMs.get() < 0L && isSafeModeActivePlayback()
+
+    private fun canDecodeAheadForScratch(
+        state: PlaybackLoopState,
+        ringBuf: TurntablePcmRingBuffer,
+        neededEndFrame: Long,
+        reads: Int,
+    ): Boolean {
+        val needMoreFrames = ringBuf.writeHeadFrame <= neededEndFrame && reads < 12 && !state.decoderEosDuringScratch
+        return needMoreFrames && isWorkerActive() && turntableScratchRequested.get()
+    }
+
+    private fun canPreFeedRingDrain(state: PlaybackLoopState, preFed: Int): Boolean {
+        val readyToDrain = preFed < 2 && state.ringDrainCursorFrame >= 0L && isWorkerActive()
+        return readyToDrain && !isPausedFlag.get() && !turntableScratchRequested.get()
     }
 
     /**
@@ -1166,10 +1222,7 @@ class AudioOutputEngine(
         var lastUiUpdateNano: Long = 0L
         var scratchCursorFrame: Double = 0.0
 
-        fun reconfigureBuffersForFormat(
-            newFormat: DecodedPcmFormat,
-            ringBuffer: TurntablePcmRingBuffer?,
-        ) {
+        fun reconfigureBuffersForFormat(newFormat: DecodedPcmFormat, ringBuffer: TurntablePcmRingBuffer?) {
             currentFormat = newFormat
             sampleRate = newFormat.sampleRateHz.coerceAtLeast(1)
             durationMs = newFormat.durationMs.coerceAtLeast(0L)
@@ -1223,11 +1276,7 @@ class AudioOutputEngine(
         return tap
     }
 
-    private fun accumulateActivePlayTime(
-        state: PlaybackLoopState,
-        forceFlush: Boolean,
-        overrideHeadFrames: Long? = null,
-    ) {
+    private fun accumulateActivePlayTime(state: PlaybackLoopState, forceFlush: Boolean, overrideHeadFrames: Long? = null) {
         val headFrames = overrideHeadFrames ?: readUnsignedPlaybackHeadFrames(state.currentTrack)
         val stepFrames = (headFrames - state.countHeadFrames).coerceAtLeast(0L)
         if (stepFrames > 0L) {
@@ -1245,12 +1294,8 @@ class AudioOutputEngine(
         }
     }
 
-    private fun runPlaybackLoop(
-        initialDecoder: PcmAudioDecoder,
-        initialTrack: AudioTrack,
-        initialSeekMs: Long,
-        expectedGeneration: Long,
-    ) {
+    @Suppress("TooGenericExceptionCaught") // Top-level audio worker thread must surface OEM HAL errors safely instead of crashing
+    private fun runPlaybackLoop(initialDecoder: PcmAudioDecoder, initialTrack: AudioTrack, initialSeekMs: Long, expectedGeneration: Long) {
         val initialChannels = initialDecoder.format.channelCount.coerceIn(1, 8)
         val initialRing = ensureSafeModeRingBuffer(initialChannels)?.also { it.reset(0L) }
         val state = PlaybackLoopState(
@@ -1268,97 +1313,93 @@ class AudioOutputEngine(
         }
 
         try {
-            while (!stopWorkerFlag.get() && !releasedFlag.get()) {
-                val requestedSeek = pendingSeekMs.getAndSet(-1L)
-                if (requestedSeek >= 0L) {
-                    handlePendingSeekInLoop(state, requestedSeek)
-                    continue
-                }
-
-                if (isPausedFlag.get()) {
-                    if (!state.wasPausedInLoop) {
-                        accumulateActivePlayTime(state, forceFlush = true)
-                        state.wasPausedInLoop = true
-                    }
-                    try {
-                        Thread.sleep(25L)
-                    } catch (_: InterruptedException) {
-                        break
-                    }
-                    continue
-                }
-                if (state.wasPausedInLoop) {
-                    state.countHeadFrames = maxOf(
-                        readUnsignedPlaybackHeadFrames(state.currentTrack),
-                        state.headBaseFrames,
-                    )
-                    state.wasPausedInLoop = false
-                }
-
-                if (turntableScratchRequested.get()) {
-                    processTurntableScratchStep(state)
-                    continue
-                }
-
-                if (state.ringDrainCursorFrame >= 0L && processRingDrainStepInLoop(state)) {
-                    continue
-                }
-
-                val bytesRead = if (state.decoderEosDuringScratch) {
-                    -1
-                } else {
-                    state.currentDecoder.readPcm(state.pcmBuffer)
-                }
-                if (bytesRead < 0) {
-                    if (handleEndOfStreamInLoop(state)) continue else break
-                }
-
-                when (handleMidStreamFormatChangeInLoop(state)) {
-                    FormatChangeOutcome.REBUILT_CONTINUE -> continue
-                    FormatChangeOutcome.STOPPED_BREAK -> break
-                    FormatChangeOutcome.NONE -> Unit
-                }
-
-                if (bytesRead == 0) {
-                    try {
-                        Thread.sleep(5L)
-                    } catch (_: InterruptedException) {
-                        break
-                    }
-                    continue
-                }
-
-                processNormalPcmChunkInLoop(state, bytesRead)
-                publishPlaybackPositionAndPreload(state)
+            while (isWorkerActive()) {
+                if (executePlaybackLoopStep(state) == LoopStepOutcome.BREAK) break
             }
         } catch (e: AudioDecodeException) {
-            if (!stopWorkerFlag.get()) {
-                _state.update {
-                    it.copy(
-                        status = PlaybackStatus.ERROR,
-                        errorMessage = e.message ?: "Playback decoding error",
-                    )
-                }
-            }
+            publishWorkerErrorIfRunning(e.message ?: "Playback decoding error")
         } catch (e: Exception) {
-            if (!stopWorkerFlag.get()) {
-                _state.update {
-                    it.copy(
-                        status = PlaybackStatus.ERROR,
-                        errorMessage = "Audio playback error: ${e.message}",
-                    )
-                }
-            }
+            publishWorkerErrorIfRunning("Audio playback error: ${e.message}")
         } finally {
             abortTurntableScratch()
             runCatching { accumulateActivePlayTime(state, forceFlush = true) }
         }
     }
 
-    private fun handlePendingSeekInLoop(
-        state: PlaybackLoopState,
-        requestedSeekMs: Long,
-    ) {
+    private fun publishWorkerErrorIfRunning(message: String) {
+        if (stopWorkerFlag.get()) return
+        _state.update {
+            it.copy(
+                status = PlaybackStatus.ERROR,
+                errorMessage = message,
+            )
+        }
+    }
+
+    private fun executePlaybackLoopStep(state: PlaybackLoopState): LoopStepOutcome {
+        val requestedSeek = pendingSeekMs.getAndSet(-1L)
+        if (requestedSeek >= 0L) {
+            handlePendingSeekInLoop(state, requestedSeek)
+            return LoopStepOutcome.CONTINUE
+        }
+
+        if (isPausedFlag.get()) {
+            return handlePausedStepInLoop(state)
+        }
+        if (state.wasPausedInLoop) {
+            state.countHeadFrames = maxOf(
+                readUnsignedPlaybackHeadFrames(state.currentTrack),
+                state.headBaseFrames,
+            )
+            state.wasPausedInLoop = false
+        }
+
+        if (turntableScratchRequested.get()) {
+            processTurntableScratchStep(state)
+            return LoopStepOutcome.CONTINUE
+        }
+
+        if (state.ringDrainCursorFrame >= 0L && processRingDrainStepInLoop(state)) {
+            return LoopStepOutcome.CONTINUE
+        }
+
+        return decodeAndOutputNextChunkInLoop(state)
+    }
+
+    private fun handlePausedStepInLoop(state: PlaybackLoopState): LoopStepOutcome {
+        if (!state.wasPausedInLoop) {
+            accumulateActivePlayTime(state, forceFlush = true)
+            state.wasPausedInLoop = true
+        }
+        return if (sleepUninterrupted(25L)) LoopStepOutcome.CONTINUE else LoopStepOutcome.BREAK
+    }
+
+    private fun decodeAndOutputNextChunkInLoop(state: PlaybackLoopState): LoopStepOutcome {
+        val bytesRead = if (state.decoderEosDuringScratch) {
+            -1
+        } else {
+            state.currentDecoder.readPcm(state.pcmBuffer)
+        }
+        if (bytesRead < 0) {
+            return if (handleEndOfStreamInLoop(state)) LoopStepOutcome.CONTINUE else LoopStepOutcome.BREAK
+        }
+
+        return when (handleMidStreamFormatChangeInLoop(state)) {
+            FormatChangeOutcome.REBUILT_CONTINUE -> LoopStepOutcome.CONTINUE
+            FormatChangeOutcome.STOPPED_BREAK -> LoopStepOutcome.BREAK
+            FormatChangeOutcome.NONE -> {
+                if (bytesRead == 0) {
+                    if (sleepUninterrupted(5L)) LoopStepOutcome.CONTINUE else LoopStepOutcome.BREAK
+                } else {
+                    processNormalPcmChunkInLoop(state, bytesRead)
+                    publishPlaybackPositionAndPreload(state)
+                    LoopStepOutcome.CONTINUE
+                }
+            }
+        }
+    }
+
+    private fun handlePendingSeekInLoop(state: PlaybackLoopState, requestedSeekMs: Long) {
         accumulateActivePlayTime(state, forceFlush = true)
         val wasPlaying = !isPausedFlag.get()
         safePauseTrack(state.currentTrack)
@@ -1448,21 +1489,11 @@ class AudioOutputEngine(
         // ~65 ms headroom (sampleRate / 15) + 2 ms sleep prevents 44,100 Hz AudioTrack underruns.
         val maxAheadFrames = (state.sampleRate / 15).toLong().coerceAtLeast(512L)
 
-        while (turntableScratchRequested.get() &&
-            !stopWorkerFlag.get() &&
-            !releasedFlag.get() &&
-            !isPausedFlag.get() &&
-            pendingSeekMs.get() < 0L &&
-            safetyController.state().mode == AudioOutputMode.SAFE_VOLUME_MODE
-        ) {
+        while (canContinueTurntableScratch()) {
             val hwHead = readUnsignedPlaybackHeadFrames(state.currentTrack)
             val ahead = (state.totalFramesWrittenToTrack - hwHead).coerceAtLeast(0L)
             if (ahead > maxAheadFrames) {
-                try {
-                    Thread.sleep(2L)
-                } catch (_: InterruptedException) {
-                    break
-                }
+                if (!sleepUninterrupted(2L)) break
                 continue
             }
 
@@ -1490,11 +1521,7 @@ class AudioOutputEngine(
             state.scratchCursorFrame = step.nextCursorFrame
 
             writeScratchFloatsAndTapSpectrum(state, step.framesRendered)
-
-            val liveTrackMs = (state.streamOriginMs + (state.scratchCursorFrame * 1000.0) / state.sampleRate.toDouble())
-                .roundToLong()
-                .let { if (state.durationMs > 0L) it.coerceIn(0L, state.durationMs) else it.coerceAtLeast(0L) }
-            _playbackPositionMs.value = liveTrackMs
+            _playbackPositionMs.value = computeClampedScratchPositionMs(state)
         }
 
         exitTurntableScratchCleanly(state, ringBuf, scratchResampler, minVirtualFrame, maxVirtualFrame)
@@ -1511,13 +1538,7 @@ class AudioOutputEngine(
             state.scratchCursorFrame + peakForwardRate * state.scratchChunkFrames.toDouble() + 4.0,
         ).toLong()
         var reads = 0
-        while (ringBuf.writeHeadFrame <= neededEndFrame &&
-            reads < 12 &&
-            !state.decoderEosDuringScratch &&
-            !stopWorkerFlag.get() &&
-            !releasedFlag.get() &&
-            turntableScratchRequested.get()
-        ) {
+        while (canDecodeAheadForScratch(state, ringBuf, neededEndFrame, reads)) {
             reads++
             val br = state.currentDecoder.readPcm(state.pcmBuffer)
             if (state.currentDecoder.formatVersion != state.observedFormatVersion) {
@@ -1568,6 +1589,11 @@ class AudioOutputEngine(
         }
     }
 
+    private fun computeClampedScratchPositionMs(state: PlaybackLoopState): Long =
+        (state.streamOriginMs + (state.scratchCursorFrame * 1000.0) / state.sampleRate.toDouble())
+            .roundToLong()
+            .let { if (state.durationMs > 0L) it.coerceIn(0L, state.durationMs) else it.coerceAtLeast(0L) }
+
     private fun exitTurntableScratchCleanly(
         state: PlaybackLoopState,
         ringBuf: TurntablePcmRingBuffer,
@@ -1575,117 +1601,124 @@ class AudioOutputEngine(
         minVirtualFrame: Double,
         maxVirtualFrame: Double,
     ) {
-        val cleanExitToPlay = !stopWorkerFlag.get() &&
-            !releasedFlag.get() &&
-            !isPausedFlag.get() &&
-            pendingSeekMs.get() < 0L &&
-            safetyController.state().mode == AudioOutputMode.SAFE_VOLUME_MODE
-
+        val cleanExitToPlay = isSafeModeActivePlayback() && pendingSeekMs.get() < 0L
         if (!cleanExitToPlay) {
-            turntableFallbackSeekMs.set(-1L)
-            val finalMs = (state.streamOriginMs + (state.scratchCursorFrame * 1000.0) / state.sampleRate.toDouble())
-                .roundToLong()
-                .let { if (state.durationMs > 0L) it.coerceIn(0L, state.durationMs) else it.coerceAtLeast(0L) }
-            _playbackPositionMs.value = finalMs
-            state.countHeadFrames = maxOf(readUnsignedPlaybackHeadFrames(state.currentTrack), state.headBaseFrames)
-            if (isPausedFlag.get() && !stopWorkerFlag.get() && !releasedFlag.get() && pendingSeekMs.get() < 0L) {
-                val cursorLong = state.scratchCursorFrame.roundToLong()
-                if (ringBuf.bufferedFrameCount > 0 &&
-                    cursorLong >= ringBuf.oldestAvailableFrame &&
-                    cursorLong <= ringBuf.writeHeadFrame
-                ) {
-                    state.ringDrainCursorFrame = cursorLong
-                    state.seekBaseMs = finalMs
-                    state.headBaseFrames = state.totalFramesWrittenToTrack
-                    state.countHeadFrames = maxOf(readUnsignedPlaybackHeadFrames(state.currentTrack), state.headBaseFrames)
-                } else {
-                    pendingSeekMs.set(finalMs)
-                }
-            }
+            handleInterruptedScratchExit(state, ringBuf)
             return
         }
 
-        val fadeOutFrames = scratchResampler.exitFadeDurationFrames().coerceAtMost(state.scratchChunkFrames)
-        if (scratchResampler.fadeGain > 0.01f && fadeOutFrames > 0) {
-            val tailStep = scratchResampler.renderChunk(
-                ringBuffer = ringBuf,
-                targetRate = scratchResampler.currentRate,
-                startCursorFrame = state.scratchCursorFrame,
-                minVirtualFrame = minVirtualFrame,
-                maxVirtualFrame = maxVirtualFrame,
-                outFrames = fadeOutFrames,
-                destFloats = state.scratchOutFloats,
-                replayGainLinear = activeReplayGainResolution.linearGain,
-                forceFadeOut = true,
-            )
-            state.scratchCursorFrame = tailStep.nextCursorFrame
-            writeScratchFloatsAndTapSpectrum(state, tailStep.framesRendered)
-        }
+        renderScratchExitFadeOut(state, ringBuf, scratchResampler, minVirtualFrame, maxVirtualFrame)
 
         val fallbackMs = turntableFallbackSeekMs.getAndSet(-1L)
         val targetMs = if (fallbackMs >= 0L) {
-            fallbackMs.let { if (state.durationMs > 0L) it.coerceIn(0L, state.durationMs) else it }
+            if (state.durationMs > 0L) fallbackMs.coerceIn(0L, state.durationMs) else fallbackMs
         } else {
-            (state.streamOriginMs + (state.scratchCursorFrame * 1000.0) / state.sampleRate.toDouble())
-                .roundToLong()
-                .let { if (state.durationMs > 0L) it.coerceIn(0L, state.durationMs) else it.coerceAtLeast(0L) }
+            computeClampedScratchPositionMs(state)
         }
 
         val cursorFrameLong = state.scratchCursorFrame.roundToLong()
-        val cursorInsideRing = ringBuf.bufferedFrameCount > 0 &&
-            cursorFrameLong >= ringBuf.oldestAvailableFrame &&
-            cursorFrameLong <= ringBuf.writeHeadFrame &&
-            fallbackMs < 0L
-
-        if (cursorInsideRing) {
-            // Fast Seamless Path: zero MediaCodec.flush()! Immediately feed up to 2 chunks of 1.0x
-            // ring drain so AudioTrack never starves or triggers restartIfDisabled on transition.
-            state.ringDrainCursorFrame = cursorFrameLong
-            state.exitFadeFramesRemaining = scratchResampler.exitFadeDurationFrames()
-            state.seekBaseMs = targetMs
-            state.headBaseFrames = state.totalFramesWrittenToTrack
-            state.countHeadFrames = maxOf(readUnsignedPlaybackHeadFrames(state.currentTrack), state.headBaseFrames)
-            state.lastUiUpdateNano = 0L
-            _playbackPositionMs.value = targetMs
-
-            var preFed = 0
-            while (preFed < 2 &&
-                state.ringDrainCursorFrame >= 0L &&
-                !stopWorkerFlag.get() &&
-                !releasedFlag.get() &&
-                !isPausedFlag.get() &&
-                !turntableScratchRequested.get()
-            ) {
-                if (!processRingDrainStepInLoop(state)) break
-                preFed++
-            }
+        val inRingRange = ringBuf.bufferedFrameCount > 0 &&
+            cursorFrameLong in ringBuf.oldestAvailableFrame..ringBuf.writeHeadFrame
+        if (inRingRange && fallbackMs < 0L) {
+            resumeScratchViaRingDrain(state, scratchResampler, cursorFrameLong, targetMs)
         } else {
-            // Deep Rewind Path: rewound past oldestAvailableFrame -> single clean seekToMs.
-            safePauseTrack(state.currentTrack)
-            safeFlushTrack(state.currentTrack)
-            state.remainderLen = 0
-            ringBuf.reset(0L)
-            state.ringDrainCursorFrame = -1L
-            state.exitFadeFramesRemaining = 0
-            state.decoderEosDuringScratch = false
-            val actualSeekMs = state.currentDecoder.seekToMs(targetMs)
-            state.streamOriginMs = actualSeekMs
-            state.seekBaseMs = actualSeekMs
-            state.streamFramesWrittenToTrack = 0L
-            state.headBaseFrames = readUnsignedPlaybackHeadFrames(state.currentTrack)
-            state.totalFramesWrittenToTrack = state.headBaseFrames
-            state.countHeadFrames = state.headBaseFrames
-            spectrumPcmTap?.reset(state.sampleRate, state.totalFramesWrittenToTrack)
-            state.lastUiUpdateNano = 0L
-            _playbackPositionMs.value = actualSeekMs
-            safePlayTrack(state.currentTrack)
+            resumeScratchViaDeepRewindSeek(state, ringBuf, targetMs)
         }
     }
 
-    private fun writeScratchFloatsAndTapSpectrum(
+    private fun handleInterruptedScratchExit(state: PlaybackLoopState, ringBuf: TurntablePcmRingBuffer) {
+        turntableFallbackSeekMs.set(-1L)
+        val finalMs = computeClampedScratchPositionMs(state)
+        _playbackPositionMs.value = finalMs
+        state.countHeadFrames = maxOf(readUnsignedPlaybackHeadFrames(state.currentTrack), state.headBaseFrames)
+
+        val pausedWithoutPendingSeek = isPausedFlag.get() && isWorkerActive() && pendingSeekMs.get() < 0L
+        if (!pausedWithoutPendingSeek) return
+
+        val cursorLong = state.scratchCursorFrame.roundToLong()
+        val inRingRange = ringBuf.bufferedFrameCount > 0 &&
+            cursorLong in ringBuf.oldestAvailableFrame..ringBuf.writeHeadFrame
+        if (inRingRange) {
+            state.ringDrainCursorFrame = cursorLong
+            state.seekBaseMs = finalMs
+            state.headBaseFrames = state.totalFramesWrittenToTrack
+            state.countHeadFrames = maxOf(readUnsignedPlaybackHeadFrames(state.currentTrack), state.headBaseFrames)
+        } else {
+            pendingSeekMs.set(finalMs)
+        }
+    }
+
+    private fun renderScratchExitFadeOut(
         state: PlaybackLoopState,
-        frameCount: Int,
-    ): Int {
+        ringBuf: TurntablePcmRingBuffer,
+        scratchResampler: TurntableResampler,
+        minVirtualFrame: Double,
+        maxVirtualFrame: Double,
+    ) {
+        val fadeOutFrames = scratchResampler.exitFadeDurationFrames().coerceAtMost(state.scratchChunkFrames)
+        if (scratchResampler.fadeGain <= 0.01f || fadeOutFrames <= 0) return
+
+        val tailStep = scratchResampler.renderChunk(
+            ringBuffer = ringBuf,
+            targetRate = scratchResampler.currentRate,
+            startCursorFrame = state.scratchCursorFrame,
+            minVirtualFrame = minVirtualFrame,
+            maxVirtualFrame = maxVirtualFrame,
+            outFrames = fadeOutFrames,
+            destFloats = state.scratchOutFloats,
+            replayGainLinear = activeReplayGainResolution.linearGain,
+            forceFadeOut = true,
+        )
+        state.scratchCursorFrame = tailStep.nextCursorFrame
+        writeScratchFloatsAndTapSpectrum(state, tailStep.framesRendered)
+    }
+
+    private fun resumeScratchViaRingDrain(
+        state: PlaybackLoopState,
+        scratchResampler: TurntableResampler,
+        cursorFrameLong: Long,
+        targetMs: Long,
+    ) {
+        // Fast Seamless Path: zero MediaCodec.flush()! Immediately feed up to 2 chunks of 1.0x
+        // ring drain so AudioTrack never starves or triggers restartIfDisabled on transition.
+        state.ringDrainCursorFrame = cursorFrameLong
+        state.exitFadeFramesRemaining = scratchResampler.exitFadeDurationFrames()
+        state.seekBaseMs = targetMs
+        state.headBaseFrames = state.totalFramesWrittenToTrack
+        state.countHeadFrames = maxOf(readUnsignedPlaybackHeadFrames(state.currentTrack), state.headBaseFrames)
+        state.lastUiUpdateNano = 0L
+        _playbackPositionMs.value = targetMs
+
+        var preFed = 0
+        while (canPreFeedRingDrain(state, preFed)) {
+            if (!processRingDrainStepInLoop(state)) break
+            preFed++
+        }
+    }
+
+    private fun resumeScratchViaDeepRewindSeek(state: PlaybackLoopState, ringBuf: TurntablePcmRingBuffer, targetMs: Long) {
+        // Deep Rewind Path: rewound past oldestAvailableFrame -> single clean seekToMs.
+        safePauseTrack(state.currentTrack)
+        safeFlushTrack(state.currentTrack)
+        state.remainderLen = 0
+        ringBuf.reset(0L)
+        state.ringDrainCursorFrame = -1L
+        state.exitFadeFramesRemaining = 0
+        state.decoderEosDuringScratch = false
+        val actualSeekMs = state.currentDecoder.seekToMs(targetMs)
+        state.streamOriginMs = actualSeekMs
+        state.seekBaseMs = actualSeekMs
+        state.streamFramesWrittenToTrack = 0L
+        state.headBaseFrames = readUnsignedPlaybackHeadFrames(state.currentTrack)
+        state.totalFramesWrittenToTrack = state.headBaseFrames
+        state.countHeadFrames = state.headBaseFrames
+        spectrumPcmTap?.reset(state.sampleRate, state.totalFramesWrittenToTrack)
+        state.lastUiUpdateNano = 0L
+        _playbackPositionMs.value = actualSeekMs
+        safePlayTrack(state.currentTrack)
+    }
+
+    private fun writeScratchFloatsAndTapSpectrum(state: PlaybackLoopState, frameCount: Int): Int {
         val framesWritten = writeNormalizedFloatsToTrack(
             track = state.currentTrack,
             encoding = state.currentFormat.encoding,
@@ -1917,10 +1950,7 @@ class AudioOutputEngine(
      * the turntable ring buffer, writes aligned PCM to `AudioTrack` (strictly unmodified in
      * Bit-Perfect Opt-In mode), and taps read-only spectrum samples post-write when active.
      */
-    private fun processNormalPcmChunkInLoop(
-        state: PlaybackLoopState,
-        bytesRead: Int,
-    ) {
+    private fun processNormalPcmChunkInLoop(state: PlaybackLoopState, bytesRead: Int) {
         val combinedBytes: ByteArray
         val totalLen: Int
         if (state.remainderLen > 0) {
@@ -2033,11 +2063,7 @@ class AudioOutputEngine(
      * Returns the highest observed playback head frame count (preserving tail play-count accounting
      * even if the OEM HAL resets `playbackHeadPosition` to `0` upon entering `PLAYSTATE_STOPPED`).
      */
-    private fun drainAudioTrackCleanly(
-        track: AudioTrack,
-        totalFramesWritten: Long,
-        sampleRateHz: Int,
-    ): Long {
+    private fun drainAudioTrackCleanly(track: AudioTrack, totalFramesWritten: Long, sampleRateHz: Int): Long {
         val headBefore = readUnsignedPlaybackHeadFrames(track)
         if (track.state != AudioTrack.STATE_INITIALIZED || track.playState != AudioTrack.PLAYSTATE_PLAYING) {
             return headBefore
@@ -2052,36 +2078,40 @@ class AudioOutputEngine(
         var lastHead = headBefore
         var maxReachedHead = headBefore
         var stagnantTicks = 0
-        while (!stopWorkerFlag.get() &&
-            !releasedFlag.get() &&
-            !isPausedFlag.get() &&
-            pendingSeekMs.get() < 0L &&
-            System.nanoTime() < deadlineNano
-        ) {
+        var drainCompleted = false
+        while (!drainCompleted && canContinueDrainingTrack(deadlineNano)) {
             val head = readUnsignedPlaybackHeadFrames(track)
             if (head < headBefore) {
                 // HAL finished draining and reset playbackHeadPosition to 0 upon PLAYSTATE_STOPPED.
                 maxReachedHead = maxOf(maxReachedHead, totalFramesWritten)
-                break
-            }
-            if (head > maxReachedHead) {
-                maxReachedHead = head
-            }
-            if (head >= totalFramesWritten) break
-            if (head == lastHead) {
-                stagnantTicks++
-                if (stagnantTicks >= 8) break // ~120 ms stationary head -> HAL drain complete
+                drainCompleted = true
             } else {
-                lastHead = head
-                stagnantTicks = 0
-            }
-            try {
-                Thread.sleep(15L)
-            } catch (_: InterruptedException) {
-                break
+                if (head > maxReachedHead) {
+                    maxReachedHead = head
+                }
+                if (head == lastHead) {
+                    stagnantTicks++
+                } else {
+                    lastHead = head
+                    stagnantTicks = 0
+                }
+                // ~120 ms stationary head (8 ticks) or reaching totalFramesWritten -> HAL drain complete
+                drainCompleted = head >= totalFramesWritten || stagnantTicks >= 8 || !sleepUninterrupted(15L)
             }
         }
         return maxReachedHead
+    }
+
+    private fun canContinueDrainingTrack(deadlineNano: Long): Boolean {
+        val activeForDrain = isWorkerActive() && !isPausedFlag.get() && pendingSeekMs.get() < 0L
+        return activeForDrain && System.nanoTime() < deadlineNano
+    }
+
+    private fun sleepUninterrupted(durationMs: Long): Boolean = try {
+        Thread.sleep(durationMs)
+        true
+    } catch (_: InterruptedException) {
+        false
     }
 
     /**
@@ -2099,66 +2129,95 @@ class AudioOutputEngine(
         linearGain: Float,
     ): Int {
         val applyGain = ReplayGainProcessor.needsSampleScaling(linearGain)
-
         if (encoding == PcmEncodingType.PCM_FLOAT) {
-            var byteOffset = 0
-            var totalBytesWritten = 0
-            while (byteOffset < alignedByteCount && !stopWorkerFlag.get() && !releasedFlag.get()) {
-                val chunkBytes = minOf(alignedByteCount - byteOffset, floatBuffer.size * 4)
-                val totalFloats = PcmStreamRules.convertLittleEndianBytesToFloats(
-                    sourceBytes = bytes,
-                    sourceOffset = byteOffset,
-                    byteCount = chunkBytes,
-                    destFloats = floatBuffer,
-                )
-                if (applyGain) {
-                    ReplayGainProcessor.applyGainToFloatSamples(floatBuffer, totalFloats, linearGain)
-                }
-                var floatOffset = 0
-                while (floatOffset < totalFloats && !stopWorkerFlag.get() && !releasedFlag.get()) {
-                    val written = track.write(
-                        floatBuffer,
-                        floatOffset,
-                        totalFloats - floatOffset,
-                        AudioTrack.WRITE_BLOCKING,
-                    )
-                    if (written < 0) {
-                        throw AudioDecodeException.IoError("AudioTrack float write failed with code $written")
-                    }
-                    if (written == 0) {
-                        if (isPausedFlag.get()) return totalBytesWritten
-                        Thread.sleep(2L)
-                    } else {
-                        floatOffset += written
-                        totalBytesWritten += written * 4
-                    }
-                }
-                byteOffset += totalFloats * 4
-            }
-            return totalBytesWritten
+            return writeFloatPcmFully(
+                track = track,
+                bytes = bytes,
+                alignedByteCount = alignedByteCount,
+                floatBuffer = floatBuffer,
+                applyGain = applyGain,
+                linearGain = linearGain,
+            )
         }
-
         if (applyGain) {
-            when (encoding) {
-                PcmEncodingType.PCM_16BIT ->
-                    ReplayGainProcessor.applyGainToPcm16LittleEndian(bytes, 0, alignedByteCount, linearGain)
-                PcmEncodingType.PCM_24BIT_PACKED ->
-                    ReplayGainProcessor.applyGainToPcm24PackedLittleEndian(bytes, 0, alignedByteCount, linearGain)
-                PcmEncodingType.PCM_32BIT ->
-                    ReplayGainProcessor.applyGainToPcm32LittleEndian(bytes, 0, alignedByteCount, linearGain)
-                PcmEncodingType.PCM_FLOAT -> Unit
+            applyIntegerPcmReplayGain(encoding, bytes, alignedByteCount, linearGain)
+        }
+        return writeDirectBufferPcmFully(track, bytes, alignedByteCount, directBuffer)
+    }
+
+    private fun writeFloatPcmFully(
+        track: AudioTrack,
+        bytes: ByteArray,
+        alignedByteCount: Int,
+        floatBuffer: FloatArray,
+        applyGain: Boolean,
+        linearGain: Float,
+    ): Int {
+        var byteOffset = 0
+        var totalBytesWritten = 0
+        while (byteOffset < alignedByteCount && isWorkerActive()) {
+            val chunkBytes = minOf(alignedByteCount - byteOffset, floatBuffer.size * 4)
+            val totalFloats = PcmStreamRules.convertLittleEndianBytesToFloats(
+                sourceBytes = bytes,
+                sourceOffset = byteOffset,
+                byteCount = chunkBytes,
+                destFloats = floatBuffer,
+            )
+            if (applyGain) {
+                ReplayGainProcessor.applyGainToFloatSamples(floatBuffer, totalFloats, linearGain)
+            }
+            val floatsWritten = writeFloatArrayChunk(track, floatBuffer, totalFloats)
+            totalBytesWritten += floatsWritten * 4
+            if (floatsWritten < totalFloats) return totalBytesWritten
+            byteOffset += totalFloats * 4
+        }
+        return totalBytesWritten
+    }
+
+    private fun writeFloatArrayChunk(track: AudioTrack, floatBuffer: FloatArray, totalFloats: Int): Int {
+        var floatOffset = 0
+        while (floatOffset < totalFloats && isWorkerActive()) {
+            val written = track.write(
+                floatBuffer,
+                floatOffset,
+                totalFloats - floatOffset,
+                AudioTrack.WRITE_BLOCKING,
+            )
+            if (written < 0) {
+                throw AudioDecodeException.IoError("AudioTrack float write failed with code $written")
+            }
+            if (written == 0) {
+                if (isPausedFlag.get()) return floatOffset
+                Thread.sleep(2L)
+            } else {
+                floatOffset += written
             }
         }
+        return floatOffset
+    }
 
+    private fun applyIntegerPcmReplayGain(encoding: PcmEncodingType, bytes: ByteArray, alignedByteCount: Int, linearGain: Float) {
+        when (encoding) {
+            PcmEncodingType.PCM_16BIT ->
+                ReplayGainProcessor.applyGainToPcm16LittleEndian(bytes, 0, alignedByteCount, linearGain)
+            PcmEncodingType.PCM_24BIT_PACKED ->
+                ReplayGainProcessor.applyGainToPcm24PackedLittleEndian(bytes, 0, alignedByteCount, linearGain)
+            PcmEncodingType.PCM_32BIT ->
+                ReplayGainProcessor.applyGainToPcm32LittleEndian(bytes, 0, alignedByteCount, linearGain)
+            PcmEncodingType.PCM_FLOAT -> Unit
+        }
+    }
+
+    private fun writeDirectBufferPcmFully(track: AudioTrack, bytes: ByteArray, alignedByteCount: Int, directBuffer: ByteBuffer): Int {
         var offset = 0
         var totalBytesWritten = 0
-        while (offset < alignedByteCount && !stopWorkerFlag.get() && !releasedFlag.get()) {
+        while (offset < alignedByteCount && isWorkerActive()) {
             val chunkLen = minOf(alignedByteCount - offset, directBuffer.capacity())
             directBuffer.clear()
             directBuffer.put(bytes, offset, chunkLen)
             directBuffer.flip()
 
-            while (directBuffer.hasRemaining() && !stopWorkerFlag.get() && !releasedFlag.get()) {
+            while (directBuffer.hasRemaining() && isWorkerActive()) {
                 val written = track.write(
                     directBuffer,
                     directBuffer.remaining(),
@@ -2268,10 +2327,12 @@ class AudioOutputEngine(
         }
     }
 
-    private fun triggerPreloadAsync(
-        request: EngineTrackRequest?,
-        expectedGeneration: Long,
-    ) {
+    private fun isPreloadStillValid(request: EngineTrackRequest, expectedGeneration: Long): Boolean {
+        val engineReady = !releasedFlag.get() && gaplessEnabled
+        return engineReady && loadGeneration.get() == expectedGeneration && queuedNextRequest?.uri == request.uri
+    }
+
+    private fun triggerPreloadAsync(request: EngineTrackRequest?, expectedGeneration: Long) {
         if (request == null || releasedFlag.get() || !gaplessEnabled) return
         val shouldLaunch = synchronized(preloadLock) {
             if (preloadedTrack?.request?.uri == request.uri || preloadingUri == request.uri) {
@@ -2285,63 +2346,72 @@ class AudioOutputEngine(
 
         runCatching {
             preloadExecutor.execute {
-                if (releasedFlag.get() ||
-                    !gaplessEnabled ||
-                    loadGeneration.get() != expectedGeneration ||
-                    queuedNextRequest?.uri != request.uri
-                ) {
-                    synchronized(preloadLock) {
-                        if (preloadingUri == request.uri) preloadingUri = null
-                    }
-                    return@execute
-                }
-
-                val rgMeta = readReplayGainMetadata(
-                    uri = request.uri,
-                    fileName = request.fileName,
-                    mimeType = request.mimeType,
-                )
-                val openedDecoder = try {
-                    MediaCodecAudioDecoder.open(
-                        context = appContext,
-                        uri = request.uri,
-                        fileName = request.fileName,
-                        mimeHint = request.mimeType,
-                    )
-                } catch (e: Exception) {
-                    Log.w(TAG, "Gapless preload skipped for ${request.fileName}: ${e.message}")
-                    synchronized(preloadLock) {
-                        if (preloadingUri == request.uri) preloadingUri = null
-                    }
-                    return@execute
-                }
-
-                var decoderToClose: PcmAudioDecoder? = null
-                synchronized(preloadLock) {
-                    val stillValid = !releasedFlag.get() &&
-                        gaplessEnabled &&
-                        loadGeneration.get() == expectedGeneration &&
-                        queuedNextRequest?.uri == request.uri
-                    if (stillValid) {
-                        decoderToClose = preloadedTrack?.decoder
-                        preloadedTrack = PreloadedTrack(
-                            request = request,
-                            decoder = openedDecoder,
-                            replayGainMetadata = rgMeta,
-                            generation = expectedGeneration,
-                        )
-                        if (preloadingUri == request.uri) preloadingUri = null
-                    } else {
-                        if (preloadingUri == request.uri) preloadingUri = null
-                        decoderToClose = openedDecoder
-                    }
-                }
-                decoderToClose?.let { runCatching { it.close() } }
+                executePreloadTask(request, expectedGeneration)
             }
         }.onFailure {
-            synchronized(preloadLock) {
-                if (preloadingUri == request.uri) preloadingUri = null
+            clearPreloadingUri(request.uri)
+        }
+    }
+
+    private fun executePreloadTask(request: EngineTrackRequest, expectedGeneration: Long) {
+        if (!isPreloadStillValid(request, expectedGeneration)) {
+            clearPreloadingUri(request.uri)
+            return
+        }
+
+        val rgMeta = readReplayGainMetadata(
+            uri = request.uri,
+            fileName = request.fileName,
+            mimeType = request.mimeType,
+        )
+        val openedDecoder = openDecoderForPreload(request)
+        if (openedDecoder == null) {
+            clearPreloadingUri(request.uri)
+            return
+        }
+
+        var decoderToClose: PcmAudioDecoder? = null
+        synchronized(preloadLock) {
+            if (isPreloadStillValid(request, expectedGeneration)) {
+                decoderToClose = preloadedTrack?.decoder
+                preloadedTrack = PreloadedTrack(
+                    request = request,
+                    decoder = openedDecoder,
+                    replayGainMetadata = rgMeta,
+                    generation = expectedGeneration,
+                )
+            } else {
+                decoderToClose = openedDecoder
             }
+            if (preloadingUri == request.uri) preloadingUri = null
+        }
+        decoderToClose?.let { runCatching { it.close() } }
+    }
+
+    private fun openDecoderForPreload(request: EngineTrackRequest): PcmAudioDecoder? = try {
+        MediaCodecAudioDecoder.open(
+            context = appContext,
+            uri = request.uri,
+            fileName = request.fileName,
+            mimeHint = request.mimeType,
+        )
+    } catch (e: AudioDecodeException) {
+        Log.w(TAG, "Gapless preload skipped for ${request.fileName}: ${e.message}")
+        null
+    } catch (e: SecurityException) {
+        Log.w(TAG, "Gapless preload skipped for ${request.fileName}: ${e.message}")
+        null
+    } catch (e: IllegalStateException) {
+        Log.w(TAG, "Gapless preload skipped for ${request.fileName}: ${e.message}")
+        null
+    } catch (e: IllegalArgumentException) {
+        Log.w(TAG, "Gapless preload skipped for ${request.fileName}: ${e.message}")
+        null
+    }
+
+    private fun clearPreloadingUri(uri: Uri) {
+        synchronized(preloadLock) {
+            if (preloadingUri == uri) preloadingUri = null
         }
     }
 
@@ -2408,11 +2478,7 @@ class AudioOutputEngine(
         return resolved
     }
 
-    private fun readReplayGainMetadata(
-        uri: Uri,
-        fileName: String,
-        mimeType: String?,
-    ): ReplayGainMetadata? = runCatching {
+    private fun readReplayGainMetadata(uri: Uri, fileName: String, mimeType: String?): ReplayGainMetadata? = runCatching {
         val formatHint = AudioFormatClassifier.classify(fileName, mimeType)
         appContext.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
             FileInputStream(pfd.fileDescriptor).use { fis ->

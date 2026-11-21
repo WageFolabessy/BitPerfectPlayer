@@ -49,11 +49,7 @@ import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun TrackInfoBottomSheet(
-    info: TrackTechnicalInfo,
-    onCopiedMessage: (String) -> Unit,
-    onDismiss: () -> Unit,
-) {
+fun TrackInfoBottomSheet(info: TrackTechnicalInfo, onCopiedMessage: (String) -> Unit, onDismiss: () -> Unit) {
     val context = LocalContext.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val track = info.track
@@ -217,9 +213,10 @@ fun TrackInfoBottomSheet(
                     }
                 }
                 InfoHairline()
+                val playCountLabel = "${info.playCount} ${if (info.playCount == 1) "play" else "plays"}"
                 InfoRow(
                     label = "Play Count",
-                    value = if (info.isLoadingDetails) "Loading..." else "${info.playCount} ${if (info.playCount == 1) "play" else "plays"}",
+                    value = if (info.isLoadingDetails) "Loading..." else playCountLabel,
                 )
                 InfoHairline()
                 InfoRow(
@@ -296,8 +293,7 @@ private fun InfoHairline() {
     )
 }
 
-private fun abbreviateFingerprint(fp: String): String =
-    if (fp.length >= 24) "${fp.take(12)}…${fp.takeLast(10)}  (tap to copy)" else fp
+private fun abbreviateFingerprint(fp: String): String = if (fp.length >= 24) "${fp.take(12)}…${fp.takeLast(10)}  (tap to copy)" else fp
 
 private fun formatReplayGainTagLine(gainDb: Float?, peak: Float?, isLoading: Boolean): String {
     if (isLoading && gainDb == null && peak == null) return "Inspecting header..."

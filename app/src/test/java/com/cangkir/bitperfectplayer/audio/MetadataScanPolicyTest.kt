@@ -83,12 +83,7 @@ class MetadataScanPolicyTest {
         )
     }
 
-    private fun buildSyntheticFlacHeader(
-        sampleRate: Int,
-        channels: Int,
-        bitsPerSample: Int,
-        totalSamples: Long,
-    ): ByteArray {
+    private fun buildSyntheticFlacHeader(sampleRate: Int, channels: Int, bitsPerSample: Int, totalSamples: Long): ByteArray {
         val bytes = ByteArray(42)
         // "fLaC" magic
         bytes[0] = 'f'.code.toByte()

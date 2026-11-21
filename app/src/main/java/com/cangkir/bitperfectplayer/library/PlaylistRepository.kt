@@ -13,6 +13,7 @@ import com.cangkir.bitperfectplayer.data.PlaylistTrackEntity
 import com.cangkir.bitperfectplayer.data.TrackStatsDao
 import com.cangkir.bitperfectplayer.data.UserPreferencesRepository
 import com.cangkir.bitperfectplayer.lyrics.AndroidContentFingerprintProvider
+import java.io.OutputStreamWriter
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -22,14 +23,8 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.withContext
-import java.io.OutputStreamWriter
 
-data class ResolvedPlaylistEntry(
-    val entryId: Long,
-    val playlistId: Long,
-    val positionIndex: Int,
-    val track: PlaybackTrack,
-)
+data class ResolvedPlaylistEntry(val entryId: Long, val playlistId: Long, val positionIndex: Int, val track: PlaybackTrack)
 
 data class ResolvedPlaylist(
     val id: Long,
@@ -42,12 +37,7 @@ data class ResolvedPlaylist(
     val trackCount: Int = entries.size
 }
 
-data class MostPlayedTrackItem(
-    val track: PlaybackTrack,
-    val playCount: Int,
-    val totalPlayTimeMs: Long,
-    val lastPlayedAtEpochMs: Long,
-)
+data class MostPlayedTrackItem(val track: PlaybackTrack, val playCount: Int, val totalPlayTimeMs: Long, val lastPlayedAtEpochMs: Long)
 
 data class PlaylistsUiSnapshot(
     val playlists: List<ResolvedPlaylist> = emptyList(),
@@ -57,12 +47,7 @@ data class PlaylistsUiSnapshot(
     val isLoaded: Boolean = false,
 )
 
-data class M3u8ImportSummary(
-    val playlistId: Long,
-    val playlistName: String,
-    val matchedCount: Int,
-    val unmatchedCount: Int,
-)
+data class M3u8ImportSummary(val playlistId: Long, val playlistName: String, val matchedCount: Int, val unmatchedCount: Int)
 
 /**
  * Local-only playlists and listening statistics repository backed by Room (`playlists`,
@@ -221,10 +206,7 @@ class PlaylistRepository(
         }
     }
 
-    suspend fun addTracksToPlaylist(
-        playlistId: Long,
-        tracks: List<PlaybackTrack>,
-    ): Result<Int> = withContext(Dispatchers.IO) {
+    suspend fun addTracksToPlaylist(playlistId: Long, tracks: List<PlaybackTrack>): Result<Int> = withContext(Dispatchers.IO) {
         if (tracks.isEmpty()) return@withContext Result.success(0)
         runCatching {
             val now = System.currentTimeMillis()
@@ -257,23 +239,16 @@ class PlaylistRepository(
         }
     }
 
-    suspend fun moveEntryInPlaylist(
-        playlistId: Long,
-        fromIndex: Int,
-        toIndex: Int,
-    ): Result<Unit> = withContext(Dispatchers.IO) {
+    suspend fun moveEntryInPlaylist(playlistId: Long, fromIndex: Int, toIndex: Int): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             val currentIds = playlistDao.getTracksForPlaylist(playlistId).map { it.id }
             val resolvedIds = playlistsSnapshot.value.playlists
                 .firstOrNull { it.id == playlistId }
                 ?.entries
                 ?.map { it.entryId }
-            val reorderedIds = if (resolvedIds != null &&
-                resolvedIds.size in 2..currentIds.size &&
-                resolvedIds.size < currentIds.size &&
-                fromIndex in resolvedIds.indices &&
-                toIndex in resolvedIds.indices
-            ) {
+            val isPartialVisibleSubset = resolvedIds != null && resolvedIds.size in 2 until currentIds.size
+            val inResolvedBounds = resolvedIds != null && fromIndex in resolvedIds.indices && toIndex in resolvedIds.indices
+            val reorderedIds = if (resolvedIds != null && isPartialVisibleSubset && inResolvedBounds) {
                 // Preserve any temporarily unresolved rows in place while reordering visible entries.
                 val reorderedVisible = ArrayDeque(
                     M3u8PlaylistCodec.reorderList(
@@ -303,10 +278,7 @@ class PlaylistRepository(
         }
     }
 
-    suspend fun exportPlaylistToM3u8(
-        playlist: ResolvedPlaylist,
-        destinationUri: Uri,
-    ): Result<Int> = withContext(Dispatchers.IO) {
+    suspend fun exportPlaylistToM3u8(playlist: ResolvedPlaylist, destinationUri: Uri): Result<Int> = withContext(Dispatchers.IO) {
         runCatching {
             val content = M3u8PlaylistCodec.exportToM3u8(
                 playlistName = playlist.name,
@@ -324,70 +296,68 @@ class PlaylistRepository(
         }
     }
 
-    suspend fun importPlaylistFromM3u8(
-        sourceUri: Uri,
-        libraryTracks: List<PlaybackTrack>,
-    ): Result<M3u8ImportSummary> = withContext(Dispatchers.IO) {
-        runCatching {
-            val rawText = appContext.contentResolver.openInputStream(sourceUri)?.use { input ->
-                val buffer = ByteArray(8192)
-                val out = java.io.ByteArrayOutputStream()
-                var total = 0
-                while (true) {
-                    val read = input.read(buffer)
-                    if (read < 0) break
-                    total += read
-                    if (total > MAX_M3U8_FILE_BYTES) {
-                        throw IllegalArgumentException(".m3u8 file exceeds 4 MB safety limit")
+    suspend fun importPlaylistFromM3u8(sourceUri: Uri, libraryTracks: List<PlaybackTrack>): Result<M3u8ImportSummary> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val rawText = appContext.contentResolver.openInputStream(sourceUri)?.use { input ->
+                    val buffer = ByteArray(8192)
+                    val out = java.io.ByteArrayOutputStream()
+                    var total = 0
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        total += read
+                        if (total > MAX_M3U8_FILE_BYTES) {
+                            throw IllegalArgumentException(".m3u8 file exceeds 4 MB safety limit")
+                        }
+                        out.write(buffer, 0, read)
                     }
-                    out.write(buffer, 0, read)
-                }
-                out.toString(Charsets.UTF_8.name())
-            } ?: throw IllegalStateException("Unable to read selected .m3u8 file")
+                    out.toString(Charsets.UTF_8.name())
+                } ?: throw IllegalStateException("Unable to read selected .m3u8 file")
 
-            val parsed = M3u8PlaylistCodec.parseM3u8(rawText)
-            val displayName = queryDisplayName(sourceUri)
-            val fallbackName = displayName?.let { AudioFormatClassifier.baseNameWithoutExtension(it) }
-                ?.takeIf { it.isNotBlank() }
-                ?: "Imported Playlist"
-            val playlistName = parsed.titleHint?.takeIf { it.isNotBlank() } ?: fallbackName
+                val parsed = M3u8PlaylistCodec.parseM3u8(rawText)
+                val displayName = queryDisplayName(sourceUri)
+                val fallbackName = displayName?.let { AudioFormatClassifier.baseNameWithoutExtension(it) }
+                    ?.takeIf { it.isNotBlank() }
+                    ?: "Imported Playlist"
+                val playlistName = parsed.titleHint?.takeIf { it.isNotBlank() } ?: fallbackName
 
-            val matchResult = M3u8PlaylistCodec.matchEntriesToLibrary(
-                entries = parsed.entries,
-                libraryTracks = libraryTracks,
-            )
-            val now = System.currentTimeMillis()
-            val playlistId = playlistDao.insertPlaylist(
-                PlaylistEntity(
-                    name = playlistName,
-                    createdAtEpochMs = now,
-                    updatedAtEpochMs = now,
-                ),
-            )
-            if (matchResult.matchedTracks.isNotEmpty()) {
-                val entities = matchResult.matchedTracks.mapIndexed { index, track ->
-                    PlaylistTrackEntity(
-                        playlistId = playlistId,
-                        contentFingerprint = track.contentFingerprint?.let {
-                            PersistenceSanitizer.normalizeFingerprint(it)
-                        },
-                        trackUri = track.uriString.trim(),
-                        fileName = PersistenceSanitizer.sanitizeDisplayText(track.fileName, "Unknown"),
-                        positionIndex = index,
-                        addedAtEpochMs = now,
-                    )
+                val matchResult = M3u8PlaylistCodec.matchEntriesToLibrary(
+                    entries = parsed.entries,
+                    libraryTracks = libraryTracks,
+                )
+                val now = System.currentTimeMillis()
+                val playlistId = playlistDao.insertPlaylist(
+                    PlaylistEntity(
+                        name = playlistName,
+                        createdAtEpochMs = now,
+                        updatedAtEpochMs = now,
+                    ),
+                )
+                if (matchResult.matchedTracks.isNotEmpty()) {
+                    val entities = matchResult.matchedTracks.mapIndexed { index, track ->
+                        PlaylistTrackEntity(
+                            playlistId = playlistId,
+                            contentFingerprint = track.contentFingerprint?.let {
+                                PersistenceSanitizer.normalizeFingerprint(it)
+                            },
+                            trackUri = track.uriString.trim(),
+                            fileName = PersistenceSanitizer.sanitizeDisplayText(track.fileName, "Unknown"),
+                            positionIndex = index,
+                            addedAtEpochMs = now,
+                        )
+                    }
+                    playlistDao.insertPlaylistTracks(entities)
                 }
-                playlistDao.insertPlaylistTracks(entities)
+
+                M3u8ImportSummary(
+                    playlistId = playlistId,
+                    playlistName = playlistName,
+                    matchedCount = matchResult.matchedTracks.size,
+                    unmatchedCount = matchResult.unmatchedLocations.size,
+                )
             }
-
-            M3u8ImportSummary(
-                playlistId = playlistId,
-                playlistName = playlistName,
-                matchedCount = matchResult.matchedTracks.size,
-                unmatchedCount = matchResult.unmatchedLocations.size,
-            )
         }
-    }
 
     private fun queryDisplayName(uri: Uri): String? = runCatching {
         appContext.contentResolver.query(

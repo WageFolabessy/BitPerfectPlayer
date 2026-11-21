@@ -98,11 +98,7 @@ object SpectrumAnalyzerDsp {
      * across 60 Hz & 120 Hz displays). Updates [currentBands] in place and returns the maximum
      * post-smoothing band energy so UI animation loops can stop cleanly when settled (`< 0.002f`).
      */
-    fun smoothBandsInPlace(
-        currentBands: FloatArray,
-        targetBands: FloatArray,
-        dtSeconds: Float,
-    ): Float {
+    fun smoothBandsInPlace(currentBands: FloatArray, targetBands: FloatArray, dtSeconds: Float): Float {
         val count = minOf(currentBands.size, targetBands.size)
         if (count <= 0) return 0f
         val dt = if (dtSeconds.isFinite()) dtSeconds.coerceIn(0f, 0.1f) else 0f
@@ -136,10 +132,7 @@ object SpectrumAnalyzerDsp {
      * - `0..31`: treble (`band 31`) down through mids (3 o'clock) to sub-bass (`band 0` at 6 o'clock)
      * - `32..63`: sub-bass (`band 0` at 6 o'clock) up through mids (9 o'clock) to treble (`band 31` at 12 o'clock)
      */
-    fun mapBandsToSymmetricRadialBars(
-        bands32: FloatArray,
-        outBars64: FloatArray,
-    ) {
+    fun mapBandsToSymmetricRadialBars(bands32: FloatArray, outBars64: FloatArray) {
         if (bands32.size < BAND_COUNT || outBars64.size < RADIAL_BAR_COUNT) return
         for (i in 0 until BAND_COUNT) {
             val v = bands32[i].let { if (it.isFinite()) it.coerceIn(0f, 1f) else 0f }
@@ -201,11 +194,7 @@ class SpectrumAnalyzer {
      * from [monoSamples] (first `1024` samples) sampled at [effectiveSampleRateHz].
      * Performs **zero heap allocations**.
      */
-    fun computeSpectrumBands(
-        monoSamples: FloatArray,
-        effectiveSampleRateHz: Int,
-        outBands: FloatArray,
-    ) {
+    fun computeSpectrumBands(monoSamples: FloatArray, effectiveSampleRateHz: Int, outBands: FloatArray) {
         val outCount = minOf(outBands.size, SpectrumAnalyzerDsp.BAND_COUNT)
         if (outCount <= 0) return
 

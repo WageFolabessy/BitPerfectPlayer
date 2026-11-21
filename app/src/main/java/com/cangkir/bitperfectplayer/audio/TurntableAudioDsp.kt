@@ -17,11 +17,8 @@ import kotlin.math.sign
  * activates in [AudioOutputMode.SAFE_VOLUME_MODE] during active playback.
  */
 object TurntableScratchPolicy {
-    fun isLiveTurntableEligible(
-        safetyMode: AudioOutputMode,
-        isPlaying: Boolean,
-        hasActiveTrack: Boolean,
-    ): Boolean = safetyMode == AudioOutputMode.SAFE_VOLUME_MODE && isPlaying && hasActiveTrack
+    fun isLiveTurntableEligible(safetyMode: AudioOutputMode, isPlaying: Boolean, hasActiveTrack: Boolean): Boolean =
+        safetyMode == AudioOutputMode.SAFE_VOLUME_MODE && isPlaying && hasActiveTrack
 }
 
 /**
@@ -50,7 +47,8 @@ object TurntablePcmCodec {
         byteCount: Int,
         destFloats: FloatArray,
     ): Int {
-        if (byteCount <= 0 || byteOffset < 0 || byteOffset >= srcBytes.size || destFloats.isEmpty()) {
+        val invalidSourceRange = byteCount <= 0 || byteOffset !in srcBytes.indices
+        if (invalidSourceRange || destFloats.isEmpty()) {
             return 0
         }
         val availableBytes = minOf(byteCount, srcBytes.size - byteOffset)
@@ -111,12 +109,7 @@ object TurntablePcmCodec {
      * [destBytes] with strict saturation clamping (`[-1.0f, 1.0f]`) so digital wraparound never
      * produces clicks. Returns exact byte count written (zero heap allocations).
      */
-    fun encodeFloatsToPcmBytes(
-        encoding: PcmEncodingType,
-        srcFloats: FloatArray,
-        floatCount: Int,
-        destBytes: ByteArray,
-    ): Int {
+    fun encodeFloatsToPcmBytes(encoding: PcmEncodingType, srcFloats: FloatArray, floatCount: Int, destBytes: ByteArray): Int {
         if (floatCount <= 0 || srcFloats.isEmpty() || destBytes.isEmpty()) return 0
         val bps = encoding.bytesPerSample
         val count = minOf(floatCount, srcFloats.size, destBytes.size / bps)
@@ -189,10 +182,7 @@ object TurntablePcmCodec {
  * for O(1) append and O(1) random-access fractional-frame linear interpolation in both forward
  * and reverse directions.
  */
-class TurntablePcmRingBuffer(
-    channelCount: Int,
-    maxFloats: Int = MAX_RING_FLOATS,
-) {
+class TurntablePcmRingBuffer(channelCount: Int, maxFloats: Int = MAX_RING_FLOATS) {
     val channels: Int = channelCount.coerceIn(1, 8)
     val capacityFrames: Int = (maxFloats.coerceIn(channels, MAX_RING_FLOATS)) / channels
     val capacityFloats: Int = capacityFrames * channels
@@ -226,11 +216,7 @@ class TurntablePcmRingBuffer(
      * Appends [frameCount] interleaved float frames from [srcFloats] (starting at [srcFloatOffset])
      * in O(1) amortized time using at most two contiguous `System.arraycopy` calls across wraparound.
      */
-    fun appendInterleavedFloats(
-        srcFloats: FloatArray,
-        frameCount: Int,
-        srcFloatOffset: Int = 0,
-    ) {
+    fun appendInterleavedFloats(srcFloats: FloatArray, frameCount: Int, srcFloatOffset: Int = 0) {
         if (frameCount <= 0 || srcFloatOffset < 0 || capacityFrames <= 0) return
         val maxAvailableFrames = ((srcFloats.size - srcFloatOffset) / channels).coerceAtLeast(0)
         val count = minOf(frameCount, maxAvailableFrames)
@@ -276,10 +262,7 @@ class TurntablePcmRingBuffer(
      * Returns `true` if [fractionalFrame] lies inside `[oldestAvailableFrame, writeHeadFrame - 1]`;
      * otherwise fills [outChannels] with zeros and returns `false`.
      */
-    fun readInterpolatedFrame(
-        fractionalFrame: Double,
-        outChannels: FloatArray,
-    ): Boolean {
+    fun readInterpolatedFrame(fractionalFrame: Double, outChannels: FloatArray): Boolean {
         if (bufferedFrameCount <= 0 || !fractionalFrame.isFinite() || outChannels.size < channels) {
             zeroOut(outChannels)
             return false
@@ -299,10 +282,7 @@ class TurntablePcmRingBuffer(
      * used strictly during 4 ms anti-click boundary fade-outs so audio ramps smoothly to zero
      * instead of stepping abruptly at the ring edge.
      */
-    fun readClampedInterpolatedFrame(
-        fractionalFrame: Double,
-        outChannels: FloatArray,
-    ): Boolean {
+    fun readClampedInterpolatedFrame(fractionalFrame: Double, outChannels: FloatArray): Boolean {
         if (bufferedFrameCount <= 0 || outChannels.size < channels) {
             zeroOut(outChannels)
             return false
@@ -333,11 +313,7 @@ class TurntablePcmRingBuffer(
      * Copies up to [maxFrames] contiguous 1.0x frames starting at [startFrame] into [destFloats]
      * for fast seamless post-scratch drain without `MediaCodec.flush()`. Returns exact frames copied.
      */
-    fun copyFramesAt1x(
-        startFrame: Long,
-        maxFrames: Int,
-        destFloats: FloatArray,
-    ): Int {
+    fun copyFramesAt1x(startFrame: Long, maxFrames: Int, destFloats: FloatArray): Int {
         if (maxFrames <= 0 || bufferedFrameCount <= 0) return 0
         if (startFrame < oldestAvailableFrame || startFrame >= writeHeadFrame) return 0
         val available = (writeHeadFrame - startFrame).coerceAtMost(maxFrames.toLong()).toInt()
@@ -440,8 +416,7 @@ object TurntableSpeedController {
     /**
      * Clamps a raw external playback rate safely into `[-4.0f, +4.0f]`.
      */
-    fun clampPlaybackRate(rate: Float): Float =
-        if (rate.isFinite()) rate.coerceIn(-MAX_PLAYBACK_RATE, MAX_PLAYBACK_RATE) else 0.0f
+    fun clampPlaybackRate(rate: Float): Float = if (rate.isFinite()) rate.coerceIn(-MAX_PLAYBACK_RATE, MAX_PLAYBACK_RATE) else 0.0f
 
     /**
      * Formats live scratch speed concisely for the turntable HUD pill (e.g., `"2.1×"`, `"-1.4×"`, `"HOLD"`).
@@ -473,10 +448,7 @@ data class TurntableResampleStepResult(
  * exponential rate smoothing (~12 ms) and a 4 ms linear gain envelope on entry, hold, reverse
  * boundary crossing, and exit.
  */
-class TurntableResampler(
-    sampleRateHz: Int,
-    channelCount: Int,
-) {
+class TurntableResampler(sampleRateHz: Int, channelCount: Int) {
     val sampleRate: Int = sampleRateHz.coerceAtLeast(8_000)
     val channels: Int = channelCount.coerceIn(1, 8)
 
@@ -591,11 +563,7 @@ class TurntableResampler(
      * Applies a short linear fade-in over the first [fadeFrames] of [destFloats] during seamless
      * scratch-exit resume into normal 1.0x playback. Returns remaining fade frames.
      */
-    fun applyExitFadeIn(
-        destFloats: FloatArray,
-        frameCount: Int,
-        remainingFadeFrames: Int,
-    ): Int {
+    fun applyExitFadeIn(destFloats: FloatArray, frameCount: Int, remainingFadeFrames: Int): Int {
         if (remainingFadeFrames <= 0 || frameCount <= 0) return 0
         val total = fadeFrames
         var remaining = remainingFadeFrames
