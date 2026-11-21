@@ -566,6 +566,33 @@ Following physical testing of the signed Release APK on POCO F4 (Android 14 / Hy
 - **Pure-Kotlin Domain Boundary (`SpectrumAnalyzerDsp.kt`, `SpectrumPcmTap.kt`):** **PASS** — **0 `android.*` / `androidx.*` imports**.
 - **Physical Hardware Verification Pending (Not Executed in Cloud):** On POCO F4 (Android 14 / HyperOS, 120 Hz OLED) + KZ EDX Pro 2 USB-C, confirm on-beat visual synchronization across 44,100–192,000 Hz tracks, smooth 120 Hz radial bar ballistics and pause decay, live scratch spectrum reactivity in Safe Mode, unmodified Bit-Perfect USB playback with radial spectrum active, unobstructed vinyl touch scrubbing and vertical scrolling, and zero background CPU draw when screen turns off (`ON_STOP`).
 
+---
+
+## 18. ART JIT/AOT Compiler Refactor & 44,100 Hz Scratch Underrun Fix (`AudioOutputEngine.kt`)
+
+### Root Causes Diagnosed From Physical POCO F4 Logcat (`logcat_4.txt`)
+1. `AudioOutputEngine.runPlaybackLoop(...)` had grown to ~825 lines with capturing local functions, hitting `Method exceeds compiler instruction limit: 20666` in ART and falling back to bytecode interpretation on `BitPerfectAudioThread`.
+2. Tight `~40 ms` (`sampleRate / 25`) scratch lookahead throttling with `4 ms` sleep plus un-primed scratch exit contributed to a brief 44,100 Hz underrun (`AudioTrack W restartIfDisabled`).
+
+### Delivered Fixes
+1. **Extracted `PlaybackLoopState` & Focused Private Helpers (`AudioOutputEngine.kt`):**
+   - Replaced capturing local functions and monolithic loop state with a lightweight mutable `private class PlaybackLoopState` (zero per-buffer GC allocations, shared `reconfigureBuffersForFormat(...)`).
+   - Split `runPlaybackLoop(...)` into compact private helpers: `handlePendingSeekInLoop`, `processTurntableScratchStep`, `decodeAheadForForwardScratch`, `exitTurntableScratchCleanly`, `writeScratchFloatsAndTapSpectrum`, `processRingDrainStepInLoop`, `handleEndOfStreamInLoop`, `handleMidStreamFormatChangeInLoop`, `processNormalPcmChunkInLoop`, and `publishPlaybackPositionAndPreload`.
+   - Verified directly in compiled DEX bytecode: largest `AudioOutputEngine` method is now **807 DEX code units** (Debug) / **756 DEX code units** (Release), with `runPlaybackLoop` at **596 / 509** and `processTurntableScratchStep` at **682 / 516** — well below ART's compiler ceiling.
+2. **Eliminated 44,100 Hz Scratch Underrun Headroom Gap:**
+   - Raised scratch `AudioTrack` fill throttle headroom from `~40 ms` (`sampleRate / 25`) to `~65 ms` (`sampleRate / 15`) with a `2 ms` wait sleep (down from `4 ms`).
+   - On Fast Seamless scratch exit, immediately pre-feeds up to 2 chunks of `1.0x` ring-buffer drain directly after the 4 ms fade-out tail so `AudioTrack` never starves across the scratch-to-normal handoff.
+
+### Software Verification (`./gradlew clean testDebugUnitTest lintDebug assembleDebug assembleRelease`)
+- **Automated JVM Unit + Robolectric SQLite Migration + Headless Compose UI Tests:** **174 / 174 passed** across **32 test suites** (`0` failed, `0` errors, `0` skipped, `0` `@Ignore`).
+- **Compiler & R8 Warnings:** `0` Kotlin compiler warnings (production + test), `0` KSP warnings, `0` R8 warnings.
+- **Android Lint (`lintDebug` & `lintVitalRelease`):** **0 errors**, **0 warnings across all `/app/src/` Kotlin, manifest, and resource files**.
+- **Debug APK (`assembleDebug`):** `app/build/outputs/apk/debug/app-debug.apk` (`20.12 MB` / `21,097,040 bytes`).
+- **Release APK (`assembleRelease` with R8 optimization):** `app/build/outputs/apk/release/app-release-unsigned.apk` (`2.48 MB` / `2,600,130 bytes`).
+- **Strict Offline & Zero-Permission Audit (Source + All 9 Generated Debug, Release & UnitTest Manifests):** **PASS** — **0 `INTERNET`**, **0 `RECORD_AUDIO`**, **0 `MANAGE_EXTERNAL_STORAGE`**.
+- **Physical Hardware Verification Pending (Not Executed in Cloud):** Re-verify on POCO F4 (Android 14 / HyperOS) + KZ EDX Pro 2 USB-C that `logcat` shows **0** `Method exceeds compiler instruction limit` warnings for `AudioOutputEngine` and **0** `AudioTrack restartIfDisabled` underruns during rapid 44,100 Hz and 96,000/192,000 Hz turntable scratching and release.
+
+
 
 
 
