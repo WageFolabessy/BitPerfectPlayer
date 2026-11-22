@@ -102,6 +102,7 @@ class PlaybackController(
     private var positionPersistenceJob: Job? = null
     private var fingerprintJob: Job? = null
     private var foregroundHandshakeJob: Job? = null
+    private var queueReorderSyncJob: Job? = null
     private var hasRestoredInitialSession = false
     private var isRestoreInFlight = false
     private var hasRecordedHistoryForActiveTrack = false
@@ -270,6 +271,14 @@ class PlaybackController(
         if (queueManager.moveItem(fromIndex, toIndex)) {
             val snapshot = queueManager.snapshot()
             _state.update { it.copy(queue = snapshot, activeTrack = snapshot.currentItem) }
+            scheduleDebouncedNextTrackSync()
+        }
+    }
+
+    private fun scheduleDebouncedNextTrackSync() {
+        queueReorderSyncJob?.cancel()
+        queueReorderSyncJob = scope.launch {
+            delay(QUEUE_REORDER_PRELOAD_DEBOUNCE_MS)
             syncNextTrackToEngine()
         }
     }
@@ -411,6 +420,7 @@ class PlaybackController(
 
     fun stop() {
         foregroundHandshakeJob?.cancel()
+        queueReorderSyncJob?.cancel()
         foregroundPlaybackGate.cancelPendingHandshake()
         playCountTracker.clearSession()?.let { persistPlayCountFlush(it) }
         persistCurrentPositionAsync()
@@ -596,6 +606,7 @@ class PlaybackController(
 
     fun release() {
         foregroundHandshakeJob?.cancel()
+        queueReorderSyncJob?.cancel()
         foregroundPlaybackGate.cancelPendingHandshake()
         sleepTimerController.release()
         playCountTracker.clearSession()?.let { persistPlayCountFlush(it) }
@@ -679,6 +690,8 @@ class PlaybackController(
     }
 
     private fun syncNextTrackToEngine() {
+        queueReorderSyncJob?.cancel()
+        queueReorderSyncJob = null
         // When End-of-Track sleep timer is armed, do NOT pre-load or gaplessly chain into the next track.
         if (sleepTimerController.state.value.isEndOfTrackArmed) {
             engine.setNextTrack(null)
@@ -957,5 +970,9 @@ class PlaybackController(
         ReplayGainMode.OFF -> ReplayGainModePreference.OFF
         ReplayGainMode.TRACK -> ReplayGainModePreference.TRACK
         ReplayGainMode.ALBUM -> ReplayGainModePreference.ALBUM
+    }
+
+    companion object {
+        private const val QUEUE_REORDER_PRELOAD_DEBOUNCE_MS = 250L
     }
 }

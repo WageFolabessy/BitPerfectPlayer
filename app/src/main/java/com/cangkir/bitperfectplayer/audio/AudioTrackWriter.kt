@@ -159,13 +159,21 @@ internal class AudioTrackWriter(
             .build()
 
         // PERFORMANCE_MODE_NONE avoids forcing fast-mixer 48,000 Hz resampling on USB HAL paths.
-        val track = AudioTrack.Builder()
-            .setAudioAttributes(playbackAudioAttributes)
-            .setAudioFormat(audioFormat)
-            .setTransferMode(AudioTrack.MODE_STREAM)
-            .setBufferSizeInBytes(alignedBufSize)
-            .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_NONE)
-            .build()
+        var trackBuilt = false
+        val track = try {
+            AudioTrack.Builder()
+                .setAudioAttributes(playbackAudioAttributes)
+                .setAudioFormat(audioFormat)
+                .setTransferMode(AudioTrack.MODE_STREAM)
+                .setBufferSizeInBytes(alignedBufSize)
+                .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_NONE)
+                .build()
+                .also { trackBuilt = true }
+        } finally {
+            if (!trackBuilt) {
+                routeAndMixerManager.clearPreferredMixerAttributesOnApi34(usbDevice)
+            }
+        }
 
         if (usbDevice != null) {
             runCatching { track.preferredDevice = usbDevice }

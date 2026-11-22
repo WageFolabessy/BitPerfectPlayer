@@ -248,7 +248,12 @@ fun QueueScreen(
     }
     LaunchedEffect(rowKeys) {
         if (dragState.isDragging) {
-            dragState.checkForSwap()
+            val activeKey = dragState.draggedItemKey
+            if (activeKey == null || activeKey !in rowKeys) {
+                dragState.reset()
+            } else {
+                dragState.checkForSwap()
+            }
         }
     }
     DisposableEffect(Unit) {
@@ -572,12 +577,13 @@ private fun AddTrackToQueueDialog(
     var searchQuery by remember { mutableStateOf("") }
 
     val basePool = if (hasContextScope && useCurrentContextScope) contextTracks else libraryTracks
-    val filteredTracks = remember(basePool, searchQuery) {
+    val uniquePool = remember(basePool) { basePool.distinctBy { it.uriString } }
+    val filteredTracks = remember(uniquePool, searchQuery) {
         val q = searchQuery.trim()
         if (q.isEmpty()) {
-            basePool
+            uniquePool
         } else {
-            basePool.filter { track ->
+            uniquePool.filter { track ->
                 track.title.contains(q, ignoreCase = true) ||
                     track.artist.contains(q, ignoreCase = true) ||
                     track.album.contains(q, ignoreCase = true) ||
@@ -697,31 +703,33 @@ private fun AddTrackToQueueDialog(
                             key = { it.uriString },
                             contentType = { "dialog_track_row" },
                         ) { track ->
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { onAddTrack(track) }
-                                    .padding(vertical = 10.dp, horizontal = 4.dp),
-                            ) {
-                                Text(
-                                    text = track.title,
-                                    style = MaterialTheme.typography.titleSmall,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                                Spacer(modifier = Modifier.height(2.dp))
-                                Text(
-                                    text = "${track.artist} · ${track.formatBadge}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
+                            Column(modifier = Modifier.fillMaxWidth()) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { onAddTrack(track) }
+                                        .padding(vertical = 10.dp, horizontal = 4.dp),
+                                ) {
+                                    Text(
+                                        text = track.title,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = "${track.artist} · ${track.formatBadge}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                                HorizontalDivider(
+                                    thickness = 0.5.dp,
+                                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f),
                                 )
                             }
-                            HorizontalDivider(
-                                thickness = 0.5.dp,
-                                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f),
-                            )
                         }
                     }
                 }

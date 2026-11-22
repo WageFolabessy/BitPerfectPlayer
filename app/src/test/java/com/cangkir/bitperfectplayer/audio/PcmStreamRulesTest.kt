@@ -377,4 +377,29 @@ class PcmStreamRulesTest {
             assertEquals(expected[i], bb.short)
         }
     }
+
+    @Test
+    fun convertLittleEndianBytesToFloats_handlesOffsetsBoundsAndSignBitsBitExactly() {
+        val values = floatArrayOf(-1.0f, -0.125f, 0.0f, 0.5f, 0.9999999f)
+        val raw = ByteArray(2 + values.size * 4 + 3) // non-zero offset + trailing sub-sample bytes
+        val bb = ByteBuffer.wrap(raw, 2, values.size * 4).order(ByteOrder.LITTLE_ENDIAN)
+        values.forEach { bb.putFloat(it) }
+
+        val out = FloatArray(values.size)
+        val count = PcmStreamRules.convertLittleEndianBytesToFloats(
+            raw,
+            sourceOffset = 2,
+            byteCount = values.size * 4 + 3,
+            destFloats = out,
+        )
+        assertEquals(values.size, count)
+        for (i in values.indices) {
+            assertEquals(values[i].toRawBits(), out[i].toRawBits())
+        }
+
+        // Guard invalid bounds safely
+        assertEquals(0, PcmStreamRules.convertLittleEndianBytesToFloats(raw, -1, 8, out))
+        assertEquals(0, PcmStreamRules.convertLittleEndianBytesToFloats(raw, raw.size, 8, out))
+        assertEquals(0, PcmStreamRules.convertLittleEndianBytesToFloats(raw, 0, 3, out))
+    }
 }

@@ -156,4 +156,17 @@ class DiagnosticLogFormatterTest {
         assertEquals("3 files · 14.2 KB", DiagnosticLogStats(fileCount = 3, totalBytes = 14_541L).formatSummary())
         assertEquals("4 files · 1.50 MB", DiagnosticLogStats(fileCount = 4, totalBytes = 1_572_864L).formatSummary())
     }
+
+    @Test
+    fun redactFilenameAndPaths_stripsBareFilenamesDataPathsAndSafDocIds() {
+        val raw = "Format 'audio/dsf' (01 - Secret Private Song.dsf) failed at " +
+            "primary:Music/SecretAlbum/01.dsf and /data/user/0/com.cangkir.bitperfectplayer/cache/tmp"
+        val sanitized = DiagnosticLogFormatter.redactFilenameAndPaths(raw, "01 - Secret Private Song.dsf")
+
+        assertFalse("Bare filename must never leak", sanitized.contains("Secret Private Song"))
+        assertFalse("SAF volume-colon doc ID must never leak", sanitized.contains("primary:Music"))
+        assertFalse("Internal /data/user path must never leak", sanitized.contains("/data/user/0"))
+        assertTrue(sanitized.contains("<REDACTED_FILE>"))
+        assertTrue(sanitized.contains("<REDACTED_PATH>"))
+    }
 }

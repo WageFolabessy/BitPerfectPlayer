@@ -23,7 +23,8 @@ object DiagnosticLogFormatter {
     private val EVENT_INVALID_CHARS = Regex("[^A-Za-z0-9_.-]")
     private val WHITESPACE_RUN = Regex("[\\r\\n\\t]+")
     private val URI_PATTERN = Regex("(?i)(?:content|file)://[^\\s\"'\\])}>,]+")
-    private val STORAGE_PATH_PATTERN = Regex("(?i)/(?:storage|sdcard|mnt|data/media|emulated)/[^\\s\"'\\])}>,]+")
+    private val STORAGE_PATH_PATTERN = Regex("(?i)/(?:storage|sdcard|mnt|data/(?:media|user/\\d+|data)|emulated)/[^\\s\"'\\])}>,]+")
+    private val SAF_DOC_ID_PATTERN = Regex("(?i)\\b(?:primary|[0-9a-f]{4}-[0-9a-f]{4}):[^\\s\"'\\])}>,]+")
     private val HEX_CHARS = Regex("^[0-9a-fA-F]{8,}$")
 
     private val FORBIDDEN_PII_KEYS: Set<String> = setOf(
@@ -191,7 +192,20 @@ object DiagnosticLogFormatter {
 
     fun redactSensitivePatterns(raw: String): String {
         val withoutUris = URI_PATTERN.replace(raw, "<REDACTED_URI>")
-        return STORAGE_PATH_PATTERN.replace(withoutUris, "<REDACTED_PATH>")
+        val withoutPaths = STORAGE_PATH_PATTERN.replace(withoutUris, "<REDACTED_PATH>")
+        return SAF_DOC_ID_PATTERN.replace(withoutPaths, "<REDACTED_PATH>")
+    }
+
+    /**
+     * Redacts URIs, filesystem/SAF paths, and any occurrence of [knownFileName] (e.g. a bare audio
+     * track filename embedded inside an exception message) before recording to diagnostic logs.
+     */
+    fun redactFilenameAndPaths(raw: String?, knownFileName: String? = null): String {
+        if (raw.isNullOrBlank()) return "unknown"
+        val strippedFile = knownFileName?.trim()?.takeIf { it.isNotEmpty() }?.let { name ->
+            raw.replace(name, "<REDACTED_FILE>", ignoreCase = true)
+        } ?: raw
+        return redactSensitivePatterns(strippedFile)
     }
 
     private fun sanitizeKey(rawKey: String): String = KEY_INVALID_CHARS.replace(rawKey.trim(), "")

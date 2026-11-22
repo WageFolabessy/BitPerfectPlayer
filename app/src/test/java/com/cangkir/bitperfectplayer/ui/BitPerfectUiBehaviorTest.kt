@@ -1709,4 +1709,135 @@ class BitPerfectUiBehaviorTest {
         composeRule.onNodeWithText("No logs stored").assertIsDisplayed()
         composeRule.onNodeWithText("Clear Logs").assertIsNotEnabled()
     }
+
+    @Test
+    fun queueScreen_duplicateTracksInQueueAndAddDialog_neverCrashLazyColumn() {
+        val duplicateQueue = QueueSnapshot(
+            items = listOf(hiResFlacTrack, hiResFlacTrack),
+            originalItems = listOf(hiResFlacTrack, hiResFlacTrack),
+            currentIndex = 0,
+            entryIds = listOf(10L, 11L),
+        )
+        val duplicatePlaylistContext = listOf(hiResFlacTrack, hiResFlacTrack)
+        val addedTracks = mutableListOf<PlaybackTrack>()
+
+        composeRule.setContent {
+            BitPerfectPlayerTheme {
+                QueueScreen(
+                    playbackState = PlaybackControllerState(
+                        queue = duplicateQueue,
+                        queueContext = QueueContext.playlist(1L, "Repeat Favorites"),
+                        activeTrack = hiResFlacTrack,
+                    ),
+                    libraryTracks = listOf(hiResFlacTrack),
+                    activeContextTracks = duplicatePlaylistContext,
+                    albumArtworkLoader = artworkLoader,
+                    onBack = {},
+                    onSelectQueueIndex = {},
+                    onAddTrackToQueue = { addedTracks.add(it) },
+                    onRemoveQueueItem = {},
+                    onMoveQueueItem = { _, _ -> },
+                    onToggleShuffle = {},
+                    onCycleRepeatMode = {},
+                )
+            }
+        }
+
+        // Duplicate entries in queue render cleanly without duplicate-key crash
+        assertEquals(2, composeRule.onAllNodesWithText(hiResFlacTrack.title).fetchSemanticsNodes().size)
+
+        // Opening AddTrackToQueueDialog with duplicate playlist context tracks deduplicates cleanly
+        composeRule.onNodeWithContentDescription("Add track to queue").assertIsDisplayed().performClick()
+        composeRule.onNodeWithText("Add Track to Queue").assertIsDisplayed()
+        composeRule.onNodeWithText("Current Context").assertIsDisplayed()
+        // Exactly 1 deduplicated track row appears in the dialog (in addition to the 2 rows behind it)
+        composeRule.onNodeWithText("Close").assertIsDisplayed().performClick()
+        assertTrue(addedTracks.isEmpty())
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h915dp")
+    fun startupNavHost_stateRestorationAfterConfigChange_preservesActiveRouteWithoutSnappingToDefaultHomepage() {
+        val restorationTester = androidx.compose.ui.test.junit4.StateRestorationTester(composeRule)
+        restorationTester.setContent {
+            BitPerfectPlayerTheme {
+                BitPerfectStartupNavHost(
+                    startupHomepage = DefaultHomepage.PLAYLISTS,
+                    libraryContent = { initialTab ->
+                        LibraryScreen(
+                            libraryState = LibrarySnapshot(allSongs = listOf(hiResFlacTrack)),
+                            favoriteTrackUris = emptySet(),
+                            playbackState = PlaybackControllerState(),
+                            albumArtworkLoader = artworkLoader,
+                            onRefreshLibrary = {},
+                            onImportFolder = {},
+                            onPlayTracks = { _, _, _ -> },
+                            onEnqueueTrack = {},
+                            onEnqueueNext = {},
+                            onEnqueueTracks = { _, _ -> },
+                            onEnqueueTracksNext = { _, _ -> },
+                            onSetTrackSort = { _, _ -> },
+                            onSetGroupSort = { _, _ -> },
+                            onAddToPlaylist = {},
+                            onShowTrackInfo = {},
+                            onToggleFavorite = {},
+                            onOpenQueue = {},
+                            onOpenDiagnostics = {},
+                            initialTab = initialTab,
+                        )
+                    },
+                    playlistsContent = {
+                        PlaylistsScreen(
+                            playlistsState = PlaylistsUiSnapshot(isLoaded = true),
+                            activeTrackUri = null,
+                            albumArtworkLoader = artworkLoader,
+                            onPlayTracks = { _, _, _ -> },
+                            onEnqueueTracks = { _, _ -> },
+                            onEnqueueTracksNext = { _, _ -> },
+                            onSetPlaylistSort = { _, _ -> },
+                            onOpenQueue = {},
+                            onCreatePlaylist = {},
+                            onRenamePlaylist = { _, _ -> },
+                            onDeletePlaylist = { _, _ -> },
+                            onRemovePlaylistEntry = { _, _ -> },
+                            onMovePlaylistEntry = { _, _, _ -> },
+                            onExportPlaylist = { _, _ -> },
+                            onImportPlaylist = {},
+                        )
+                    },
+                    settingsContent = {
+                        SettingsScreen(
+                            libraryState = LibrarySnapshot(),
+                            playbackState = PlaybackControllerState(),
+                            sleepTimerStateFlow = MutableStateFlow(SleepTimerState()),
+                            onImportFolder = {},
+                            onRemoveSafFolder = {},
+                            onRefreshLibrary = {},
+                            onSetGaplessEnabled = {},
+                            onSetReplayGainMode = {},
+                            onSetReplayGainPreampDb = {},
+                            onSetReplayGainPreventClipping = {},
+                            onSelectSleepTimerPreset = {},
+                            onExportLocalBackup = {},
+                            onImportLocalBackup = {},
+                            onOpenDiagnostics = {},
+                        )
+                    },
+                )
+            }
+        }
+
+        // Cold startup lands on Playlists
+        composeRule.onNodeWithText("YOUR PLAYLISTS").assertIsDisplayed()
+
+        // Navigate manually to Settings
+        composeRule.onNodeWithContentDescription("Settings").assertIsDisplayed().performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("AUDIO ENGINE").assertIsDisplayed()
+
+        // Simulate Android configuration change / activity recreation -> MUST remain on Settings!
+        restorationTester.emulateSavedInstanceStateRestore()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("AUDIO ENGINE").assertIsDisplayed()
+    }
 }

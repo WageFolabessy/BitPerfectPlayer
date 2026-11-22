@@ -665,7 +665,10 @@ class AudioOutputEngine(
     private fun publishWorkerErrorIfRunning(message: String) {
         if (!stopWorkerFlag.get()) {
             diagnosticLogger?.logError("PLAYBACK_WORKER_ERROR") {
-                linkedMapOf("msg" to message, "mode" to safetyController.state().mode.name)
+                linkedMapOf(
+                    "msg" to DiagnosticLogFormatter.redactFilenameAndPaths(message, currentRequest?.fileName),
+                    "mode" to safetyController.state().mode.name,
+                )
             }
             _state.update { it.copy(status = PlaybackStatus.ERROR, errorMessage = message) }
         }

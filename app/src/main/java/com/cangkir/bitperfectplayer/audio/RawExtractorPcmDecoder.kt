@@ -160,6 +160,8 @@ internal class RawExtractorPcmDecoder private constructor(
                     throw AudioDecodeException.CorruptedFile("Raw PCM packet exceeds buffer limit: ${e.message}", e)
                 }
                 ensureRawReadCapacity(minOf(rawReadBuf.size * 2, MAX_READ_BUFFER_BYTES))
+            } catch (e: IllegalStateException) {
+                throw AudioDecodeException.IoError("Failed reading raw PCM sample: ${e.message}", e)
             }
         }
     }
@@ -240,7 +242,10 @@ internal class RawExtractorPcmDecoder private constructor(
             } else {
                 null
             }
-            val reportedBitsPerSample = readBitsPerSampleHint(trackFormat) ?: flacInfo?.bitsPerSample
+            // Resolve raw PCM bit-depth strictly from MediaExtractor's trackFormat (never from the
+            // container FLAC header) so an extractor emitting down-converted 16-bit PCM without
+            // KEY_PCM_ENCODING is never misframed as 24-bit packed PCM.
+            val reportedBitsPerSample = readBitsPerSampleHint(trackFormat)
             val sourceEncoding = PcmStreamRules.resolveRawExtractorSourceEncoding(
                 hasPcmEncodingKey = hasPcmKey,
                 reportedPcmEncoding = reportedPcmEncoding,

@@ -3,6 +3,7 @@ package com.cangkir.bitperfectplayer.ui.settings
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -26,6 +27,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.cangkir.bitperfectplayer.diagnostics.DiagnosticLogStats
 import com.cangkir.bitperfectplayer.ui.theme.CoralWarning
@@ -91,8 +93,9 @@ internal fun SettingsDiagnosticLoggingSection(
                     OutlinedButton(
                         onClick = onExportClick,
                         enabled = canExportOrShare,
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
                         modifier = Modifier
-                            .weight(1f)
+                            .weight(1.28f)
                             .sizeIn(minHeight = 48.dp),
                     ) {
                         Icon(
@@ -101,11 +104,17 @@ internal fun SettingsDiagnosticLoggingSection(
                             modifier = Modifier.size(18.dp),
                         )
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Export Logs (.zip)", maxLines = 1, softWrap = false)
+                        Text(
+                            text = "Export Logs (.zip)",
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                     }
                     OutlinedButton(
                         onClick = onShareClick,
                         enabled = canExportOrShare,
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
                         modifier = Modifier
                             .weight(1f)
                             .sizeIn(minHeight = 48.dp),
@@ -116,7 +125,12 @@ internal fun SettingsDiagnosticLoggingSection(
                             modifier = Modifier.size(18.dp),
                         )
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Share Logs", maxLines = 1, softWrap = false)
+                        Text(
+                            text = "Share Logs",
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                     }
                 }
                 Spacer(modifier = Modifier.height(8.dp))

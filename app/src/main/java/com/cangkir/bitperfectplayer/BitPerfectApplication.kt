@@ -85,7 +85,7 @@ class AppContainer(context: Context) {
             fingerprintProvider = fingerprintProvider,
         )
     }
-    val playbackController: PlaybackController by lazy {
+    private val playbackControllerLazy: Lazy<PlaybackController> = lazy {
         PlaybackController(
             context = appContext,
             preferencesRepository = preferencesRepository,
@@ -95,19 +95,28 @@ class AppContainer(context: Context) {
             diagnosticLogger = diagnosticLogger,
         )
     }
+    val playbackController: PlaybackController
+        get() = playbackControllerLazy.value
 
-    fun buildDeviceSummaryFields(prefs: UserPreferences): Map<String, Any?> = linkedMapOf(
-        "audioMode" to playbackController.state.value.engineState.safetyState.mode.name,
-        "gaplessEnabled" to prefs.gaplessEnabled,
-        "replayGainMode" to prefs.replayGainMode.name,
-        "replayGainPreampDb" to prefs.replayGainPreampDb,
-        "replayGainPreventClipping" to prefs.replayGainPreventClipping,
-        "defaultHomepage" to prefs.defaultHomepage.name,
-        "artworkStyle" to prefs.nowPlayingArtworkStyle.name,
-        "spectrumEnabled" to prefs.spectrumVisualizerEnabled,
-        "spectrumStyle" to prefs.spectrumColorStyle.name,
-        "spectrumSparks" to prefs.spectrumSparksEnabled,
-    )
+    fun buildDeviceSummaryFields(prefs: UserPreferences): Map<String, Any?> {
+        val currentAudioMode = if (playbackControllerLazy.isInitialized()) {
+            playbackControllerLazy.value.state.value.engineState.safetyState.mode.name
+        } else {
+            com.cangkir.bitperfectplayer.audio.AudioOutputMode.SAFE_VOLUME_MODE.name
+        }
+        return linkedMapOf(
+            "audioMode" to currentAudioMode,
+            "gaplessEnabled" to prefs.gaplessEnabled,
+            "replayGainMode" to prefs.replayGainMode.name,
+            "replayGainPreampDb" to prefs.replayGainPreampDb,
+            "replayGainPreventClipping" to prefs.replayGainPreventClipping,
+            "defaultHomepage" to prefs.defaultHomepage.name,
+            "artworkStyle" to prefs.nowPlayingArtworkStyle.name,
+            "spectrumEnabled" to prefs.spectrumVisualizerEnabled,
+            "spectrumStyle" to prefs.spectrumColorStyle.name,
+            "spectrumSparks" to prefs.spectrumSparksEnabled,
+        )
+    }
 }
 
 class BitPerfectApplication : Application() {
@@ -124,11 +133,16 @@ class BitPerfectApplication : Application() {
         DiagnosticCrashHandler.install(container.diagnosticLogger)
 
         // Keep opt-in diagnostic logging flag and device_summary.txt synced with DataStore off-main.
+        // Zero map allocations and zero PlaybackController touch while disabled (default OFF).
         appScope.launch {
             container.diagnosticLogger.refreshStorageStatsSync()
             container.preferencesRepository.preferencesFlow
                 .map { prefs ->
-                    prefs.diagnosticLoggingEnabled to container.buildDeviceSummaryFields(prefs)
+                    if (!prefs.diagnosticLoggingEnabled) {
+                        false to emptyMap()
+                    } else {
+                        true to container.buildDeviceSummaryFields(prefs)
+                    }
                 }
                 .distinctUntilChanged()
                 .collect { (enabled, summaryFields) ->

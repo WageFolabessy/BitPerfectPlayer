@@ -1,7 +1,6 @@
 package com.cangkir.bitperfectplayer.audio
 
 import java.nio.ByteBuffer
-import java.nio.ByteOrder
 
 /**
  * Raw source PCM encoding reported by Android's `MediaExtractor` when a container extractor
@@ -311,17 +310,24 @@ object PcmStreamRules {
     }
 
     /**
-     * Converts [byteCount] little-endian IEEE-754 float32 PCM bytes from [sourceBytes] starting at
-     * [sourceOffset] into [destFloats]. Returns the exact number of floats written.
+     * Zero-allocation conversion of [byteCount] little-endian IEEE-754 float32 PCM bytes from
+     * [sourceBytes] starting at [sourceOffset] into [destFloats]. Returns the exact number of
+     * floats written.
      */
     fun convertLittleEndianBytesToFloats(sourceBytes: ByteArray, sourceOffset: Int, byteCount: Int, destFloats: FloatArray): Int {
-        val alignedBytes = alignByteCountToFrame(byteCount, 4)
+        if (byteCount <= 0 || sourceOffset < 0 || sourceOffset >= sourceBytes.size) return 0
+        val availableBytes = minOf(byteCount, sourceBytes.size - sourceOffset)
+        val alignedBytes = alignByteCountToFrame(availableBytes, 4)
         val floatCount = minOf(alignedBytes / 4, destFloats.size)
         if (floatCount <= 0) return 0
-        val bb = ByteBuffer.wrap(sourceBytes, sourceOffset, floatCount * 4)
-            .order(ByteOrder.LITTLE_ENDIAN)
+        var idx = sourceOffset
         for (i in 0 until floatCount) {
-            destFloats[i] = bb.float
+            val bits = (sourceBytes[idx].toInt() and 0xFF) or
+                ((sourceBytes[idx + 1].toInt() and 0xFF) shl 8) or
+                ((sourceBytes[idx + 2].toInt() and 0xFF) shl 16) or
+                (sourceBytes[idx + 3].toInt() shl 24)
+            destFloats[i] = Float.fromBits(bits)
+            idx += 4
         }
         return floatCount
     }

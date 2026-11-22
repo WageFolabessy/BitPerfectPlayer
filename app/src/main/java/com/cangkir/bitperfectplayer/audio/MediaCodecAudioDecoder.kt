@@ -380,7 +380,7 @@ class MediaCodecAudioDecoder private constructor(
                     linkedMapOf(
                         "ext" to DiagnosticLogFormatter.extractSafeFileExtension(fileName, mimeHint),
                         "errType" to e.javaClass.simpleName,
-                        "msg" to e.message,
+                        "msg" to DiagnosticLogFormatter.redactFilenameAndPaths(e.message, fileName),
                     )
                 }
                 throw e

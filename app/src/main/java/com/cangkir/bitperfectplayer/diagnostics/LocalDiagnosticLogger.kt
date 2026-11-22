@@ -42,7 +42,7 @@ class LocalDiagnosticLogger(context: Context) {
         private set
 
     private val buffer = DiagnosticLogBuffer(DiagnosticLogBuffer.DEFAULT_CAPACITY)
-    private val fileWriteLock = Any()
+    private val fileWriteLock = ReentrantLock()
     private val signalLock = ReentrantLock()
     private val signalCondition = signalLock.newCondition()
     private val writerStarted = AtomicBoolean(false)
@@ -146,7 +146,7 @@ class LocalDiagnosticLogger(context: Context) {
             epochMs = System.currentTimeMillis(),
             fields = buildBaseDeviceFields() + fields,
         )
-        synchronized(fileWriteLock) {
+        fileWriteLock.withLock {
             runCatching {
                 DiagnosticLogRotationPolicy.writeChannelPayload(
                     logDir = logDir,
@@ -181,8 +181,9 @@ class LocalDiagnosticLogger(context: Context) {
     }
 
     /**
-     * Synchronously records an uncaught exception stacktrace ONLY when [isEnabled] is `true`.
-     * Never throws or blocks indefinitely so the platform crash handler always runs cleanly.
+     * Synchronously records an uncaught exception stacktrace ONLY when [isEnabled] is `true`,
+     * guarded by a bounded [CRASH_LOCK_TIMEOUT_MS] lock wait so the platform crash handler is
+     * guaranteed never to deadlock or hang even if another thread stalled during disk I/O.
      */
     fun writeCrashSync(threadName: String, throwable: Throwable) {
         if (!isEnabled) return
@@ -202,11 +203,19 @@ class LocalDiagnosticLogger(context: Context) {
             val pending = ArrayList<QueuedLogRecord>(64)
             val dropped = buffer.drainInto(pending)
             pending.add(QueuedLogRecord(DiagnosticLogChannel.ERRORS_AND_CRASHES, crashBlock))
-            writeBatchLocked(pending, dropped)
+            val acquired = runCatching {
+                fileWriteLock.tryLock(CRASH_LOCK_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            }.getOrDefault(false)
+            if (!acquired) return
+            try {
+                writeBatchHoldingLock(pending, dropped)
+            } finally {
+                fileWriteLock.unlock()
+            }
         }
     }
 
-    fun refreshStorageStatsSync(): DiagnosticLogStats = synchronized(fileWriteLock) {
+    fun refreshStorageStatsSync(): DiagnosticLogStats = fileWriteLock.withLock {
         val stats = DiagnosticLogRotationPolicy.computeStorageStats(logDir)
         _storageStats.value = stats
         stats
@@ -216,7 +225,7 @@ class LocalDiagnosticLogger(context: Context) {
 
     fun clearAllLogs(): DiagnosticLogStats {
         buffer.clear()
-        return synchronized(fileWriteLock) {
+        return fileWriteLock.withLock {
             runCatching {
                 DiagnosticLogRotationPolicy.clearAll(logDir = logDir, exportCacheDir = exportCacheDir)
             }
@@ -255,7 +264,12 @@ class LocalDiagnosticLogger(context: Context) {
         while (!shutdownRequested.get()) {
             signalLock.withLock {
                 if (!flushRequested && buffer.size() == 0) {
-                    runCatching { signalCondition.await(FLUSH_INTERVAL_MS, TimeUnit.MILLISECONDS) }
+                    if (isEnabled) {
+                        runCatching { signalCondition.await(FLUSH_INTERVAL_MS, TimeUnit.MILLISECONDS) }
+                    } else {
+                        // Zero-CPU park while disabled until explicitly re-enabled or flushed.
+                        runCatching { signalCondition.await() }
+                    }
                 }
                 flushRequested = false
             }
@@ -268,34 +282,38 @@ class LocalDiagnosticLogger(context: Context) {
     }
 
     private fun writeBatchLocked(batch: List<QueuedLogRecord>, droppedCount: Long) {
-        synchronized(fileWriteLock) {
-            for (record in batch) {
-                runCatching {
-                    DiagnosticLogRotationPolicy.writeChannelPayload(
-                        logDir = logDir,
-                        channel = record.channel,
-                        payload = record.payload,
-                    )
-                }
-            }
-            if (droppedCount > 0L) {
-                val droppedLine = DiagnosticLogFormatter.formatEntry(
-                    epochMs = System.currentTimeMillis(),
-                    level = DiagnosticLogLevel.WARN,
-                    channel = DiagnosticLogChannel.PERFORMANCE,
-                    event = "LOG_BUFFER_DROPPED",
-                    fields = mapOf("droppedOldest" to droppedCount),
-                )
-                runCatching {
-                    DiagnosticLogRotationPolicy.writeChannelPayload(
-                        logDir = logDir,
-                        channel = DiagnosticLogChannel.PERFORMANCE,
-                        payload = droppedLine,
-                    )
-                }
-            }
-            _storageStats.value = DiagnosticLogRotationPolicy.computeStorageStats(logDir)
+        fileWriteLock.withLock {
+            writeBatchHoldingLock(batch, droppedCount)
         }
+    }
+
+    private fun writeBatchHoldingLock(batch: List<QueuedLogRecord>, droppedCount: Long) {
+        for (record in batch) {
+            runCatching {
+                DiagnosticLogRotationPolicy.writeChannelPayload(
+                    logDir = logDir,
+                    channel = record.channel,
+                    payload = record.payload,
+                )
+            }
+        }
+        if (droppedCount > 0L) {
+            val droppedLine = DiagnosticLogFormatter.formatEntry(
+                epochMs = System.currentTimeMillis(),
+                level = DiagnosticLogLevel.WARN,
+                channel = DiagnosticLogChannel.PERFORMANCE,
+                event = "LOG_BUFFER_DROPPED",
+                fields = mapOf("droppedOldest" to droppedCount),
+            )
+            runCatching {
+                DiagnosticLogRotationPolicy.writeChannelPayload(
+                    logDir = logDir,
+                    channel = DiagnosticLogChannel.PERFORMANCE,
+                    payload = droppedLine,
+                )
+            }
+        }
+        _storageStats.value = DiagnosticLogRotationPolicy.computeStorageStats(logDir)
     }
 
     companion object {
@@ -303,6 +321,7 @@ class LocalDiagnosticLogger(context: Context) {
         const val EXPORT_CACHE_DIR_NAME = "diagnostic_exports"
         private const val WRITER_THREAD_NAME = "BitPerfectDiagWriter"
         private const val FLUSH_INTERVAL_MS = 3_000L
+        private const val CRASH_LOCK_TIMEOUT_MS = 500L
 
         private fun resolveAppVersionSnapshot(context: Context): AppVersionSnapshot {
             val isDebug = (context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0

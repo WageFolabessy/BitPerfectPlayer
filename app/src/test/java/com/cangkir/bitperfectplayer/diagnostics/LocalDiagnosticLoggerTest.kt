@@ -119,4 +119,20 @@ class LocalDiagnosticLoggerTest {
         assertTrue(content.contains("enabled-boom"))
         assertTrue(content.contains("--- CRASH_END ---"))
     }
+
+    @Test
+    fun exporter_whenEmptyOrDisabled_returnsGracefulErrorWithoutCreatingZip() = runTest {
+        assertFalse(logger.isEnabled)
+        val exporter = DiagnosticLogExporter(context, logger)
+        val outputZip = File(context.cacheDir, "should-not-exist.zip").apply { delete() }
+
+        val exportRes = exporter.exportToUri(Uri.fromFile(outputZip))
+        assertTrue(exportRes.isFailure)
+        assertTrue(exportRes.exceptionOrNull()?.message?.contains("No diagnostic logs stored") == true)
+        assertFalse("Empty export must not leave a corrupt zip file", outputZip.exists())
+
+        val shareRes = exporter.prepareShareIntent()
+        assertTrue(shareRes.isFailure)
+        assertTrue(shareRes.exceptionOrNull()?.message?.contains("No diagnostic logs stored") == true)
+    }
 }
