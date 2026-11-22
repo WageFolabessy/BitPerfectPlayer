@@ -80,6 +80,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
+import com.cangkir.bitperfectplayer.audio.NotificationSubtitleFormatter
 import com.cangkir.bitperfectplayer.audio.PlaybackControllerState
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
 import com.cangkir.bitperfectplayer.audio.QueueDragReorderMath
@@ -481,7 +482,9 @@ private fun QueueTrackRow(
         isCurrent -> MaterialTheme.colorScheme.surfaceVariant
         else -> Color.Transparent
     }
-    val subtitle = remember(track.artist, track.formatBadge) { "${track.artist} · ${track.formatBadge}" }
+    val compactSpec = remember(track.container, track.codec, track.bitDepth, track.sampleRateHz) {
+        NotificationSubtitleFormatter.formatAudioSpec(track)
+    }
     val removeContentDescription = remember(track.title) { "Remove ${track.title} from queue" }
     val rowRootModifier = if (isDragged) {
         Modifier
@@ -554,12 +557,9 @@ private fun QueueTrackRow(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    Text(
-                        text = subtitle,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                    PinnedArtistAudioSpecRow(
+                        artist = track.artist,
+                        compactSpec = compactSpec,
                     )
                 }
             }
@@ -731,6 +731,14 @@ private fun AddTrackToQueueDialog(
                                         .clickable { onAddTrack(track) }
                                         .padding(vertical = 10.dp, horizontal = 4.dp),
                                 ) {
+                                    val compactSpec = remember(
+                                        track.container,
+                                        track.codec,
+                                        track.bitDepth,
+                                        track.sampleRateHz,
+                                    ) {
+                                        NotificationSubtitleFormatter.formatAudioSpec(track)
+                                    }
                                     Text(
                                         text = track.title,
                                         style = MaterialTheme.typography.titleSmall,
@@ -738,12 +746,9 @@ private fun AddTrackToQueueDialog(
                                         overflow = TextOverflow.Ellipsis,
                                     )
                                     Spacer(modifier = Modifier.height(2.dp))
-                                    Text(
-                                        text = "${track.artist} · ${track.formatBadge}",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
+                                    PinnedArtistAudioSpecRow(
+                                        artist = track.artist,
+                                        compactSpec = compactSpec,
                                     )
                                 }
                                 HorizontalDivider(

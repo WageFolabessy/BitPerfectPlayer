@@ -581,11 +581,13 @@ private fun ArtistRowThumbnail(
         } else {
             null
         }
-        val albumCached = if (customCached == null && embeddedCached == null) {
-            albumArtworkLoader.getCachedFirstAvailableArtwork(
-                tracks = artworkPlan.orderedAlbumCoverCandidates,
-                targetSizePx = AlbumArtworkLoader.THUMBNAIL_SIZE_PX,
-            )
+        val canSyncFallbackToOldestAlbum = customCached == null &&
+            embeddedCached == null &&
+            (artworkPlan.embeddedArtistCandidates.isEmpty() || albumArtworkLoader.isArtistEmbeddedMissing(artistName))
+        val oldestAlbumTrack = artworkPlan.orderedAlbumCoverCandidates.firstOrNull()
+        val albumCached = if (canSyncFallbackToOldestAlbum && oldestAlbumTrack != null) {
+            albumArtworkLoader.getCachedFromMemory(oldestAlbumTrack, AlbumArtworkLoader.THUMBNAIL_SIZE_PX)
+                ?.let { oldestAlbumTrack to it }
         } else {
             null
         }

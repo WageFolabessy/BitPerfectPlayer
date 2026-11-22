@@ -262,12 +262,74 @@ fun AudioModeSegmentedSwitch(
 }
 
 /**
+ * Renders a single-line `Artist · Compact Audio Spec` row where long artist names ellipsize while
+ * the compact `kHz` audio specification (`FLAC 24-bit · 96 kHz`, `MP3 · 44.1 kHz`, etc.) stays
+ * pinned and unclipped on the right. Shared by [MiniPlayerBar] and [QueueScreen].
+ */
+@Composable
+fun PinnedArtistAudioSpecRow(artist: String, compactSpec: String, modifier: Modifier = Modifier) {
+    val cleanArtist = remember(artist) { artist.trim() }
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        when {
+            cleanArtist.isNotEmpty() && compactSpec.isNotEmpty() -> {
+                Text(
+                    text = cleanArtist,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                Text(
+                    text = " · $compactSpec",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    softWrap = false,
+                )
+            }
+            compactSpec.isNotEmpty() -> {
+                Text(
+                    text = compactSpec,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    softWrap = false,
+                )
+            }
+            else -> {
+                Text(
+                    text = cleanArtist.ifEmpty { NotificationSubtitleFormatter.UNKNOWN_ARTIST_LABEL },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+/**
  * Narrow leaf composable collecting 20 Hz playback progress so neither [MiniPlayerBar]'s content
  * nor host screens recompose during playback.
  */
 @Composable
-private fun MiniPlayerProgressBar(durationMs: Long, playbackPositionMsFlow: StateFlow<Long>) {
-    val currentPositionMs by playbackPositionMsFlow.collectAsStateWithLifecycle()
+private fun MiniPlayerProgressBar(
+    activeTrack: PlaybackTrack,
+    engineTrackUri: String?,
+    durationMs: Long,
+    playbackPositionMsFlow: StateFlow<Long>,
+) {
+    val livePositionMs by playbackPositionMsFlow.collectAsStateWithLifecycle()
+    val currentPositionMs = TrackTransitionStatePolicy.resolveDisplayPositionMs(
+        activeTrack = activeTrack,
+        engineTrackUri = engineTrackUri,
+        livePositionMs = livePositionMs,
+    )
     val progress = if (durationMs > 0L) {
         (currentPositionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
     } else {
@@ -297,9 +359,10 @@ fun MiniPlayerBar(
     modifier: Modifier = Modifier,
 ) {
     val track = playbackState.activeTrack ?: return
+    val engineTrackUri = playbackState.engineState.activeTrackUri?.toString()
     val diagnosticsMatchTrack = TrackTransitionStatePolicy.isEngineSyncedToActiveTrack(
         activeTrack = track,
-        engineTrackUri = playbackState.engineState.activeTrackUri?.toString(),
+        engineTrackUri = engineTrackUri,
         engineStatus = playbackState.engineState.status,
     )
     val runtimeSourceSampleRateHz = if (diagnosticsMatchTrack) playbackState.engineState.diagnostics.sourceSampleRateHz else 0
@@ -318,7 +381,6 @@ fun MiniPlayerBar(
             runtimeBitDepth = runtimeSourceBitDepth,
         )
     }
-    val cleanArtist = remember(track.artist) { track.artist.trim() }
 
     Surface(
         modifier = modifier.fillMaxWidth(),
@@ -330,6 +392,8 @@ fun MiniPlayerBar(
                 color = MaterialTheme.colorScheme.outline.copy(alpha = 0.6f),
             )
             MiniPlayerProgressBar(
+                activeTrack = track,
+                engineTrackUri = engineTrackUri,
                 durationMs = playbackState.durationMs,
                 playbackPositionMsFlow = playbackPositionMsFlow,
             )
@@ -364,48 +428,10 @@ fun MiniPlayerBar(
                             overflow = TextOverflow.Ellipsis,
                         )
                         Spacer(modifier = Modifier.height(2.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            when {
-                                cleanArtist.isNotEmpty() && compactSpec.isNotEmpty() -> {
-                                    Text(
-                                        text = cleanArtist,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier.weight(1f, fill = false),
-                                    )
-                                    Text(
-                                        text = " · $compactSpec",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1,
-                                        softWrap = false,
-                                    )
-                                }
-                                compactSpec.isNotEmpty() -> {
-                                    Text(
-                                        text = compactSpec,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1,
-                                        softWrap = false,
-                                    )
-                                }
-                                else -> {
-                                    Text(
-                                        text = cleanArtist.ifEmpty { NotificationSubtitleFormatter.UNKNOWN_ARTIST_LABEL },
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                }
-                            }
-                        }
+                        PinnedArtistAudioSpecRow(
+                            artist = track.artist,
+                            compactSpec = compactSpec,
+                        )
                     }
                 }
 

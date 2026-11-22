@@ -4,6 +4,7 @@ import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
 import android.os.Build
+import android.os.SystemClock
 import android.util.Log
 import com.cangkir.bitperfectplayer.diagnostics.LocalDiagnosticLogger
 import java.nio.ByteBuffer
@@ -24,6 +25,7 @@ internal class AudioTrackWriter(
     private val releasedFlag: AtomicBoolean,
     private val isPausedFlag: AtomicBoolean,
     private val pendingSeekMs: AtomicLong,
+    private val loadGeneration: AtomicLong,
     private val diagnosticLogger: LocalDiagnosticLogger? = null,
 ) {
     // Strictly read-only, lifecycle-gated PCM tap (~192 KB) for the radial FFT spectrum visualizer.
@@ -34,6 +36,13 @@ internal class AudioTrackWriter(
     private var spectrumPcmTap: SpectrumPcmTap? = null
 
     fun isWorkerActive(): Boolean = !stopWorkerFlag.get() && !releasedFlag.get()
+
+    fun isGenerationActive(expectedGeneration: Long): Boolean =
+        !stopWorkerFlag.get() && !releasedFlag.get() && loadGeneration.get() == expectedGeneration
+
+    fun isTrackHealthy(track: AudioTrack?): Boolean = runCatching {
+        track != null && track.state == AudioTrack.STATE_INITIALIZED
+    }.getOrDefault(false)
 
     fun setSpectrumTapActive(active: Boolean) {
         val changed = spectrumTapActive.getAndSet(active) != active
@@ -229,13 +238,13 @@ internal class AudioTrackWriter(
         Result.failure(e)
     }
 
-    fun safePlay(track: AudioTrack) {
-        runCatching {
-            if (track.state == AudioTrack.STATE_INITIALIZED && track.playState != AudioTrack.PLAYSTATE_PLAYING) {
-                track.play()
-            }
+    fun safePlay(track: AudioTrack): Boolean = runCatching {
+        if (track.state != AudioTrack.STATE_INITIALIZED) return@runCatching false
+        if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
+            track.play()
         }
-    }
+        track.playState == AudioTrack.PLAYSTATE_PLAYING
+    }.getOrDefault(false)
 
     fun safePause(track: AudioTrack) {
         runCatching {
@@ -252,6 +261,24 @@ internal class AudioTrackWriter(
                     track.pause()
                 }
                 track.flush()
+            }
+        }
+    }
+
+    /**
+     * Immediately unblocks any audio worker thread waiting inside `AudioTrack.write(..., WRITE_BLOCKING)`
+     * before joining the worker thread and releasing the track.
+     */
+    fun safeUnblockForShutdown(track: AudioTrack) {
+        runCatching {
+            if (track.state == AudioTrack.STATE_INITIALIZED) {
+                if (track.playState == AudioTrack.PLAYSTATE_PLAYING) {
+                    track.pause()
+                }
+                track.flush()
+                if (track.playState != AudioTrack.PLAYSTATE_STOPPED) {
+                    track.stop()
+                }
             }
         }
     }
@@ -329,7 +356,12 @@ internal class AudioTrackWriter(
      * Returns the highest observed playback head frame count (preserving tail play-count accounting
      * even if the OEM HAL resets `playbackHeadPosition` to `0` upon entering `PLAYSTATE_STOPPED`).
      */
-    fun drainAudioTrackCleanly(track: AudioTrack, totalFramesWritten: Long, sampleRateHz: Int): Long {
+    fun drainAudioTrackCleanly(
+        track: AudioTrack,
+        totalFramesWritten: Long,
+        sampleRateHz: Int,
+        expectedGeneration: Long = loadGeneration.get(),
+    ): Long {
         val headBefore = readUnsignedPlaybackHeadFrames(track)
         if (track.state != AudioTrack.STATE_INITIALIZED || track.playState != AudioTrack.PLAYSTATE_PLAYING) {
             return headBefore
@@ -345,7 +377,7 @@ internal class AudioTrackWriter(
         var maxReachedHead = headBefore
         var stagnantTicks = 0
         var drainCompleted = false
-        while (!drainCompleted && canContinueDrainingTrack(deadlineNano)) {
+        while (!drainCompleted && canContinueDrainingTrack(deadlineNano, expectedGeneration)) {
             val head = readUnsignedPlaybackHeadFrames(track)
             if (head < headBefore) {
                 // HAL finished draining and reset playbackHeadPosition to 0 upon PLAYSTATE_STOPPED.
@@ -368,8 +400,8 @@ internal class AudioTrackWriter(
         return maxReachedHead
     }
 
-    private fun canContinueDrainingTrack(deadlineNano: Long): Boolean {
-        val activeForDrain = isWorkerActive() && !isPausedFlag.get() && pendingSeekMs.get() < 0L
+    private fun canContinueDrainingTrack(deadlineNano: Long, expectedGeneration: Long): Boolean {
+        val activeForDrain = isGenerationActive(expectedGeneration) && !isPausedFlag.get() && pendingSeekMs.get() < 0L
         return activeForDrain && System.nanoTime() < deadlineNano
     }
 
@@ -386,6 +418,7 @@ internal class AudioTrackWriter(
         directBuffer: ByteBuffer,
         floatBuffer: FloatArray,
         linearGain: Float,
+        expectedGeneration: Long = loadGeneration.get(),
     ): Int {
         val applyGain = ReplayGainProcessor.needsSampleScaling(linearGain)
         if (encoding == PcmEncodingType.PCM_FLOAT) {
@@ -396,12 +429,13 @@ internal class AudioTrackWriter(
                 floatBuffer = floatBuffer,
                 applyGain = applyGain,
                 linearGain = linearGain,
+                expectedGeneration = expectedGeneration,
             )
         }
         if (applyGain) {
             applyIntegerPcmReplayGain(encoding, bytes, alignedByteCount, linearGain)
         }
-        return writeDirectBufferPcmFully(track, bytes, alignedByteCount, directBuffer)
+        return writeDirectBufferPcmFully(track, bytes, alignedByteCount, directBuffer, expectedGeneration)
     }
 
     private fun writeFloatPcmFully(
@@ -411,10 +445,11 @@ internal class AudioTrackWriter(
         floatBuffer: FloatArray,
         applyGain: Boolean,
         linearGain: Float,
+        expectedGeneration: Long,
     ): Int {
         var byteOffset = 0
         var totalBytesWritten = 0
-        while (byteOffset < alignedByteCount && isWorkerActive()) {
+        while (byteOffset < alignedByteCount && canContinueWrite(expectedGeneration)) {
             val chunkBytes = minOf(alignedByteCount - byteOffset, floatBuffer.size * 4)
             val totalFloats = PcmStreamRules.convertLittleEndianBytesToFloats(
                 sourceBytes = bytes,
@@ -425,7 +460,7 @@ internal class AudioTrackWriter(
             if (applyGain) {
                 ReplayGainProcessor.applyGainToFloatSamples(floatBuffer, totalFloats, linearGain)
             }
-            val floatsWritten = writeFloatArrayChunk(track, floatBuffer, totalFloats)
+            val floatsWritten = writeFloatArrayChunk(track, floatBuffer, totalFloats, expectedGeneration)
             totalBytesWritten += floatsWritten * 4
             if (floatsWritten < totalFloats) return totalBytesWritten
             byteOffset += totalFloats * 4
@@ -433,9 +468,10 @@ internal class AudioTrackWriter(
         return totalBytesWritten
     }
 
-    private fun writeFloatArrayChunk(track: AudioTrack, floatBuffer: FloatArray, totalFloats: Int): Int {
+    private fun writeFloatArrayChunk(track: AudioTrack, floatBuffer: FloatArray, totalFloats: Int, expectedGeneration: Long): Int {
         var floatOffset = 0
-        while (floatOffset < totalFloats && isWorkerActive()) {
+        var zeroWriteStartMs = -1L
+        while (floatOffset < totalFloats && canContinueWrite(expectedGeneration)) {
             val written = track.write(
                 floatBuffer,
                 floatOffset,
@@ -443,12 +479,14 @@ internal class AudioTrackWriter(
                 AudioTrack.WRITE_BLOCKING,
             )
             if (written < 0) {
-                throw AudioDecodeException.IoError("AudioTrack float write failed with code $written")
+                throw classifyWriteFailure("AudioTrack float write failed with code $written", written)
             }
             if (written == 0) {
-                if (isPausedFlag.get()) return floatOffset
-                Thread.sleep(2L)
+                if (isPausedFlag.get() || !canContinueWrite(expectedGeneration)) return floatOffset
+                zeroWriteStartMs = checkZeroWriteStall(track, zeroWriteStartMs)
+                if (!sleepUninterrupted(2L)) return floatOffset
             } else {
+                zeroWriteStartMs = -1L
                 floatOffset += written
             }
         }
@@ -467,28 +505,37 @@ internal class AudioTrackWriter(
         }
     }
 
-    private fun writeDirectBufferPcmFully(track: AudioTrack, bytes: ByteArray, alignedByteCount: Int, directBuffer: ByteBuffer): Int {
+    private fun writeDirectBufferPcmFully(
+        track: AudioTrack,
+        bytes: ByteArray,
+        alignedByteCount: Int,
+        directBuffer: ByteBuffer,
+        expectedGeneration: Long,
+    ): Int {
         var offset = 0
         var totalBytesWritten = 0
-        while (offset < alignedByteCount && isWorkerActive()) {
+        while (offset < alignedByteCount && canContinueWrite(expectedGeneration)) {
             val chunkLen = minOf(alignedByteCount - offset, directBuffer.capacity())
             directBuffer.clear()
             directBuffer.put(bytes, offset, chunkLen)
             directBuffer.flip()
 
-            while (directBuffer.hasRemaining() && isWorkerActive()) {
+            var zeroWriteStartMs = -1L
+            while (directBuffer.hasRemaining() && canContinueWrite(expectedGeneration)) {
                 val written = track.write(
                     directBuffer,
                     directBuffer.remaining(),
                     AudioTrack.WRITE_BLOCKING,
                 )
                 if (written < 0) {
-                    throw AudioDecodeException.IoError("AudioTrack ByteBuffer write failed with code $written")
+                    throw classifyWriteFailure("AudioTrack ByteBuffer write failed with code $written", written)
                 }
                 if (written == 0) {
-                    if (isPausedFlag.get()) return totalBytesWritten
-                    Thread.sleep(2L)
+                    if (isPausedFlag.get() || !canContinueWrite(expectedGeneration)) return totalBytesWritten
+                    zeroWriteStartMs = checkZeroWriteStall(track, zeroWriteStartMs)
+                    if (!sleepUninterrupted(2L)) return totalBytesWritten
                 } else {
+                    zeroWriteStartMs = -1L
                     totalBytesWritten += written
                 }
             }
@@ -512,12 +559,13 @@ internal class AudioTrackWriter(
         bytesPerFrame: Int,
         scratchBytes: ByteArray,
         directBuffer: ByteBuffer,
+        expectedGeneration: Long = loadGeneration.get(),
     ): Int {
         if (frameCount <= 0 || channels <= 0) return 0
         val totalFloats = frameCount * channels
 
         if (encoding == PcmEncodingType.PCM_FLOAT || track.audioFormat == AudioFormat.ENCODING_PCM_FLOAT) {
-            return writeScratchFloatChunk(track, srcFloats, totalFloats) / channels
+            return writeScratchFloatChunk(track, srcFloats, totalFloats, expectedGeneration) / channels
         }
 
         val totalNeededBytes = frameCount * bytesPerFrame
@@ -532,12 +580,13 @@ internal class AudioTrackWriter(
             floatCount = totalFloats,
             destBytes = targetBytes,
         )
-        return writeDirectBufferPcmFully(track, targetBytes, encodedBytes, directBuffer) / bytesPerFrame
+        return writeDirectBufferPcmFully(track, targetBytes, encodedBytes, directBuffer, expectedGeneration) / bytesPerFrame
     }
 
-    private fun writeScratchFloatChunk(track: AudioTrack, srcFloats: FloatArray, totalFloats: Int): Int {
+    private fun writeScratchFloatChunk(track: AudioTrack, srcFloats: FloatArray, totalFloats: Int, expectedGeneration: Long): Int {
         var floatOffset = 0
-        while (floatOffset < totalFloats && isWorkerActive()) {
+        var zeroWriteStartMs = -1L
+        while (floatOffset < totalFloats && canContinueWrite(expectedGeneration)) {
             val written = track.write(
                 srcFloats,
                 floatOffset,
@@ -545,16 +594,41 @@ internal class AudioTrackWriter(
                 AudioTrack.WRITE_BLOCKING,
             )
             if (written < 0) {
-                throw AudioDecodeException.IoError("AudioTrack float scratch write failed with code $written")
+                throw classifyWriteFailure("AudioTrack float scratch write failed with code $written", written)
             }
             if (written == 0) {
-                if (isPausedFlag.get()) return floatOffset
-                Thread.sleep(2L)
+                if (isPausedFlag.get() || !canContinueWrite(expectedGeneration)) return floatOffset
+                zeroWriteStartMs = checkZeroWriteStall(track, zeroWriteStartMs)
+                if (!sleepUninterrupted(2L)) return floatOffset
             } else {
+                zeroWriteStartMs = -1L
                 floatOffset += written
             }
         }
         return floatOffset
+    }
+
+    private fun canContinueWrite(expectedGeneration: Long): Boolean = isGenerationActive(expectedGeneration) && pendingSeekMs.get() < 0L
+
+    private fun classifyWriteFailure(message: String, errorCode: Int): AudioDecodeException = when (errorCode) {
+        AudioTrack.ERROR_DEAD_OBJECT,
+        AudioTrack.ERROR_INVALID_OPERATION,
+        -> AudioDecodeException.DeadAudioTrack(message)
+        else -> AudioDecodeException.IoError(message)
+    }
+
+    private fun checkZeroWriteStall(track: AudioTrack, zeroWriteStartMs: Long): Long {
+        val nowMs = SystemClock.elapsedRealtime()
+        val startMs = if (zeroWriteStartMs < 0L) nowMs else zeroWriteStartMs
+        if (track.state != AudioTrack.STATE_INITIALIZED) {
+            throw AudioDecodeException.DeadAudioTrack("AudioTrack uninitialized during write")
+        }
+        if (nowMs - startMs >= PlaybackSeekAndRecoveryPolicy.MAX_ZERO_WRITE_STALL_MS) {
+            throw AudioDecodeException.DeadAudioTrack(
+                "AudioTrack stalled writing 0 bytes for ${nowMs - startMs} ms",
+            )
+        }
+        return startMs
     }
 
     fun toAndroidAudioEncoding(encoding: PcmEncodingType): Int {

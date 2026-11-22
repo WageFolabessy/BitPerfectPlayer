@@ -17,8 +17,17 @@ enum class SafetyReconfigureAction {
     DEFER_RECONFIGURE_UNTIL_PLAY,
 
     /**
-     * Immediately reconfigure the loaded track (active playback auto-paused on route change, or
-     * explicit Safe Mode / Bit-Perfect Opt-In user switch requiring immediate mixer negotiation).
+     * Active playback was auto-paused by a USB plug/unplug, `ACTION_AUDIO_BECOMING_NOISY`, or
+     * output route change: immediately stop the worker, release the invalidated `AudioTrack` and
+     * decoder, clear preferred USB mixer attributes, abandon audio focus, preserve the current
+     * track & exact `positionMs`, and rebind cleanly on the very first `play()` tap without
+     * constructing a throwaway `AudioTrack` on a churning USB HAL.
+     */
+    TEARDOWN_AND_REBIND_ON_PLAY,
+
+    /**
+     * Immediately reconfigure the loaded track (explicit Safe Mode / Bit-Perfect Opt-In user
+     * switch requiring immediate mixer negotiation and live diagnostics refresh).
      */
     RECONFIGURE_NOW,
 }
@@ -51,7 +60,7 @@ object RouteChangeReconfigurePolicy {
 
         SafetyEventType.AUTO_PAUSE -> when {
             !hasLoadedTrack -> SafetyReconfigureAction.DIAGNOSTICS_ONLY
-            isActivelyPlayingOrPreparing -> SafetyReconfigureAction.RECONFIGURE_NOW
+            isActivelyPlayingOrPreparing -> SafetyReconfigureAction.TEARDOWN_AND_REBIND_ON_PLAY
             else -> SafetyReconfigureAction.DEFER_RECONFIGURE_UNTIL_PLAY
         }
     }
@@ -65,8 +74,12 @@ object RouteChangeReconfigurePolicy {
         hasActiveDecoder: Boolean,
         hasActiveAudioTrack: Boolean,
         isCompleted: Boolean,
+        isError: Boolean = false,
+        isAudioTrackHealthy: Boolean = true,
     ): Boolean = hasPendingRouteReconfigure ||
         !hasActiveDecoder ||
         !hasActiveAudioTrack ||
-        isCompleted
+        isCompleted ||
+        isError ||
+        !isAudioTrackHealthy
 }

@@ -64,6 +64,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.cangkir.bitperfectplayer.audio.AlbumPaletteExtractor
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
 import com.cangkir.bitperfectplayer.audio.RepeatMode
+import com.cangkir.bitperfectplayer.audio.TrackTransitionStatePolicy
 import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
 import com.cangkir.bitperfectplayer.library.EmbeddedArtworkSlot
 import com.cangkir.bitperfectplayer.ui.TrackArtworkThumbnail
@@ -209,6 +210,8 @@ internal fun SwipeableSquareArtwork(
  */
 @Composable
 internal fun NowPlayingSeekSection(
+    activeTrack: PlaybackTrack,
+    engineTrackUri: String?,
     durationMs: Long,
     playbackPositionMsFlow: StateFlow<Long>,
     externalScrubPreviewMsState: State<Long?>,
@@ -216,10 +219,15 @@ internal fun NowPlayingSeekSection(
 ) {
     val livePositionMs by playbackPositionMsFlow.collectAsStateWithLifecycle()
     val maxPos = durationMs.coerceAtLeast(1L)
-    val currentPosMs = livePositionMs.coerceIn(0L, maxPos)
+    val syncedPosMs = TrackTransitionStatePolicy.resolveDisplayPositionMs(
+        activeTrack = activeTrack,
+        engineTrackUri = engineTrackUri,
+        livePositionMs = livePositionMs,
+    )
+    val currentPosMs = syncedPosMs.coerceIn(0L, maxPos)
     val externalPreviewMs = externalScrubPreviewMsState.value
-    var isScrubbing by remember { mutableStateOf(false) }
-    var scrubPositionMs by remember { mutableFloatStateOf(0f) }
+    var isScrubbing by remember(activeTrack.uriString) { mutableStateOf(false) }
+    var scrubPositionMs by remember(activeTrack.uriString) { mutableFloatStateOf(0f) }
 
     val displayedPosMs = when {
         isScrubbing -> scrubPositionMs.toLong().coerceIn(0L, maxPos)

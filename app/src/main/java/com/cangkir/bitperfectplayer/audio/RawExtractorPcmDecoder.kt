@@ -8,6 +8,8 @@ import android.os.Build
 import android.util.Log
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 
 /**
  * Direct [MediaExtractor] PCM reader for `MediaFormat.MIMETYPE_AUDIO_RAW` (`audio/raw`) tracks.
@@ -41,6 +43,7 @@ internal class RawExtractorPcmDecoder private constructor(
     override val currentPositionMs: Long
         get() = _currentPositionMs
 
+    private val extractorLock = ReentrantLock()
     private val closed = AtomicBoolean(false)
     private var reachedEos = false
 
@@ -59,69 +62,81 @@ internal class RawExtractorPcmDecoder private constructor(
 
     override fun readPcm(destination: ByteArray): Int {
         if (closed.get()) return -1
+        return extractorLock.withLock {
+            if (closed.get()) return@withLock -1
 
-        val maxAlignedDest = PcmStreamRules.alignByteCountToFrame(destination.size, outBytesPerFrame)
-        if (maxAlignedDest <= 0) return 0
+            val maxAlignedDest = PcmStreamRules.alignByteCountToFrame(destination.size, outBytesPerFrame)
+            if (maxAlignedDest <= 0) return@withLock 0
 
-        val drained = drainPendingOutput(destination, maxAlignedDest)
-        if (drained > 0) return drained
-        if (reachedEos) return -1
+            val drained = drainPendingOutput(destination, maxAlignedDest)
+            if (drained > 0) return@withLock drained
+            if (reachedEos) return@withLock -1
 
-        var attempts = 0
-        while (attempts < MAX_EMPTY_PACKET_ATTEMPTS && !closed.get()) {
-            attempts++
-            val sampleBytes = readNextExtractorPacketIntoRawBuffer()
-            if (sampleBytes < 0) {
-                reachedEos = true
-                subFrameCarryLen = 0
-                return -1
+            var attempts = 0
+            while (attempts < MAX_EMPTY_PACKET_ATTEMPTS && !closed.get()) {
+                attempts++
+                val sampleBytes = readNextExtractorPacketIntoRawBuffer()
+                if (sampleBytes < 0) {
+                    reachedEos = true
+                    subFrameCarryLen = 0
+                    return@withLock -1
+                }
+                val sampleTimeUs = extractor.sampleTime
+                if (sampleTimeUs >= 0L) {
+                    _currentPositionMs = sampleTimeUs / 1000L
+                }
+                extractor.advance()
+
+                val totalRawBytes = subFrameCarryLen + sampleBytes
+                val alignedRawBytes = PcmStreamRules.alignByteCountToFrame(totalRawBytes, rawBytesPerFrame)
+                val trailingRawBytes = totalRawBytes - alignedRawBytes
+                if (trailingRawBytes > 0) {
+                    System.arraycopy(rawReadBuf, alignedRawBytes, subFrameCarry, 0, trailingRawBytes)
+                }
+                subFrameCarryLen = trailingRawBytes
+
+                if (alignedRawBytes > 0) {
+                    return@withLock emitAlignedRawBytes(alignedRawBytes, destination, maxAlignedDest)
+                }
             }
-            val sampleTimeUs = extractor.sampleTime
-            if (sampleTimeUs >= 0L) {
-                _currentPositionMs = sampleTimeUs / 1000L
-            }
-            extractor.advance()
-
-            val totalRawBytes = subFrameCarryLen + sampleBytes
-            val alignedRawBytes = PcmStreamRules.alignByteCountToFrame(totalRawBytes, rawBytesPerFrame)
-            val trailingRawBytes = totalRawBytes - alignedRawBytes
-            if (trailingRawBytes > 0) {
-                System.arraycopy(rawReadBuf, alignedRawBytes, subFrameCarry, 0, trailingRawBytes)
-            }
-            subFrameCarryLen = trailingRawBytes
-
-            if (alignedRawBytes > 0) {
-                return emitAlignedRawBytes(alignedRawBytes, destination, maxAlignedDest)
-            }
+            0
         }
-        return 0
     }
 
     override fun seekToMs(positionMs: Long): Long {
         if (closed.get()) return _currentPositionMs
         val clampedMs = positionMs.coerceIn(0L, format.durationMs.coerceAtLeast(0L))
-        try {
-            extractor.seekTo(clampedMs * 1000L, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
-            pendingOutOffset = 0
-            pendingOutLength = 0
-            subFrameCarryLen = 0
-            reachedEos = false
-            val sampleTimeUs = extractor.sampleTime
-            _currentPositionMs = if (sampleTimeUs >= 0L) sampleTimeUs / 1000L else clampedMs
-            return _currentPositionMs
-        } catch (e: IllegalStateException) {
-            throw AudioDecodeException.IoError("Failed seeking raw audio stream: ${e.message}", e)
-        } catch (e: IllegalArgumentException) {
-            throw AudioDecodeException.IoError("Failed seeking raw audio stream: ${e.message}", e)
+        return extractorLock.withLock {
+            if (closed.get()) return@withLock _currentPositionMs
+            try {
+                extractor.seekTo(clampedMs * 1000L, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
+                pendingOutOffset = 0
+                pendingOutLength = 0
+                subFrameCarryLen = 0
+                reachedEos = false
+                val sampleTimeUs = extractor.sampleTime
+                _currentPositionMs = if (sampleTimeUs >= 0L) sampleTimeUs / 1000L else clampedMs
+                _currentPositionMs
+            } catch (e: IllegalStateException) {
+                if (closed.get()) {
+                    _currentPositionMs
+                } else {
+                    throw AudioDecodeException.TransientCodecState("Failed seeking raw audio stream: ${e.message}", e)
+                }
+            } catch (e: IllegalArgumentException) {
+                throw AudioDecodeException.IoError("Failed seeking raw audio stream: ${e.message}", e)
+            }
         }
     }
 
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
-        runCatching { extractor.release() }
-        pendingOutOffset = 0
-        pendingOutLength = 0
-        subFrameCarryLen = 0
+        extractorLock.withLock {
+            runCatching { extractor.release() }
+            pendingOutOffset = 0
+            pendingOutLength = 0
+            subFrameCarryLen = 0
+        }
     }
 
     private fun drainPendingOutput(destination: ByteArray, maxAlignedDest: Int): Int {

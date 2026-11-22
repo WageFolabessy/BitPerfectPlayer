@@ -47,9 +47,9 @@ class RouteChangeReconfigurePolicyTest {
     }
 
     @Test
-    fun routeChangeWhileActivelyPlayingOrPreparing_reconfiguresImmediately() {
+    fun routeChangeWhileActivelyPlayingOrPreparing_tearsDownAndRebindsOnNextPlay() {
         assertEquals(
-            SafetyReconfigureAction.RECONFIGURE_NOW,
+            SafetyReconfigureAction.TEARDOWN_AND_REBIND_ON_PLAY,
             RouteChangeReconfigurePolicy.decideAction(
                 commandType = SafetyEventType.AUTO_PAUSE,
                 isActivelyPlayingOrPreparing = true,
@@ -115,7 +115,7 @@ class RouteChangeReconfigurePolicyTest {
     }
 
     @Test
-    fun playAfterCompletionOrMissingResources_requiresReload() {
+    fun playAfterCompletionErrorUnhealthyTrackOrMissingResources_requiresReload() {
         assertTrue(
             RouteChangeReconfigurePolicy.shouldReloadOnPlay(
                 hasPendingRouteReconfigure = false,
@@ -138,6 +138,24 @@ class RouteChangeReconfigurePolicyTest {
                 hasActiveDecoder = true,
                 hasActiveAudioTrack = true,
                 isCompleted = true,
+            ),
+        )
+        assertTrue(
+            RouteChangeReconfigurePolicy.shouldReloadOnPlay(
+                hasPendingRouteReconfigure = false,
+                hasActiveDecoder = true,
+                hasActiveAudioTrack = true,
+                isCompleted = false,
+                isError = true,
+            ),
+        )
+        assertTrue(
+            RouteChangeReconfigurePolicy.shouldReloadOnPlay(
+                hasPendingRouteReconfigure = false,
+                hasActiveDecoder = true,
+                hasActiveAudioTrack = true,
+                isCompleted = false,
+                isAudioTrackHealthy = false,
             ),
         )
     }

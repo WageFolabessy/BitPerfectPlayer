@@ -47,6 +47,10 @@ sealed class AudioDecodeException(message: String, cause: Throwable? = null) : I
     class IoError(message: String, cause: Throwable? = null) : AudioDecodeException(message, cause)
 
     class DecoderInitFailed(message: String, cause: Throwable? = null) : AudioDecodeException(message, cause)
+
+    class TransientCodecState(message: String, cause: Throwable? = null) : AudioDecodeException(message, cause)
+
+    class DeadAudioTrack(message: String, cause: Throwable? = null) : AudioDecodeException(message, cause)
 }
 
 /**

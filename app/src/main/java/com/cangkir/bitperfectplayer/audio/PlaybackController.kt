@@ -369,7 +369,16 @@ class PlaybackController(
 
     fun play() {
         val active = _state.value.activeTrack ?: queueManager.currentItem ?: return
-        if (engine.state.value.activeTrackUri == null) {
+        _state.update { current ->
+            current.copy(
+                engineState = current.engineState.copy(
+                    errorMessage = null,
+                    lastAutoPauseNotice = null,
+                ),
+            )
+        }
+        val currentEngineUri = engine.state.value.activeTrackUri?.toString()
+        if (currentEngineUri == null || currentEngineUri != active.uriString) {
             loadActiveTrack(active, startPositionMs = playbackPositionMs.value, autoPlay = true)
             return
         }

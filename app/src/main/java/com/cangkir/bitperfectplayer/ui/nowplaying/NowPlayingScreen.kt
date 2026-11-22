@@ -636,6 +636,8 @@ private fun NowPlayingTrackControlsSection(
 
         // Isolated 20 Hz Seekable Progress Leaf (hero art & controls do NOT recompose on ticks)
         NowPlayingSeekSection(
+            activeTrack = track,
+            engineTrackUri = playbackState.engineState.activeTrackUri?.toString(),
             durationMs = durationMs,
             playbackPositionMsFlow = playbackPositionMsFlow,
             externalScrubPreviewMsState = vinylScrubPreviewMs,

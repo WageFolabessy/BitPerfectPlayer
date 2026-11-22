@@ -25,6 +25,16 @@ object TrackTransitionStatePolicy {
         return activeTrack.durationMs.coerceAtLeast(0L)
     }
 
+    /**
+     * Prevents a lingering elapsed timestamp (e.g. `00:01`) from the outgoing track from displaying
+     * under a newly selected track's title before the audio engine finishes transitioning.
+     */
+    fun resolveDisplayPositionMs(activeTrack: PlaybackTrack?, engineTrackUri: String?, livePositionMs: Long): Long {
+        if (activeTrack == null) return 0L
+        if (engineTrackUri != null && engineTrackUri != activeTrack.uriString) return 0L
+        return livePositionMs.coerceAtLeast(0L)
+    }
+
     fun resolveDisplayFormatSpec(
         activeTrack: PlaybackTrack?,
         engineTrackUri: String?,

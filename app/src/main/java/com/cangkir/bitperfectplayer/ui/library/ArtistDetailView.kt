@@ -90,6 +90,7 @@ import com.cangkir.bitperfectplayer.ui.theme.LocalActiveDynamicTokens
 import com.cangkir.bitperfectplayer.ui.theme.TextMuted
 
 private enum class ArtistHeroSource {
+    LOADING,
     CUSTOM_PHOTO,
     EMBEDDED_ARTIST,
     ALBUM_COVER,
@@ -98,7 +99,7 @@ private enum class ArtistHeroSource {
 
 private data class ResolvedArtistHero(
     val bitmap: Bitmap? = null,
-    val source: ArtistHeroSource = ArtistHeroSource.MONOGRAM,
+    val source: ArtistHeroSource = ArtistHeroSource.LOADING,
     val themeCacheKey: String? = null,
     val hasCustomPhoto: Boolean = false,
     val isResolved: Boolean = false,
@@ -161,7 +162,8 @@ internal fun ArtistDetailView(
     val orderedAlbumCoverCandidates = artistDetail.orderedAlbumArtworkCandidates
     val firstAlbumUri = orderedAlbumCoverCandidates.firstOrNull()?.uriString
 
-    // Seed initial hero synchronously from memory caches for zero-flicker opening.
+    // Seed initial hero synchronously from memory caches without flashing an album cover while an
+    // uncached embedded ARTIST artwork lookup is still in flight on Dispatchers.IO.
     var resolvedHero by remember(artistName, artistPhotoRevision, firstAlbumUri) {
         val customCached = artistPhotoStore?.getCachedBitmap(artistName)
         val embeddedCached = if (customCached == null) {
@@ -169,11 +171,13 @@ internal fun ArtistDetailView(
         } else {
             null
         }
-        val albumCached = if (customCached == null && embeddedCached == null) {
-            albumArtworkLoader.getCachedFirstAvailableArtwork(
-                tracks = orderedAlbumCoverCandidates,
-                targetSizePx = AlbumArtworkLoader.HERO_SIZE_PX,
-            )
+        val canSyncFallbackToOldestAlbum = customCached == null &&
+            embeddedCached == null &&
+            (embeddedCandidates.isEmpty() || albumArtworkLoader.isArtistEmbeddedMissing(artistName))
+        val oldestAlbumTrack = orderedAlbumCoverCandidates.firstOrNull()
+        val albumCached = if (canSyncFallbackToOldestAlbum && oldestAlbumTrack != null) {
+            albumArtworkLoader.getCachedFromMemory(oldestAlbumTrack, AlbumArtworkLoader.HERO_SIZE_PX)
+                ?.let { oldestAlbumTrack to it }
         } else {
             null
         }
@@ -201,7 +205,7 @@ internal fun ArtistDetailView(
                     isResolved = true,
                     fallbackAlbumName = albumCached.first.album,
                 )
-                else -> ResolvedArtistHero()
+                else -> ResolvedArtistHero(source = ArtistHeroSource.LOADING, isResolved = false)
             },
         )
     }
@@ -455,6 +459,21 @@ private fun ArtistHeroBanner(
                     modifier = Modifier.fillMaxSize(),
                 )
             }
+        } else if (!resolvedHero.isResolved) {
+            // Matte-obsidian placeholder while uncached embedded ARTIST art lookup completes on Dispatchers.IO.
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(
+                                MaterialTheme.colorScheme.surfaceVariant,
+                                backgroundColor,
+                            ),
+                        ),
+                    )
+                    .semantics { contentDescription = "Loading artist artwork for $artistName" },
+            )
         } else {
             Box(
                 modifier = Modifier

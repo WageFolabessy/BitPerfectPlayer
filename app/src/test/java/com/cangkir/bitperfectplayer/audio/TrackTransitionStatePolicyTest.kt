@@ -141,4 +141,52 @@ class TrackTransitionStatePolicyTest {
         assertEquals("Idle (no active PCM stream)", pending.decodedPcmSummary)
         assertEquals(VerificationLevel.UNVERIFIABLE, pending.stages.last().verificationLevel)
     }
+
+    @Test
+    fun resolveDisplayPositionMs_immediatelyResetsToZeroWhenEngineStillPointsToPreviousTrack() {
+        // Track switched to Track B while engineState.activeTrackUri still points to Track A at 00:01 (1,500 ms)
+        assertEquals(
+            0L,
+            TrackTransitionStatePolicy.resolveDisplayPositionMs(
+                activeTrack = trackB,
+                engineTrackUri = trackA.uriString,
+                livePositionMs = 1_500L,
+            ),
+        )
+        // Null engine URI (e.g., cold-start restored session before first Play) preserves restored position
+        assertEquals(
+            2_400L,
+            TrackTransitionStatePolicy.resolveDisplayPositionMs(
+                activeTrack = trackB,
+                engineTrackUri = null,
+                livePositionMs = 2_400L,
+            ),
+        )
+        // Null active track always displays 0L
+        assertEquals(
+            0L,
+            TrackTransitionStatePolicy.resolveDisplayPositionMs(
+                activeTrack = null,
+                engineTrackUri = trackA.uriString,
+                livePositionMs = 2_400L,
+            ),
+        )
+        // Once engine URI matches Track B, live position is reported accurately (clamped >= 0L)
+        assertEquals(
+            42_750L,
+            TrackTransitionStatePolicy.resolveDisplayPositionMs(
+                activeTrack = trackB,
+                engineTrackUri = trackB.uriString,
+                livePositionMs = 42_750L,
+            ),
+        )
+        assertEquals(
+            0L,
+            TrackTransitionStatePolicy.resolveDisplayPositionMs(
+                activeTrack = trackB,
+                engineTrackUri = trackB.uriString,
+                livePositionMs = -100L,
+            ),
+        )
+    }
 }

@@ -168,17 +168,36 @@ class AudioSafetyController {
     }
 
     @Synchronized
-    fun onBecomingNoisy(): SafetyCommand {
+    fun onBecomingNoisy(fallbackDeviceName: String? = null, fallbackIsUsbAudio: Boolean = false): SafetyCommand {
         val wasBitPerfect = currentState.mode == AudioOutputMode.BIT_PERFECT_OPT_IN
+        val wasUsb = currentState.isUsbAudioConnected
+        val updatedDeviceName = fallbackDeviceName?.ifBlank { "Internal Speaker" } ?: currentState.activeDeviceName
+        val updatedIsUsb = if (fallbackDeviceName != null) fallbackIsUsbAudio else currentState.isUsbAudioConnected
         currentState = currentState.copy(
             mode = AudioOutputMode.SAFE_VOLUME_MODE,
             isPendingSafetyWarning = false,
+            isHardwareVolumeVerified = if (fallbackDeviceName != null) false else currentState.isHardwareVolumeVerified,
+            isUsbAudioConnected = updatedIsUsb,
+            activeDeviceName = updatedDeviceName,
             lastAutoPauseReason = AutoPauseReason.BECOMING_NOISY,
         )
         return SafetyCommand(
             type = SafetyEventType.AUTO_PAUSE,
             autoPauseReason = AutoPauseReason.BECOMING_NOISY,
-            requiresClearPreferredMixerAttributes = wasBitPerfect,
+            requiresClearPreferredMixerAttributes = wasBitPerfect || wasUsb,
+        )
+    }
+
+    /**
+     * Updates active output device display metadata after a coalesced delayed disconnect callback
+     * without triggering a second auto-pause or interrupting already-resumed playback.
+     */
+    @Synchronized
+    fun syncActiveOutputDeviceMetadata(deviceName: String, isUsbAudio: Boolean) {
+        currentState = currentState.copy(
+            isUsbAudioConnected = isUsbAudio,
+            activeDeviceName = deviceName.ifBlank { "Internal Speaker" },
+            isHardwareVolumeVerified = if (!isUsbAudio) false else currentState.isHardwareVolumeVerified,
         )
     }
 

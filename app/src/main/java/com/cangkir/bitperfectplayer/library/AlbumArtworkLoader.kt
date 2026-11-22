@@ -324,6 +324,15 @@ class AlbumArtworkLoader(context: Context) {
     }
 
     /**
+     * Synchronous check indicating whether embedded `ARTIST` artwork has already been probed and
+     * confirmed absent for [artistName] (zero I/O).
+     */
+    fun isArtistEmbeddedMissing(artistName: String): Boolean {
+        val missingKey = "artist_slot_missing:ARTIST|${artistName.trim().lowercase()}"
+        return slotMissingKeys.contains(missingKey)
+    }
+
+    /**
      * Lazily probes a bounded list of FLAC/MP3 [candidateTracks] for an embedded `ARTIST` picture
      * block (priority `8 -> 7 -> 10 -> 19`) on `Dispatchers.IO`, stopping at the first match.
      * Negative misses are cached size-independently across `Artists` tab and `ArtistDetailView`.
