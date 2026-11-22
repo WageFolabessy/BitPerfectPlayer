@@ -1,8 +1,8 @@
 # BitPerfectPlayer MVP — Autonomous Build Handoff Report
 
 - **Project:** `com.cangkir.bitperfectplayer` (Kotlin + Jetpack Compose, 100% Offline Android Music Player)
-- **Active Branch:** `feat/v1.2` *(branched from `main` at `b157c4b`)*
-- **Overall Status:** **`feat/v1.2` Complete, Audited, & Software-Verified (`versionName = "1.2"`, `versionCode = 3`)** *(248 / 248 automated tests passing across 39 suites with `ktlintCheck`, `detekt`, Android Lint, Debug APK, and R8 Release APK clean; physical POCO F4 + Android 16 / USB-C DAC hardware verification pending)*
+- **Active Branch:** `main` *(merged from `feat/v1.2`; `versionName = "1.2"`, `versionCode = 3`)*
+- **Overall Status:** **`v1.2` Finalized, Audited, Polished, & Software-Verified (`versionName = "1.2"`, `versionCode = 3`)** *(254 / 254 automated tests passing across 40 suites with `ktlintCheck`, `detekt`, Android Lint, Debug APK, and R8 Release APK clean; ready for Signed Release APK build from `main`)*
 - **Tasks Completed:** **17 / 17** (`T0.1` through `T5.4` in `docs/TASKS.md`) + `v1.1` release + complete `v1.2` release upgrades
 - **Active Blockers:** None (`BLOCKED.md` not required)
 
@@ -1059,6 +1059,37 @@ Following completion of all `v1.2` features on `feat/v1.2`, a full diff-wide adv
 - **Release APK (`assembleRelease` with R8 optimization):** `app/build/outputs/apk/release/app-release-unsigned.apk` (`2.70 MB` / `2,828,380 bytes`).
 - **R8 Mapping Artifact (`retrace` support):** `app/build/outputs/mapping/release/mapping.txt` (`36.17 MB` / `37,922,289 bytes`, non-empty).
 - **Strict Offline & Zero-Permission Audit (XML-parsed Source + All 8 Merged/Packaged Debug, Release, & UnitTest Manifests — 9 manifests total):** **PASS — 0 `INTERNET`, 0 `RECORD_AUDIO`, 0 `MANAGE_EXTERNAL_STORAGE`, 0 `WRITE_EXTERNAL_STORAGE`**; `FileProvider` confirmed `exported="false"`, `grantUriPermissions="true"`, `authorities="com.cangkir.bitperfectplayer.fileprovider"`.
+
+---
+
+## 33. `v1.2` Real-Device Logcat & Video Polish & Final Pre-Merge Verification (`D11.11`)
+
+Addressed the 3 minor findings observed in real-device POCO F4 video testing and `logcat-v1.2.txt`, audited all repository documentation, and passed full clean verification prior to merging `feat/v1.2` into `main`:
+
+### Delivered Surgical Fixes
+1. **`QueueScreen` Initial Scroll Flicker & Entry/Exit Frame Cost ([`BitPerfectAppNav.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/BitPerfectAppNav.kt), [`QueueScreen.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/QueueScreen.kt), [`UiComponents.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/UiComponents.kt)):**
+   - Replaced Navigation Compose's 700 ms default crossfade on `NavHost` with crisp `120 ms` / `90 ms` fades and set zero-overlap `EnterTransition.None` / `ExitTransition.None` on `Routes.QUEUE` so `LibraryScreen`'s lower-positioned rows never bleed through `QueueScreen` during `bottomBar` hide/show and both full `LazyColumn` screens never re-layout simultaneously on open/close.
+   - Initialized `rememberLazyListState(initialFirstVisibleItemIndex = ...)` directly (`0` when `currentIndex <= 3`, or `(currentIndex - 1)` when deeper in a long queue), removed the `O(N)` `entryIds.map { it as Any }` copy, memoized `popBack`, `dragDistanceProvider`, row subtitle/contentDescription strings, and `TrackArtworkThumbnail` `RoundedCornerShape`, passed stable primitives & shared callbacks to `QueueTrackRow`, and skipped per-row `graphicsLayer` RenderNodes on stationary rows while preserving smooth 120 Hz drag-and-drop behavior.
+2. **Deferred Decoder + `AudioTrack` Rebuild on Route Change While Paused ([`RouteChangeReconfigurePolicy.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/RouteChangeReconfigurePolicy.kt), [`AudioOutputEngine.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/AudioOutputEngine.kt)):**
+   - Extracted pure-Kotlin `RouteChangeReconfigurePolicy` (`0` `android.*` / `androidx.*` imports) and added `pendingRouteReconfigureOnPlay` in `AudioOutputEngine`.
+   - When an `AUTO_PAUSE` route/device/noisy event (such as virtual screen-recording sinks) arrives while playback is already paused, `AudioOutputEngine` still clears stale USB preferred mixer attributes, updates 6-stage diagnostics, and preserves Safe Mode auto-pause notices without tearing down and immediately re-instantiating `MediaCodec` + `AudioTrack` (`mId: 0 -> 1 -> 2`). On the next `play()`, the engine reloads once on the current route while preserving paused `seekTo()` and post-paused Live Turntable scrubbing.
+   - Added pure-Kotlin [`RouteChangeReconfigurePolicyTest.kt`](../app/src/test/java/com/cangkir/bitperfectplayer/audio/RouteChangeReconfigurePolicyTest.kt) (`6 / 6` tests).
+3. **ART-JIT-Lean `SettingsAudioEngineSection` ([`SettingsAudioSection.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/settings/SettingsAudioSection.kt), [`SettingsScreen.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/settings/SettingsScreen.kt)):**
+   - Grouped parameters into `SettingsAudioEngineUiState` and memoized `SettingsAudioEngineCallbacks`, and decomposed the monolithic 255-line card lambda into 6 compact `private @Composable` helpers (`SettingsGaplessPlaybackRow`, `SettingsReplayGainSection`, `SettingsReplayGainModeSelector`, `SettingsReplayGainActiveControls`, `SettingsSleepTimerRow`, `SettingsDiagnosticsShortcutRow`) with zero UI, copy, or touch-target changes.
+
+### Final Pre-Merge Clean Verification (`./gradlew clean ktlintCheck detekt testDebugUnitTest lintDebug` + `assembleDebug assembleRelease`)
+- **Kotlin Formatting (`ktlintCheck`):** **PASS — 0 violations**.
+- **Static Analysis (`detekt`):** **PASS — 0 issues** (0 baseline files).
+- **Automated JVM Unit + Room Migration + Robolectric Compose UI Tests (`testDebugUnitTest`):** **254 / 254 passed** across **40 test suites** (`0` failed, `0` errors, `0` skipped, `0` `@Ignore`, `0` `TODO()`).
+- **Compiler, KSP, & R8 Warnings:** **0** Kotlin compiler warnings, **0** KSP warnings, **0** R8 warnings.
+- **Android Lint (`lintDebug` & `lintVitalRelease`):** **0 errors**, **0 total warnings**.
+- **Pure-Kotlin Domain Boundary (`RouteChangeReconfigurePolicy.kt`):** **PASS — 0 `android.*` / `androidx.*` imports**.
+- **Version Integrity:** Merged Release manifest confirmed `android:versionCode="3"` and `android:versionName="1.2"`.
+- **Debug APK (`assembleDebug`):** `app/build/outputs/apk/debug/app-debug.apk` (`20.34 MB` / `21,322,950 bytes`).
+- **Unsigned Release APK (`assembleRelease` with R8 optimization):** `app/build/outputs/apk/release/app-release-unsigned.apk` (`2.70 MB` / `2,828,380 bytes`).
+- **R8 Mapping Artifact (`retrace` support):** `app/build/outputs/mapping/release/mapping.txt` (`36.20 MB` / `37,958,618 bytes`).
+- **Strict Offline & Zero-Permission Audit (XML-parsed Source + All 8 Merged/Packaged Debug, Release, & UnitTest Manifests — 9 manifests total):** **PASS — 0 `INTERNET`, 0 `RECORD_AUDIO`, 0 `MANAGE_EXTERNAL_STORAGE`, 0 `WRITE_EXTERNAL_STORAGE`**; `FileProvider` confirmed `exported="false"`, `grantUriPermissions="true"`, `authorities="com.cangkir.bitperfectplayer.fileprovider"`.
+
 
 
 

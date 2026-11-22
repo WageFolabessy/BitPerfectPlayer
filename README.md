@@ -6,10 +6,10 @@ A 100% offline, local-first native Android music player (`com.cangkir.bitperfect
 
 ## Core Design Principles
 
-1. **100% Offline and Local-First:** Zero `INTERNET`, `RECORD_AUDIO`, or `MANAGE_EXTERNAL_STORAGE` permissions. No networking libraries, telemetry, analytics, ads, cloud sync, or automatic online lookups for metadata, artwork, or lyrics.
+1. **100% Offline and Local-First:** Zero `INTERNET`, `RECORD_AUDIO`, `MANAGE_EXTERNAL_STORAGE`, or `WRITE_EXTERNAL_STORAGE` permissions. No networking libraries, telemetry, analytics, ads, cloud sync, or automatic online lookups for metadata, artwork, or lyrics.
 2. **Hearing Safety First:** Defaults to **Safe Mode (`SAFE_VOLUME_MODE`)** on fresh installation and whenever any USB audio device connects. **Bit-Perfect Opt-In (`BIT_PERFECT_OPT_IN`)** never auto-activates and requires explicit confirmation through a mandatory `HearingSafetyWarningDialog` whenever hardware volume control is unverified.
 3. **Honest Audio Diagnostics:** Explicitly distinguishes verified runtime state from OS-indicated metadata and unverifiable DAC hardware stages. Never equates lossless file decoding with verified bit-perfect output.
-4. **Pure-Kotlin Domain Separation:** Core domain logic (SHA-256 content fingerprinting, `.lrc` parsing, WAV RIFF/PCM decoding, playback queue, safety state machine, ReplayGain tagging/scaling, FFT spectrum DSP, turntable scratch DSP, diagnostic log formatting/rotation/buffering, JSON backup codec, and `.m3u8` codec) lives in `android.*`-free Kotlin modules for deterministic JVM unit testing.
+4. **Pure-Kotlin Domain Separation:** Core domain logic (SHA-256 content fingerprinting, `.lrc` parsing, WAV RIFF/PCM decoding, playback queue, safety state machine, route-change reconfigure policy, ReplayGain tagging/scaling, FFT spectrum DSP, turntable scratch DSP, diagnostic log formatting/rotation/buffering, JSON backup codec, and `.m3u8` codec) lives in `android.*`-free Kotlin modules for deterministic JVM unit testing.
 
 ---
 
@@ -34,7 +34,7 @@ A 100% offline, local-first native Android music player (`com.cangkir.bitperfect
 
 - **Safe Mode Default (`AudioSafetyController.kt`):** Enforces `SAFE_VOLUME_MODE` on startup, fresh installs, and USB plug-in.
 - **Mandatory Warning Gate:** Displays `HearingSafetyWarningDialog` before entering `BIT_PERFECT_OPT_IN` while `isHardwareVolumeVerified == false`, warning that output may run at fixed full scale (100% / 0 dBFS).
-- **Immediate Auto-Pause:** Automatically pauses playback, resets to Safe Mode, and clears preferred mixer attributes upon `AudioManager.ACTION_AUDIO_BECOMING_NOISY`, USB disconnect/reconnect, or output route changes.
+- **Immediate Auto-Pause & Paused Route Deferral (`RouteChangeReconfigurePolicy.kt`):** Automatically pauses playback, resets to Safe Mode, and clears preferred mixer attributes upon `AudioManager.ACTION_AUDIO_BECOMING_NOISY`, USB disconnect/reconnect, or output route changes. When a route change arrives while playback is already paused (such as virtual screen-recording sinks), stale USB mixer preferences and 6-stage diagnostics update immediately while `MediaCodec` + `AudioTrack` rebuilds defer cleanly until the next `play()`.
 - **Software Volume Isolation:** Guards `AudioTrack.setVolume(...)` strictly to `SAFE_VOLUME_MODE`, ensuring zero digital volume scaling occurs when `BIT_PERFECT_OPT_IN` is active.
 
 ### Gapless Playback, Safe-Mode ReplayGain, and Sleep Timer
@@ -115,6 +115,7 @@ Declared permissions in [`app/src/main/AndroidManifest.xml`](app/src/main/Androi
 Strictly prohibited and verified absent from both source and merged manifests:
 - `android.permission.INTERNET`
 - `android.permission.MANAGE_EXTERNAL_STORAGE`
+- `android.permission.WRITE_EXTERNAL_STORAGE`
 - `android.permission.RECORD_AUDIO`
 
 ---
@@ -126,7 +127,7 @@ app/src/main/java/com/cangkir/bitperfectplayer/
 |-- BitPerfectApplication.kt      # Application container, repository wiring, & foreground lifecycle tracking
 |-- MainActivity.kt               # Single-activity Compose entry point (edge-to-edge)
 |-- audio/                        # Decoders (incl. RawExtractorPcmDecoder), WAV parser, modular AudioOutputEngine,
-|                                 # UsbMixerProfileSelector, ForegroundPlaybackGate, safety, 6-stage diagnostics, DSP
+|                                 # UsbMixerProfileSelector, RouteChangeReconfigurePolicy, ForegroundPlaybackGate, safety, diagnostics, DSP
 |-- data/                         # Room v4 DB, entities, DAOs, DataStore prefs (incl. DefaultHomepage), JSON backup codec
 |-- diagnostics/                  # Opt-in local diagnostic logging (pure formatter/rotation/ring buffer, logger, crash handler, ZIP exporter)
 |-- library/                      # MediaStore/SAF scanning, scan filter, sorting, aspect-preserving artwork, playlists, .m3u8
@@ -201,11 +202,12 @@ Preferences (Safe Mode default, shuffle, repeat, gapless toggle, ReplayGain sett
 ./gradlew assembleRelease
 ```
 
-To verify that no dependency merges `INTERNET`, `RECORD_AUDIO`, or `MANAGE_EXTERNAL_STORAGE` into the debug manifest after building:
+To verify that no dependency merges `INTERNET`, `RECORD_AUDIO`, `MANAGE_EXTERNAL_STORAGE`, or `WRITE_EXTERNAL_STORAGE` into the debug or release manifests after building:
 
 ```bash
-grep -E "INTERNET|RECORD_AUDIO|MANAGE_EXTERNAL_STORAGE" \
-  app/build/intermediates/merged_manifest/debug/processDebugMainManifest/AndroidManifest.xml
+grep -E "INTERNET|RECORD_AUDIO|MANAGE_EXTERNAL_STORAGE|WRITE_EXTERNAL_STORAGE" \
+  app/build/intermediates/merged_manifest/debug/processDebugMainManifest/AndroidManifest.xml \
+  app/build/intermediates/merged_manifest/release/processReleaseMainManifest/AndroidManifest.xml
 ```
 
 (Should return no matches.)
@@ -214,7 +216,7 @@ grep -E "INTERNET|RECORD_AUDIO|MANAGE_EXTERNAL_STORAGE" \
 
 ## Verification Scope and Hardware Safety Notice
 
-- **Automated Software Verification:** Core pure-Kotlin domain logic (including `UsbMixerProfileSelector`, `PcmStreamRules`, `TurntableFlushHeadTracker`, `QueueDragReorderMath`, `DefaultHomepage`, `AlbumArtworkHelper`, `DiagnosticLogFormatter`, `DiagnosticLogRotationPolicy`, `DiagnosticLogBuffer`, `ForegroundPlaybackGate`, and `WindowLayoutMetrics`), Room v1-to-v4 schema migrations, and headless Compose UI behaviors (including the mandatory `HearingSafetyWarningDialog` gate, passive Queue navigation, pure-Compose drag-and-drop reordering, full-list `All Songs` search playback, `DefaultHomepage` cold startup & config-change restoration, opt-in `DIAGNOSTIC LOGGING` settings controls, and adaptive `NavigationRail` / 2-column `NowPlayingScreen` layouts) are covered by **248 automated tests across 39 suites** under `./gradlew testDebugUnitTest`, alongside `ktlintCheck`, `detekt`, Android Lint, and R8 release builds.
+- **Automated Software Verification:** Core pure-Kotlin domain logic (including `UsbMixerProfileSelector`, `RouteChangeReconfigurePolicy`, `PcmStreamRules`, `TurntableFlushHeadTracker`, `QueueDragReorderMath`, `DefaultHomepage`, `AlbumArtworkHelper`, `DiagnosticLogFormatter`, `DiagnosticLogRotationPolicy`, `DiagnosticLogBuffer`, `ForegroundPlaybackGate`, and `WindowLayoutMetrics`), Room v1-to-v4 schema migrations, and headless Compose UI behaviors (including the mandatory `HearingSafetyWarningDialog` gate, passive Queue navigation, pure-Compose drag-and-drop reordering, full-list `All Songs` search playback, `DefaultHomepage` cold startup & config-change restoration, opt-in `DIAGNOSTIC LOGGING` settings controls, and adaptive `NavigationRail` / 2-column `NowPlayingScreen` layouts) are covered by **254 automated tests across 40 suites** under `./gradlew testDebugUnitTest`, alongside `ktlintCheck`, `detekt`, Android Lint, and R8 release builds.
 - **Physical Hardware Limits:** Runtime behavior of `AudioManager.MIXER_BEHAVIOR_BIT_PERFECT` and `MIXER_BEHAVIOR_DEFAULT` sample-rate negotiation, Android 16 / OEM `audio/raw` and `MediaCodec` 24-bit output support, UAC hardware volume attenuation, and internal USB-C DAC firmware processing depend on the target device's Android Audio HAL and DAC hardware. The reference hardware profile used during specification is a POCO F4 (Android 14 / HyperOS) paired with a KZ EDX Pro 2 USB-C IEM (107 dB/mW at 24 ohms).
 - **Safety Warning:** Before toggling **Bit-Perfect Opt-In** on an unfamiliar phone or USB-C DAC, keep high-sensitivity earphones out of your ears until you confirm whether volume buttons attenuate output or the DAC plays at fixed 100% full scale.
 

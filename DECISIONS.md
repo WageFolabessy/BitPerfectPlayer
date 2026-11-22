@@ -363,6 +363,22 @@ This file records autonomous architectural, dependency, and environment decision
   - Eliminates real-world failure modes (16-bit vs 24-bit raw framing mismatch, per-buffer GC churn, USB mixer attribute leaks, mid-drag decoder thrashing, crash-handler disk deadlocks, eager cold-start controller initialization on IO, and accidental filename leaks in exception messages) with minimal, localized, zero-regression changes.
 - **Rejected Alternatives:** Swallowing `RuntimeException` in `AudioTrackWriter` (breaks detekt `TooGenericExceptionCaught` and obscures real builder errors); terminating and recreating `BitPerfectDiagWriter` thread on every toggle (unnecessary thread lifecycle churn compared to an indefinite `Condition.await()` park).
 
+---
+
+## D11.11 — `v1.2` Real-Device POCO F4 Logcat & Video Polish (Queue Transition, Deferred Paused Route Reconfigure, & Settings JIT Split)
+- **Decision:**
+  1. **Zero-Overlap `QueueScreen` Navigation & Lean Row Composition (`BitPerfectAppNav.kt`, `QueueScreen.kt`, `UiComponents.kt`):**
+     - Replaced Navigation Compose's default 700 ms crossfade on `NavHost` with crisp `120 ms` / `90 ms` fades and set `EnterTransition.None` / `ExitTransition.None` on `Routes.QUEUE` so `LibraryScreen`'s lower-positioned track rows never bleed through `QueueScreen` during `bottomBar` hide/show and both full `LazyColumn` screens never lay out simultaneously on open/close.
+     - Initialized `rememberLazyListState(initialFirstVisibleItemIndex = ...)` directly (`0` when `currentIndex <= 3`, or `(currentIndex - 1)` when deeper in the queue), eliminated the `O(N)` `.map { it as Any }` copy for `entryIds`, passed stable primitives/shared callbacks to `QueueTrackRow`, skipped `graphicsLayer` RenderNodes on stationary rows, and memoized `RoundedCornerShape(cornerRadius)` in `TrackArtworkThumbnail`.
+  2. **Deferred Paused Route-Change Reconfigure (`RouteChangeReconfigurePolicy.kt`, `AudioOutputEngine.kt`):**
+     - Extracted pure-Kotlin `RouteChangeReconfigurePolicy` (`0` `android.*` imports) so when an `AUTO_PAUSE` route/device/noisy event (such as virtual screen-recording audio sinks) arrives while playback is already paused, `AudioOutputEngine` still clears stale USB preferred mixer attributes, updates 6-stage diagnostics, preserves Safe Mode auto-pause notices, and sets `pendingRouteReconfigureOnPlay = true` — avoiding redundant `MediaCodec` + `AudioTrack` teardown/re-creation cycles (`mId: 0 -> 1 -> 2`) while paused, then cleanly reloading once on the next `play()` (keeping paused `seekTo()` and post-paused Live Turntable scrubbing 100% functional). Explicit Safe Mode / Bit-Perfect toggles and active-playback auto-pauses continue to reconfigure immediately.
+  3. **ART-JIT-Lean `SettingsAudioEngineSection` (`SettingsAudioSection.kt`, `SettingsScreen.kt`):**
+     - Grouped parameters into `SettingsAudioEngineUiState` and memoized `SettingsAudioEngineCallbacks`, and decomposed the 255-line inner lambda into 6 compact `private @Composable` helpers (`SettingsGaplessPlaybackRow`, `SettingsReplayGainSection`, `SettingsReplayGainModeSelector`, `SettingsReplayGainActiveControls`, `SettingsSleepTimerRow`, `SettingsDiagnosticsShortcutRow`) to eliminate the ~6.8 MB ART JIT spike observed in device logcat while preserving exact UI layout and behavior.
+- **Rationale:**
+  - Directly resolves all three real-device POCO F4 video and logcat observations with surgical, testable, zero-regression changes prior to merging `v1.2` into `main`.
+- **Rejected Alternatives:** Filtering out `TYPE_REMOTE_SUBMIX` in `AudioDeviceCallback` (risks ignoring genuine OEM/HAL route transitions on Android 14–16 instead of cleanly deferring paused reloads for *all* routes); adding a post-composition `LaunchedEffect { listState.scrollToItem(...) }` in `QueueScreen` (causes visible post-first-frame scroll jumps).
+
+
 
 
 
