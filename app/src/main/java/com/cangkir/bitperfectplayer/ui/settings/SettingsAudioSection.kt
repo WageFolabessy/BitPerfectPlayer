@@ -43,10 +43,8 @@ import com.cangkir.bitperfectplayer.audio.ReplayGainMode
 import com.cangkir.bitperfectplayer.audio.ReplayGainProcessor
 import com.cangkir.bitperfectplayer.audio.SleepTimerState
 import com.cangkir.bitperfectplayer.ui.SleepTimerSettingsValueLeaf
-import com.cangkir.bitperfectplayer.ui.theme.IcePrimary
-import com.cangkir.bitperfectplayer.ui.theme.IcePrimaryContainer
-import com.cangkir.bitperfectplayer.ui.theme.OnIcePrimaryContainer
 import com.cangkir.bitperfectplayer.ui.theme.TextMuted
+import com.cangkir.bitperfectplayer.ui.theme.studioSwitchColors
 import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.StateFlow
 
@@ -136,6 +134,7 @@ private fun SettingsGaplessPlaybackRow(gaplessEnabled: Boolean, onSetGaplessEnab
         Switch(
             checked = gaplessEnabled,
             onCheckedChange = onSetGaplessEnabled,
+            colors = studioSwitchColors(),
         )
     }
 }
@@ -167,7 +166,7 @@ private fun SettingsReplayGainSection(
                 Text(
                     text = "Bypassed",
                     style = MaterialTheme.typography.labelSmall,
-                    color = IcePrimary,
+                    color = MaterialTheme.colorScheme.primary,
                     maxLines = 1,
                     softWrap = false,
                 )
@@ -222,8 +221,8 @@ private fun SettingsReplayGainModeSelector(selectedMode: ReplayGainMode, onSelec
                         .sizeIn(minHeight = 48.dp),
                     colors = if (selected) {
                         ButtonDefaults.buttonColors(
-                            containerColor = IcePrimaryContainer,
-                            contentColor = OnIcePrimaryContainer,
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary,
                         )
                     } else {
                         ButtonDefaults.textButtonColors(
@@ -278,9 +277,11 @@ private fun SettingsReplayGainActiveControls(
         valueRange = ReplayGainConfig.MIN_PREAMP_DB..ReplayGainConfig.MAX_PREAMP_DB,
         steps = 23,
         colors = SliderDefaults.colors(
-            thumbColor = MaterialTheme.colorScheme.onSurface,
+            thumbColor = MaterialTheme.colorScheme.primary,
             activeTrackColor = MaterialTheme.colorScheme.primary,
             inactiveTrackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+            activeTickColor = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.45f),
+            inactiveTickColor = MaterialTheme.colorScheme.outline,
         ),
         modifier = Modifier.fillMaxWidth(),
     )
@@ -307,6 +308,7 @@ private fun SettingsReplayGainActiveControls(
         Switch(
             checked = preventClipping,
             onCheckedChange = onSetPreventClipping,
+            colors = studioSwitchColors(),
         )
     }
 }
@@ -364,7 +366,7 @@ private fun SettingsDiagnosticsShortcutRow(
         Icon(
             imageVector = Icons.Filled.GraphicEq,
             contentDescription = null,
-            tint = if (isBitPerfectMixerActive) IcePrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+            tint = if (isBitPerfectMixerActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.size(20.dp),
         )
         Spacer(modifier = Modifier.width(14.dp))

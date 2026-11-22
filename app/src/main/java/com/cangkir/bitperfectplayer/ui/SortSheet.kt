@@ -40,7 +40,6 @@ import com.cangkir.bitperfectplayer.library.GroupSortSpec
 import com.cangkir.bitperfectplayer.library.SortDirection
 import com.cangkir.bitperfectplayer.library.TrackSortScope
 import com.cangkir.bitperfectplayer.library.TrackSortSpec
-import com.cangkir.bitperfectplayer.ui.theme.IcePrimaryContainer
 
 /**
  * Minimalist, non-intrusive inline sort trigger placed right-aligned on an existing
@@ -215,7 +214,7 @@ private fun SortDirectionToggleRow(direction: SortDirection, onSelectDirection: 
                     .clip(RoundedCornerShape(10.dp))
                     .clickable { onSelectDirection(item) },
                 shape = RoundedCornerShape(10.dp),
-                color = if (selected) IcePrimaryContainer else MaterialTheme.colorScheme.surface,
+                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface,
                 border = BorderStroke(
                     width = 0.5.dp,
                     color = if (selected) {
@@ -237,7 +236,7 @@ private fun SortDirectionToggleRow(direction: SortDirection, onSelectDirection: 
                         style = MaterialTheme.typography.labelLarge,
                         fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
                         color = if (selected) {
-                            MaterialTheme.colorScheme.primary
+                            MaterialTheme.colorScheme.onPrimary
                         } else {
                             MaterialTheme.colorScheme.onSurfaceVariant
                         },

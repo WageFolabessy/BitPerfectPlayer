@@ -41,7 +41,6 @@ import androidx.compose.ui.unit.dp
 import com.cangkir.bitperfectplayer.audio.AudioFormatFormatter
 import com.cangkir.bitperfectplayer.audio.ReplayGainProcessor
 import com.cangkir.bitperfectplayer.library.TrackTechnicalInfo
-import com.cangkir.bitperfectplayer.ui.theme.IcePrimary
 import com.cangkir.bitperfectplayer.ui.theme.TextMuted
 import java.text.DateFormat
 import java.util.Date
@@ -197,7 +196,7 @@ fun TrackInfoBottomSheet(info: TrackTechnicalInfo, onCopiedMessage: (String) -> 
                                 else -> "Unavailable"
                             },
                             style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                            color = if (!fp.isNullOrBlank()) IcePrimary else TextMuted,
+                            color = if (!fp.isNullOrBlank()) MaterialTheme.colorScheme.primary else TextMuted,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
@@ -207,7 +206,7 @@ fun TrackInfoBottomSheet(info: TrackTechnicalInfo, onCopiedMessage: (String) -> 
                         Icon(
                             imageVector = Icons.Filled.ContentCopy,
                             contentDescription = "Copy full SHA-256 fingerprint",
-                            tint = IcePrimary,
+                            tint = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.size(18.dp),
                         )
                     }

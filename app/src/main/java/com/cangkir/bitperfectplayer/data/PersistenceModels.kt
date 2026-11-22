@@ -234,6 +234,7 @@ data class UserPreferences(
     val spectrumColorStyle: SpectrumColorStyle = SpectrumColorStyle.PRISM,
     val spectrumSparksEnabled: Boolean = true,
     val defaultHomepage: DefaultHomepage = DefaultHomepage.ALL_SONGS,
+    val dynamicCoverThemeEnabled: Boolean = false,
     val diagnosticLoggingEnabled: Boolean = false,
     val persistedSafTreeUris: Set<String> = emptySet(),
     val persistedSafFileUris: Set<String> = emptySet(),

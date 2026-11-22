@@ -22,6 +22,7 @@ import com.cangkir.bitperfectplayer.library.PlaylistRepository
 import com.cangkir.bitperfectplayer.library.TrackInfoLoader
 import com.cangkir.bitperfectplayer.lyrics.AndroidContentFingerprintProvider
 import com.cangkir.bitperfectplayer.lyrics.LyricsRepository
+import com.cangkir.bitperfectplayer.ui.theme.CoverThemeColorCache
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -51,6 +52,7 @@ class AppContainer(context: Context) {
     }
     val metadataReader: AudioMetadataReader by lazy { AudioMetadataReader(appContext) }
     val albumArtworkLoader: AlbumArtworkLoader by lazy { AlbumArtworkLoader(appContext) }
+    val coverThemeColorCache: CoverThemeColorCache by lazy { CoverThemeColorCache(albumArtworkLoader) }
     val trackInfoLoader: TrackInfoLoader by lazy {
         TrackInfoLoader(
             context = appContext,
@@ -115,6 +117,7 @@ class AppContainer(context: Context) {
             "spectrumEnabled" to prefs.spectrumVisualizerEnabled,
             "spectrumStyle" to prefs.spectrumColorStyle.name,
             "spectrumSparks" to prefs.spectrumSparksEnabled,
+            "dynamicCoverTheme" to prefs.dynamicCoverThemeEnabled,
         )
     }
 }

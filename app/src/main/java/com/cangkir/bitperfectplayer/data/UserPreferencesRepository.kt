@@ -46,6 +46,7 @@ class UserPreferencesRepository(private val dataStore: DataStore<Preferences>) {
         val SPECTRUM_COLOR_STYLE = stringPreferencesKey("spectrum_color_style")
         val SPECTRUM_SPARKS_ENABLED = booleanPreferencesKey("spectrum_sparks_enabled")
         val DEFAULT_HOMEPAGE = stringPreferencesKey("default_homepage")
+        val DYNAMIC_COVER_THEME_ENABLED = booleanPreferencesKey("dynamic_cover_theme_enabled")
         val DIAGNOSTIC_LOGGING_ENABLED = booleanPreferencesKey("diagnostic_logging_enabled")
         val PERSISTED_SAF_TREE_URIS = stringSetPreferencesKey("persisted_saf_tree_uris")
         val PERSISTED_SAF_FILE_URIS = stringSetPreferencesKey("persisted_saf_file_uris")
@@ -141,6 +142,12 @@ class UserPreferencesRepository(private val dataStore: DataStore<Preferences>) {
     suspend fun setDefaultHomepage(homepage: DefaultHomepage) {
         dataStore.edit { prefs ->
             prefs[Keys.DEFAULT_HOMEPAGE] = homepage.name
+        }
+    }
+
+    suspend fun setDynamicCoverThemeEnabled(enabled: Boolean) {
+        dataStore.edit { prefs ->
+            prefs[Keys.DYNAMIC_COVER_THEME_ENABLED] = enabled
         }
     }
 
@@ -283,6 +290,7 @@ class UserPreferencesRepository(private val dataStore: DataStore<Preferences>) {
             spectrumColorStyle = SpectrumColorStyle.fromStoredName(prefs[Keys.SPECTRUM_COLOR_STYLE]),
             spectrumSparksEnabled = prefs[Keys.SPECTRUM_SPARKS_ENABLED] ?: true,
             defaultHomepage = DefaultHomepage.fromStoredName(prefs[Keys.DEFAULT_HOMEPAGE]),
+            dynamicCoverThemeEnabled = prefs[Keys.DYNAMIC_COVER_THEME_ENABLED] ?: false,
             diagnosticLoggingEnabled = prefs[Keys.DIAGNOSTIC_LOGGING_ENABLED] ?: false,
             persistedSafTreeUris = PersistenceSanitizer.sanitizeUriSet(
                 prefs[Keys.PERSISTED_SAF_TREE_URIS].orEmpty(),

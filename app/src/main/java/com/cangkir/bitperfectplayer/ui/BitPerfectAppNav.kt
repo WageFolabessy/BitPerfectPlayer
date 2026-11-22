@@ -67,7 +67,6 @@ import com.cangkir.bitperfectplayer.ui.nowplaying.NowPlayingScreen
 import com.cangkir.bitperfectplayer.ui.playlists.AddToPlaylistDialog
 import com.cangkir.bitperfectplayer.ui.playlists.PlaylistsScreen
 import com.cangkir.bitperfectplayer.ui.settings.SettingsScreen
-import com.cangkir.bitperfectplayer.ui.theme.IcePrimaryContainer
 import com.cangkir.bitperfectplayer.ui.theme.TextMuted
 
 private object Routes {
@@ -202,6 +201,7 @@ private fun BitPerfectAppRootContent(viewModel: MainViewModel, startupHomepage: 
             )
         },
         libraryContent = { initialLibraryTab ->
+            val dynamicCoverThemeEnabled by viewModel.dynamicCoverThemeEnabled.collectAsStateWithLifecycle()
             LibraryScreen(
                 libraryState = libraryState,
                 favoriteTrackUris = favoriteTrackUris,
@@ -224,6 +224,8 @@ private fun BitPerfectAppRootContent(viewModel: MainViewModel, startupHomepage: 
                 onOpenQueue = openQueue,
                 onOpenDiagnostics = openDiagnostics,
                 initialTab = initialLibraryTab,
+                dynamicCoverThemeEnabled = dynamicCoverThemeEnabled,
+                coverThemeColorCache = viewModel.coverThemeColorCache,
             )
         },
         playlistsContent = {
@@ -254,6 +256,7 @@ private fun BitPerfectAppRootContent(viewModel: MainViewModel, startupHomepage: 
             val spectrumVisualizerEnabled by viewModel.spectrumVisualizerEnabled.collectAsStateWithLifecycle()
             val spectrumColorStyle by viewModel.spectrumColorStyle.collectAsStateWithLifecycle()
             val spectrumSparksEnabled by viewModel.spectrumSparksEnabled.collectAsStateWithLifecycle()
+            val dynamicCoverThemeEnabled by viewModel.dynamicCoverThemeEnabled.collectAsStateWithLifecycle()
             val diagnosticLoggingEnabled by viewModel.diagnosticLoggingEnabled.collectAsStateWithLifecycle()
             val diagnosticLogStats by viewModel.diagnosticLogStats.collectAsStateWithLifecycle()
             SettingsScreen(
@@ -270,6 +273,8 @@ private fun BitPerfectAppRootContent(viewModel: MainViewModel, startupHomepage: 
                 onSetSpectrumColorStyle = viewModel::setSpectrumColorStyle,
                 spectrumSparksEnabled = spectrumSparksEnabled,
                 onSetSpectrumSparksEnabled = viewModel::setSpectrumSparksEnabled,
+                dynamicCoverThemeEnabled = dynamicCoverThemeEnabled,
+                onSetDynamicCoverThemeEnabled = viewModel::setDynamicCoverThemeEnabled,
                 diagnosticLoggingEnabled = diagnosticLoggingEnabled,
                 diagnosticLogStats = diagnosticLogStats,
                 onSetDiagnosticLoggingEnabled = viewModel::setDiagnosticLoggingEnabled,
@@ -321,7 +326,7 @@ private fun BitPerfectAppRootContent(viewModel: MainViewModel, startupHomepage: 
                 spectrumVisualizerEnabled = spectrumVisualizerEnabled,
                 onSetSpectrumVisualizerEnabled = viewModel::setSpectrumVisualizerEnabled,
                 spectrumColorStyle = spectrumColorStyle,
-                onCycleSpectrumColorStyle = viewModel::cycleSpectrumColorStyle,
+                onCycleSpectrumColorStyle = { viewModel.setSpectrumColorStyle(spectrumColorStyle.next()) },
                 spectrumSparksEnabled = spectrumSparksEnabled,
                 onSetSpectrumSparksEnabled = viewModel::setSpectrumSparksEnabled,
                 onSetSpectrumVisualizerActive = viewModel::setSpectrumVisualizerActive,
@@ -603,9 +608,9 @@ internal fun BitPerfectBottomNavBar(currentRoute: String, onSelectTab: (String) 
                     )
                 },
                 colors = NavigationBarItemDefaults.colors(
-                    selectedIconColor = MaterialTheme.colorScheme.primary,
+                    selectedIconColor = MaterialTheme.colorScheme.onPrimary,
                     selectedTextColor = MaterialTheme.colorScheme.primary,
-                    indicatorColor = IcePrimaryContainer,
+                    indicatorColor = MaterialTheme.colorScheme.primary,
                     unselectedIconColor = TextMuted,
                     unselectedTextColor = TextMuted,
                 ),
@@ -651,9 +656,9 @@ internal fun BitPerfectNavigationRail(currentRoute: String, onSelectTab: (String
                     )
                 },
                 colors = NavigationRailItemDefaults.colors(
-                    selectedIconColor = MaterialTheme.colorScheme.primary,
+                    selectedIconColor = MaterialTheme.colorScheme.onPrimary,
                     selectedTextColor = MaterialTheme.colorScheme.primary,
-                    indicatorColor = IcePrimaryContainer,
+                    indicatorColor = MaterialTheme.colorScheme.primary,
                     unselectedIconColor = TextMuted,
                     unselectedTextColor = TextMuted,
                 ),

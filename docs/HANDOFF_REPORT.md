@@ -1,9 +1,9 @@
 # BitPerfectPlayer MVP — Autonomous Build Handoff Report
 
 - **Project:** `com.cangkir.bitperfectplayer` (Kotlin + Jetpack Compose, 100% Offline Android Music Player)
-- **Active Branch:** `main` *(merged from `feat/v1.2`; `versionName = "1.2"`, `versionCode = 3`)*
-- **Overall Status:** **`v1.2` Finalized, Audited, Polished, & Software-Verified (`versionName = "1.2"`, `versionCode = 3`)** *(254 / 254 automated tests passing across 40 suites with `ktlintCheck`, `detekt`, Android Lint, Debug APK, and R8 Release APK clean; ready for Signed Release APK build from `main`)*
-- **Tasks Completed:** **17 / 17** (`T0.1` through `T5.4` in `docs/TASKS.md`) + `v1.1` release + complete `v1.2` release upgrades
+- **Active Branch:** `feat/v1.3` *(branched from `main`; `versionName = "1.3"`, `versionCode = 4`)*
+- **Overall Status:** **`v1.3` Monochrome Studio & Two-Layer Dynamic Cover Theme Overhaul — Software-Verified (`versionName = "1.3"`, `versionCode = 4`)** *(263 / 263 automated tests passing across 41 suites with `ktlintCheck`, `detekt`, Android Lint, Debug APK, and R8 Release APK clean)*
+- **Tasks Completed:** **17 / 17** (`T0.1` through `T5.4` in `docs/TASKS.md`) + `v1.1` + `v1.2` + `v1.3` visual/theming overhaul & verification
 - **Active Blockers:** None (`BLOCKED.md` not required)
 
 ---
@@ -1089,6 +1089,46 @@ Addressed the 3 minor findings observed in real-device POCO F4 video testing and
 - **Unsigned Release APK (`assembleRelease` with R8 optimization):** `app/build/outputs/apk/release/app-release-unsigned.apk` (`2.70 MB` / `2,828,380 bytes`).
 - **R8 Mapping Artifact (`retrace` support):** `app/build/outputs/mapping/release/mapping.txt` (`36.20 MB` / `37,958,618 bytes`).
 - **Strict Offline & Zero-Permission Audit (XML-parsed Source + All 8 Merged/Packaged Debug, Release, & UnitTest Manifests — 9 manifests total):** **PASS — 0 `INTERNET`, 0 `RECORD_AUDIO`, 0 `MANAGE_EXTERNAL_STORAGE`, 0 `WRITE_EXTERNAL_STORAGE`**; `FileProvider` confirmed `exported="false"`, `grantUriPermissions="true"`, `authorities="com.cangkir.bitperfectplayer.fileprovider"`.
+
+---
+
+## 34. `v1.3` Monochrome Studio Theme, Monochrome App Icon, & Two-Layer Dynamic Cover Theme (`D12.1`–`D12.2`)
+
+### Delivered Features & Visual Overhaul
+1. **Monochrome Studio Default Theme ([`Color.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/theme/Color.kt), [`Theme.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/theme/Theme.kt), [`SpectrumVisualDsp.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/SpectrumVisualDsp.kt), & App-Wide UI Audit):**
+   - Shifted the entire default dark palette from legacy slate-blue (`IcePrimary` / `#7BA7D9`) to **Monochrome Studio**: matte-obsidian surfaces (`#0E0E10`, `#161619`, `#1E1E22`, `#26262C`), warm off-white ivory accent (`StudioIvoryPrimary = #F2F2F0`, `OnStudioIvoryPrimary = #111113`), brushed silver secondary (`StudioSilverSecondary = #B8B8BE`), and distinct muted dark gray inactive states (`#2A2A30` / `#7C7C84`).
+   - Enforced high-contrast active (`primary` fill + `onPrimary` obsidian ink) vs inactive states across navigation bars/rails, library tabs, primary Play/Pause & Play All buttons, sliders, `studioSwitchColors()` toggles, and Settings segmented pills, while eliminating every hardcoded old blue color reference across 17+ UI files and updating `AlbumPaletteExtractor.FALLBACK_STUDIO_PALETTE` / `SpectrumColorMapper.STUDIO` to brushed silver/ivory.
+   - Preserved all vivid semantic status indicators (`EmeraldSafe` green, `AmberIndicated` amber, `CoralWarning` red) across [`DiagnosticsScreen.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/DiagnosticsScreen.kt), audio safety badges, and destructive actions.
+2. **Monochrome Studio App Logo & Legacy WebP Mipmaps ([`ic_launcher_background.xml`](../app/src/main/res/drawable/ic_launcher_background.xml), [`ic_launcher_foreground.xml`](../app/src/main/res/drawable/ic_launcher_foreground.xml), [`ic_launcher_monochrome.xml`](../app/src/main/res/drawable/ic_launcher_monochrome.xml), `mipmap-{mdpi..xxxhdpi}/ic_launcher*.webp`):**
+   - Updated the adaptive foreground symmetric PCM waveform mark (`#A8A8B0` outer bars, `#D4D4D6` inner bars, `#F2F2F0` ivory center peak, `#4A4A52` precision ring) over a `#18181B -> #0E0E10` obsidian background, preserved Android 13+ themed icon geometry (`ic_launcher_monochrome.xml`), and regenerated all 10 lossless `.webp` mipmaps (`mdpi` through `xxxhdpi`, square and round) with zero lingering blue pixels.
+3. **Pure-Kotlin Cover Color Extractor & Two-Layer Dynamic Cover Theme ([`CoverThemePaletteGenerator.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/theme/CoverThemePaletteGenerator.kt), [`CoverThemeColorCache.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/theme/CoverThemeColorCache.kt), [`MainViewModel.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/MainViewModel.kt), [`MainActivity.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/MainActivity.kt), [`LibraryScreen.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/library/LibraryScreen.kt), [`SettingsDisplayAndLibrarySection.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/settings/SettingsDisplayAndLibrarySection.kt), [`LocalBackupCodec.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/data/LocalBackupCodec.kt)):**
+   - Implemented pure-Kotlin `CoverThemePaletteGenerator` (`0` `android.*`/`androidx.*` imports) with 36-bucket quantized hue extraction, monochrome/grayscale rejection (`null` fallback to Monochrome Studio), and programmatic WCAG 2.1 contrast clamping (`>= 4.5:1` interactive accents/containers/variants, `>= 7.0:1` primary text on dark canvas, `background luminance < 0.05`, restrained studio primary luminance `<= 0.65`).
+   - Built `CoverThemeColorCache` (`Dispatchers.Default`, `<= 32x32` software pixel sampling, `128`-entry `LruCache`, safe `HARDWARE` bitmap copy handling).
+   - Added opt-in **`Dynamic Cover Theme`** toggle (default `false` / OFF) in Settings -> Display, DataStore persistence, and backward-compatible `LocalBackupCodec` `.json` export/import, driving both the **Global Layer** (`300 ms` animated theme tracking the active playing cover) and the **Local Album Layer** (`AlbumDetailDynamicThemeWrapper` isolating opened Album Details without recomposing unrelated global UI).
+4. **Version Metadata Bump ([`app/build.gradle.kts`](../app/build.gradle.kts), [`SettingsScreen.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/settings/SettingsScreen.kt)):**
+   - Updated to **`versionCode = 4`, `versionName = "1.3"`**.
+
+### Final Clean `v1.3` Verification Evidence (`/home/endricho/.local/bin/gradlew-wsl clean ktlintCheck detekt testDebugUnitTest lintDebug assembleDebug assembleRelease`)
+- **Kotlin Formatting (`ktlintCheck`):** **PASS — 0 violations** across `main`, `test`, and Gradle scripts.
+- **Static Analysis (`detekt`):** **PASS — 0 issues** (0 baseline suppressions).
+- **Automated JVM Unit + Room Migration + Robolectric Compose UI Tests (`testDebugUnitTest`):** **263 / 263 passed** across **41 test suites** (`0` failed, `0` errors, `0` skipped, `0` `@Ignore`), including:
+  - [`CoverThemePaletteGeneratorTest.kt`](../app/src/test/java/com/cangkir/bitperfectplayer/ui/theme/CoverThemePaletteGeneratorTest.kt): `5 / 5` (monochrome/grayscale/empty `null` fallback, extreme white/neon-yellow/neon-lime/cyan/magenta/crimson/deep-navy covers, and full 0°–355° hue sweep WCAG verification).
+  - [`PersistenceAndPreferencesTest.kt`](../app/src/test/java/com/cangkir/bitperfectplayer/data/PersistenceAndPreferencesTest.kt): `4 / 4` (verifying `dynamicCoverThemeEnabled = false` fresh default and DataStore round-trip).
+  - [`LocalBackupCodecTest.kt`](../app/src/test/java/com/cangkir/bitperfectplayer/data/LocalBackupCodecTest.kt): `5 / 5` (+1 verifying `dynamicCoverThemeEnabled` JSON round-trip and legacy v1.0–v1.2 fallback to `false`).
+  - [`BitPerfectUiBehaviorTest.kt`](../app/src/test/java/com/cangkir/bitperfectplayer/ui/BitPerfectUiBehaviorTest.kt): `33 / 33` (+3 verifying Settings `Dynamic Cover Theme` toggle default OFF & clicks, nested Album dynamic theme scope isolation + `300 ms` Monochrome/Global transitions, and `LibraryScreen` Album Detail dynamic scope open & Back exit).
+- **Compiler & KSP Warnings:** **0** Kotlin/KSP warnings across Debug, Release, and UnitTest compilations.
+- **Android Lint (`lintDebug` & `lintVitalRelease`):** **0 errors**, **0 warnings across all `/app/src/` files** (remaining 14 SARIF notices are strictly pre-existing `gradle/libs.versions.toml` `GradleDependency` and cached `lifecycle-runtime` `ObsoleteLintCustomCheck` advisories).
+- **Pure-Kotlin Boundary & Blue-Removal Audits:** **PASS — 0 `android.*`/`androidx.*` imports in `CoverThemePaletteGenerator.kt`; 0 remaining `IcePrimary` / `#7BA7D9` references in `app/src/main/`; all 10 lossless `.webp` mipmaps verified RGBA with ivory center peak and zero blue dominance.**
+- **Merged Manifest & Offline Privacy Audit (Source + All 8 Generated Debug/Release/UnitTest Manifests — 9 manifests total):** **PASS — 0 `INTERNET`, 0 `RECORD_AUDIO`, 0 `MANAGE_EXTERNAL_STORAGE`, 0 `WRITE_EXTERNAL_STORAGE`**; Release manifest verified `versionCode="4"` and `versionName="1.3"`.
+- **Debug APK (`assembleDebug`):** `app/build/outputs/apk/debug/app-debug.apk` (`21,357,802 bytes` / `20.37 MB`).
+- **Unsigned Release APK (`assembleRelease` with R8):** `app/build/outputs/apk/release/app-release-unsigned.apk` (`2,863,240 bytes` / `2.73 MB`).
+- **R8 Mapping Artifact (`retrace` support):** `app/build/outputs/mapping/release/mapping.txt` (`37,855,959 bytes` / `36.10 MB`).
+
+### Physical Hardware Verification Pending (Not Executed in Software-Only Environment)
+- [ ] **Monochrome Studio Launcher Icon & Android 13+ Themed Icon:** Install `v1.3` APK on physical POCO F4 (HyperOS / Android 14) and confirm the obsidian/silver/ivory app icon renders cleanly on home screen, app drawer, Settings app list, and Material You themed icon mode without legacy blue tints.
+- [ ] **Two-Layer Dynamic Cover Theme & 120 Hz Transitions:** Enable Settings -> Display -> `Dynamic Cover Theme`, play tracks with bright white, neon yellow, crimson, deep black, and B&W artwork while inspecting Global theme transitions (`300 ms`), verify `MiniPlayerBar` & `BottomNav` active/inactive contrast, open an Album Detail on the `Albums` tab to verify isolated Local Album cover tinting and clean Back restoration, and confirm smooth 120 Hz radial spectrum + vinyl rotation.
+- [ ] **Audio Safety Invariant Regression Check on Device:** Verify Bit-Perfect Opt-In USB-C DAC playback (`MIXER_BEHAVIOR_BIT_PERFECT` or `DEFAULT`), Hearing Safety gate, plug/unplug auto-pause, and zero DSP/ReplayGain/volume scaling remain completely unchanged while `Dynamic Cover Theme` is active.
+
 
 
 

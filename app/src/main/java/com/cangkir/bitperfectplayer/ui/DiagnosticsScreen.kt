@@ -51,7 +51,6 @@ import com.cangkir.bitperfectplayer.ui.theme.CoralWarning
 import com.cangkir.bitperfectplayer.ui.theme.CoralWarningContainer
 import com.cangkir.bitperfectplayer.ui.theme.EmeraldSafe
 import com.cangkir.bitperfectplayer.ui.theme.EmeraldSafeContainer
-import com.cangkir.bitperfectplayer.ui.theme.IcePrimary
 import com.cangkir.bitperfectplayer.ui.theme.OnAmberIndicatedContainer
 import com.cangkir.bitperfectplayer.ui.theme.OnCoralWarningContainer
 import com.cangkir.bitperfectplayer.ui.theme.OnEmeraldSafeContainer
@@ -80,7 +79,7 @@ fun DiagnosticsScreen(
     }
 
     val statusAccent = when {
-        diagnostics.isBitPerfectMixerActive -> IcePrimary
+        diagnostics.isBitPerfectMixerActive -> MaterialTheme.colorScheme.primary
         isSafe -> EmeraldSafe
         else -> AmberIndicated
     }

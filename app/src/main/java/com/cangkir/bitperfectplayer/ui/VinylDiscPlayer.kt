@@ -59,10 +59,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
 import com.cangkir.bitperfectplayer.audio.VinylScrubMath
 import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
-import com.cangkir.bitperfectplayer.ui.theme.IcePrimary
-import com.cangkir.bitperfectplayer.ui.theme.ObsidianSurfaceVariant
-import com.cangkir.bitperfectplayer.ui.theme.TextPrimary
-import com.cangkir.bitperfectplayer.ui.theme.TextSecondary
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.roundToLong
@@ -733,7 +729,7 @@ private fun VinylCircularArtwork(track: PlaybackTrack, artworkLoader: AlbumArtwo
     Box(
         modifier = modifier
             .clip(CircleShape)
-            .background(ObsidianSurfaceVariant)
+            .background(MaterialTheme.colorScheme.surfaceVariant)
             .border(width = 1.dp, color = VinylArtworkBorder, shape = CircleShape),
         contentAlignment = Alignment.Center,
     ) {
@@ -801,7 +797,7 @@ private fun VinylScrubPillLeaf(
                 text = formatDurationMs(displayMs),
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.SemiBold,
-                color = TextPrimary,
+                color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
                 softWrap = false,
             )
@@ -809,7 +805,7 @@ private fun VinylScrubPillLeaf(
                 text = VinylScrubMath.formatSignedDeltaMs(deltaMs),
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.Medium,
-                color = IcePrimary,
+                color = MaterialTheme.colorScheme.primary,
                 maxLines = 1,
                 softWrap = false,
             )
@@ -818,7 +814,7 @@ private fun VinylScrubPillLeaf(
                     text = VinylScrubMath.formatPlaybackRateBadge(liveSpeed),
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.SemiBold,
-                    color = TextSecondary,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     softWrap = false,
                 )

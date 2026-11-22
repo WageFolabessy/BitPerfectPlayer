@@ -24,11 +24,11 @@ object AlbumPaletteExtractor {
     private const val MAX_LUM = 0.90f
     private const val MIN_SAT = 0.18f
 
-    /** Fallback Studio slate-ice triad returned when artwork is missing or purely grayscale. */
+    /** Fallback Monochrome Studio silver-ivory triad returned when artwork is missing or purely grayscale. */
     val FALLBACK_STUDIO_PALETTE: IntArray = intArrayOf(
-        0xFF7BA7D9.toInt(),
-        0xFF9AC0E8.toInt(),
-        0xFFD7E5F5.toInt(),
+        0xFFB8B8BE.toInt(),
+        0xFFD8D8DC.toInt(),
+        0xFFF2F2F0.toInt(),
     )
 
     private class HueHistogram(
@@ -289,9 +289,9 @@ object AlbumPaletteExtractor {
  */
 object SpectrumColorMapper {
     const val RESTING_SLATE_ARGB: Int = 0x663D3D47 // #3D3D47 @ 40% alpha
-    private const val STUDIO_ACCENT_RGB: Int = 0xFF7BA7D9.toInt()
-    private const val STUDIO_TIP_ARGB: Int = 0xFAD7E5F5.toInt()
-    private const val BRIGHT_WHITE_TINT: Int = 0xFAF4F8FF.toInt()
+    private const val STUDIO_ACCENT_RGB: Int = 0xFFD4D4D8.toInt()
+    private const val STUDIO_TIP_ARGB: Int = 0xFAF2F2F0.toInt()
+    private const val BRIGHT_WHITE_TINT: Int = 0xFAF6F6F4.toInt()
     private const val ACTIVE_BAR_ALPHA: Int = 0xEA // ~92% alpha on crisp OLED #0E0E10
 
     // OLED-tuned 5-stop Prism gradient: coral-red bass -> amber-gold -> emerald-aqua -> sky-cyan -> studio violet.

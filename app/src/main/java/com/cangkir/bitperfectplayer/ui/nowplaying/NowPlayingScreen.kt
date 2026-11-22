@@ -71,7 +71,6 @@ import com.cangkir.bitperfectplayer.ui.SleepTimerTopBarButton
 import com.cangkir.bitperfectplayer.ui.WindowLayoutMetrics
 import com.cangkir.bitperfectplayer.ui.theme.AmberIndicated
 import com.cangkir.bitperfectplayer.ui.theme.EmeraldSafe
-import com.cangkir.bitperfectplayer.ui.theme.IcePrimary
 import com.cangkir.bitperfectplayer.ui.theme.TextMuted
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.StateFlow
@@ -290,7 +289,7 @@ fun NowPlayingScreen(
 
         val isSafe = safetyState.mode == AudioOutputMode.SAFE_VOLUME_MODE
         val modeDotColor = when {
-            diagnostics.isBitPerfectMixerActive -> IcePrimary
+            diagnostics.isBitPerfectMixerActive -> MaterialTheme.colorScheme.primary
             isSafe -> EmeraldSafe
             else -> AmberIndicated
         }

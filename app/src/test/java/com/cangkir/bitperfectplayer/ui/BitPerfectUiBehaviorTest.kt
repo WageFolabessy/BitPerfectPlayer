@@ -2,14 +2,19 @@ package com.cangkir.bitperfectplayer.ui
 
 import android.Manifest
 import android.app.Application
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsOff
+import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.hasScrollToIndexAction
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
@@ -50,6 +55,10 @@ import com.cangkir.bitperfectplayer.ui.nowplaying.NowPlayingScreen
 import com.cangkir.bitperfectplayer.ui.playlists.PlaylistsScreen
 import com.cangkir.bitperfectplayer.ui.settings.SettingsScreen
 import com.cangkir.bitperfectplayer.ui.theme.BitPerfectPlayerTheme
+import com.cangkir.bitperfectplayer.ui.theme.CoverThemeColorCache
+import com.cangkir.bitperfectplayer.ui.theme.CoverThemePaletteGenerator
+import com.cangkir.bitperfectplayer.ui.theme.ObsidianBackground
+import com.cangkir.bitperfectplayer.ui.theme.StudioIvoryPrimary
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -1839,5 +1848,168 @@ class BitPerfectUiBehaviorTest {
         restorationTester.emulateSavedInstanceStateRestore()
         composeRule.waitForIdle()
         composeRule.onNodeWithText("AUDIO ENGINE").assertIsDisplayed()
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h915dp")
+    fun settingsScreen_dynamicCoverThemeToggleDefaultsOffAndTogglesCleanly() {
+        var enabled by mutableStateOf(false)
+        val events = mutableListOf<Boolean>()
+
+        composeRule.setContent {
+            BitPerfectPlayerTheme {
+                SettingsScreen(
+                    libraryState = LibrarySnapshot(),
+                    playbackState = PlaybackControllerState(),
+                    sleepTimerStateFlow = MutableStateFlow(SleepTimerState()),
+                    dynamicCoverThemeEnabled = enabled,
+                    onSetDynamicCoverThemeEnabled = { next ->
+                        events.add(next)
+                        enabled = next
+                    },
+                    onImportFolder = {},
+                    onRemoveSafFolder = {},
+                    onRefreshLibrary = {},
+                    onSetGaplessEnabled = {},
+                    onSetReplayGainMode = {},
+                    onSetReplayGainPreampDb = {},
+                    onSetReplayGainPreventClipping = {},
+                    onSelectSleepTimerPreset = {},
+                    onExportLocalBackup = {},
+                    onImportLocalBackup = {},
+                    onOpenDiagnostics = {},
+                )
+            }
+        }
+
+        composeRule.onNode(hasScrollToIndexAction()).performScrollToIndex(1)
+        composeRule.onNodeWithContentDescription("Toggle dynamic cover theme").performScrollTo()
+        composeRule.onNodeWithText("Dynamic Cover Theme").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Toggle dynamic cover theme")
+            .assertIsDisplayed()
+            .assertIsOff()
+            .performClick()
+
+        composeRule.waitForIdle()
+        composeRule.onNodeWithContentDescription("Toggle dynamic cover theme").assertIsOn()
+        assertEquals(listOf(true), events)
+
+        composeRule.onNodeWithContentDescription("Toggle dynamic cover theme").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithContentDescription("Toggle dynamic cover theme").assertIsOff()
+        assertEquals(listOf(true, false), events)
+    }
+
+    @Test
+    fun bitPerfectPlayerTheme_appliesMonochromeStudioAndIsolatesNestedAlbumDynamicScope() {
+        val globalCrimsonTokens = CoverThemePaletteGenerator.generateTokensFromHue(352f, 0.85f)
+        val albumEmeraldTokens = CoverThemePaletteGenerator.generateTokensFromHue(145f, 0.90f)
+        var useGlobalDynamic by mutableStateOf(false)
+        var showAlbumScope by mutableStateOf(false)
+
+        var outerPrimary = Color.Unspecified
+        var outerBackground = Color.Unspecified
+        var innerPrimary = Color.Unspecified
+        var innerBackground = Color.Unspecified
+
+        composeRule.setContent {
+            BitPerfectPlayerTheme(
+                dynamicTokens = if (useGlobalDynamic) globalCrimsonTokens else null,
+            ) {
+                outerPrimary = MaterialTheme.colorScheme.primary
+                outerBackground = MaterialTheme.colorScheme.background
+                Text(text = "Outer Global", color = outerPrimary)
+
+                if (showAlbumScope) {
+                    BitPerfectPlayerTheme(dynamicTokens = albumEmeraldTokens) {
+                        innerPrimary = MaterialTheme.colorScheme.primary
+                        innerBackground = MaterialTheme.colorScheme.background
+                        Text(text = "Inner Album", color = innerPrimary)
+                    }
+                }
+            }
+        }
+        composeRule.waitForIdle()
+
+        // Default Monochrome Studio tokens
+        assertEquals(StudioIvoryPrimary, outerPrimary)
+        assertEquals(ObsidianBackground, outerBackground)
+
+        // Enable global track theme + open nested Album local scope -> both resolve distinct palettes
+        useGlobalDynamic = true
+        showAlbumScope = true
+        composeRule.waitForIdle()
+
+        assertEquals(Color(globalCrimsonTokens.primaryArgb), outerPrimary)
+        assertEquals(Color(globalCrimsonTokens.backgroundArgb), outerBackground)
+        assertEquals(Color(albumEmeraldTokens.primaryArgb), innerPrimary)
+        assertEquals(Color(albumEmeraldTokens.backgroundArgb), innerBackground)
+
+        // Close Album scope -> global track theme remains intact
+        showAlbumScope = false
+        composeRule.waitForIdle()
+        assertEquals(Color(globalCrimsonTokens.primaryArgb), outerPrimary)
+
+        // Turn off Dynamic Cover Theme -> reverts immediately back to Monochrome Studio
+        useGlobalDynamic = false
+        composeRule.waitForIdle()
+        assertEquals(StudioIvoryPrimary, outerPrimary)
+        assertEquals(ObsidianBackground, outerBackground)
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h915dp")
+    fun libraryScreen_albumDetailAppliesLocalDynamicCoverThemeAndRevertsCleanlyOnBack() {
+        val albumTokens = CoverThemePaletteGenerator.generateTokensFromHue(145f, 0.90f)
+        val cache = CoverThemeColorCache(artworkLoader).apply {
+            seedCacheForTesting(hiResFlacTrack, albumTokens)
+        }
+        val albumGroup = com.cangkir.bitperfectplayer.library.LibraryGroup(
+            name = "21st Century Breakdown",
+            subtitle = "Green Day · 1 track",
+            tracks = listOf(hiResFlacTrack),
+        )
+
+        composeRule.setContent {
+            BitPerfectPlayerTheme {
+                LibraryScreen(
+                    libraryState = LibrarySnapshot(
+                        allSongs = listOf(hiResFlacTrack),
+                        albums = listOf(albumGroup),
+                    ),
+                    favoriteTrackUris = emptySet(),
+                    playbackState = PlaybackControllerState(),
+                    albumArtworkLoader = artworkLoader,
+                    onRefreshLibrary = {},
+                    onImportFolder = {},
+                    onPlayTracks = { _, _, _ -> },
+                    onEnqueueTrack = {},
+                    onEnqueueNext = {},
+                    onEnqueueTracks = { _, _ -> },
+                    onEnqueueTracksNext = { _, _ -> },
+                    onSetTrackSort = { _, _ -> },
+                    onSetGroupSort = { _, _ -> },
+                    onAddToPlaylist = {},
+                    onShowTrackInfo = {},
+                    onToggleFavorite = {},
+                    onOpenQueue = {},
+                    onOpenDiagnostics = {},
+                    initialTab = LibraryTab.ALBUMS,
+                    dynamicCoverThemeEnabled = true,
+                    coverThemeColorCache = cache,
+                )
+            }
+        }
+
+        // Open Album Detail -> local dynamic theme subtree renders Play All and album tracks cleanly
+        composeRule.onNodeWithText("21st Century Breakdown").assertIsDisplayed().performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("Play All").assertIsDisplayed()
+        composeRule.onNodeWithText("Peacemaker").assertIsDisplayed()
+
+        // Press Back -> exits local Album scope cleanly back to Albums grid
+        composeRule.onNodeWithContentDescription("Back to Albums").assertIsDisplayed().performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("1 album").assertIsDisplayed()
     }
 }

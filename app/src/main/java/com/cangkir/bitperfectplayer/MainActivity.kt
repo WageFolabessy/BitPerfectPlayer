@@ -7,6 +7,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.cangkir.bitperfectplayer.ui.BitPerfectAppRoot
 import com.cangkir.bitperfectplayer.ui.MainViewModel
@@ -24,10 +26,15 @@ class MainActivity : ComponentActivity() {
         val app = application as BitPerfectApplication
         val container = app.container
         setContent {
-            BitPerfectPlayerTheme(darkTheme = true, dynamicColor = false) {
-                val mainViewModel: MainViewModel = viewModel(
-                    factory = MainViewModel.factory(container),
-                )
+            val mainViewModel: MainViewModel = viewModel(
+                factory = MainViewModel.factory(container),
+            )
+            val globalDynamicTokens by mainViewModel.globalDynamicThemeTokens.collectAsStateWithLifecycle()
+            BitPerfectPlayerTheme(
+                darkTheme = true,
+                dynamicColor = false,
+                dynamicTokens = globalDynamicTokens,
+            ) {
                 BitPerfectAppRoot(viewModel = mainViewModel)
             }
         }

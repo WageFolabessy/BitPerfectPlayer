@@ -140,6 +140,7 @@ class LocalPersistenceRepository(
     suspend fun exportLocalBackupPayload(
         nowEpochMs: Long = System.currentTimeMillis(),
         defaultHomepage: DefaultHomepage = DefaultHomepage.ALL_SONGS,
+        dynamicCoverThemeEnabled: Boolean = false,
     ): LocalBackupPayload {
         val playlists = playlistDao.getAllPlaylists()
         val tracksByPlaylist = playlistDao.getAllPlaylistTracks().groupBy { it.playlistId }
@@ -164,6 +165,7 @@ class LocalPersistenceRepository(
             appId = LocalBackupCodec.APP_ID,
             exportedAtEpochMs = nowEpochMs,
             defaultHomepage = defaultHomepage,
+            dynamicCoverThemeEnabled = dynamicCoverThemeEnabled,
             playlists = backupPlaylists,
             lyrics = lyricsDao.getAll().map { it.toDomain() },
             favorites = favoriteTrackDao.getAllFavorites().map { it.toDomain() },

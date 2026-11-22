@@ -26,12 +26,15 @@ import com.cangkir.bitperfectplayer.library.TrackSortScope
 import com.cangkir.bitperfectplayer.library.TrackSortSpec
 import com.cangkir.bitperfectplayer.library.TrackTechnicalInfo
 import com.cangkir.bitperfectplayer.lyrics.TrackLyricsState
+import com.cangkir.bitperfectplayer.ui.theme.CoverThemeColorCache
+import com.cangkir.bitperfectplayer.ui.theme.DynamicThemeTokens
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.distinctUntilChangedBy
@@ -60,6 +63,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     val playbackPositionMs: StateFlow<Long> = container.playbackController.playbackPositionMs
     val sleepTimerState: StateFlow<SleepTimerState> = container.playbackController.sleepTimerState
     val albumArtworkLoader: AlbumArtworkLoader = container.albumArtworkLoader
+    val coverThemeColorCache: CoverThemeColorCache = container.coverThemeColorCache
     val diagnosticLogStats: StateFlow<DiagnosticLogStats> = container.diagnosticLogger.storageStats
 
     /**
@@ -140,6 +144,19 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
             initialValue = false,
         )
 
+    /** Persisted opt-in Dynamic Cover Theme toggle (`false` by default -> Monochrome Studio). */
+    val dynamicCoverThemeEnabled: StateFlow<Boolean> = container.preferencesRepository.preferencesFlow
+        .map { it.dynamicCoverThemeEnabled }
+        .distinctUntilChanged()
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.Eagerly,
+            initialValue = false,
+        )
+
+    private val _globalDynamicThemeTokens = MutableStateFlow<DynamicThemeTokens?>(null)
+    val globalDynamicThemeTokens: StateFlow<DynamicThemeTokens?> = _globalDynamicThemeTokens.asStateFlow()
+
     /**
      * Latched strictly ONCE per ViewModel lifetime when DataStore emits its initial snapshot so
      * cold startup opens the configured homepage cleanly without ever hijacking subsequent user
@@ -194,10 +211,31 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
                     }
                 }
         }
+
+        // Global Dynamic Cover Theme layer: resolve active track cover palette off-main when opted in.
+        val activeTrackForThemeFlow = playbackState
+            .map { it.activeTrack }
+            .distinctUntilChanged { old, new ->
+                val oldKey = old?.let { container.coverThemeColorCache.cacheKeyFor(it) }
+                val newKey = new?.let { container.coverThemeColorCache.cacheKeyFor(it) }
+                oldKey == newKey
+            }
+        viewModelScope.launch {
+            combine(dynamicCoverThemeEnabled, activeTrackForThemeFlow) { enabled, track ->
+                enabled to track
+            }.collectLatest { (enabled, track) ->
+                _globalDynamicThemeTokens.value = if (!enabled || track == null) {
+                    null
+                } else {
+                    container.coverThemeColorCache.resolveTokens(track)
+                }
+            }
+        }
     }
 
     fun refreshLibrary() {
         container.albumArtworkLoader.clearNegativeCache()
+        container.coverThemeColorCache.clear()
         viewModelScope.launch {
             container.libraryRepository.refreshLibrary()
         }
@@ -210,17 +248,6 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
                 "Imported folder ($count audio ${if (count == 1) "file" else "files"})"
             } else {
                 "Folder linked (no supported FLAC/WAV/MP3/M4A/OGG files found)"
-            }
-        }
-    }
-
-    fun importSafAudioFile(fileUri: Uri) {
-        viewModelScope.launch {
-            val track = container.libraryRepository.importSafAudioFile(fileUri)
-            if (track != null) {
-                _uiMessage.value = "Imported ${track.title}"
-            } else {
-                _uiMessage.value = "Unsupported file format (MVP supports FLAC, WAV, MP3, M4A, OGG/Opus)"
             }
         }
     }
@@ -323,11 +350,6 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
 
-    fun cycleSpectrumColorStyle() {
-        val next = spectrumColorStyle.value.next()
-        setSpectrumColorStyle(next)
-    }
-
     fun setSpectrumSparksEnabled(enabled: Boolean) {
         viewModelScope.launch {
             container.preferencesRepository.setSpectrumSparksEnabled(enabled)
@@ -337,6 +359,12 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     fun setDefaultHomepage(homepage: DefaultHomepage) {
         viewModelScope.launch {
             container.preferencesRepository.setDefaultHomepage(homepage)
+        }
+    }
+
+    fun setDynamicCoverThemeEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            container.preferencesRepository.setDynamicCoverThemeEnabled(enabled)
         }
     }
 

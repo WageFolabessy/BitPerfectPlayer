@@ -22,6 +22,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.ScaffoldDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -47,8 +48,11 @@ import com.cangkir.bitperfectplayer.ui.GroupSortBottomSheet
 import com.cangkir.bitperfectplayer.ui.LibraryTab
 import com.cangkir.bitperfectplayer.ui.TrackSortBottomSheet
 import com.cangkir.bitperfectplayer.ui.theme.AmberIndicated
+import com.cangkir.bitperfectplayer.ui.theme.BitPerfectPlayerTheme
+import com.cangkir.bitperfectplayer.ui.theme.CoverThemeColorCache
+import com.cangkir.bitperfectplayer.ui.theme.CoverThemeLookup
 import com.cangkir.bitperfectplayer.ui.theme.EmeraldSafe
-import com.cangkir.bitperfectplayer.ui.theme.IcePrimary
+import com.cangkir.bitperfectplayer.ui.theme.LocalActiveDynamicTokens
 
 @Composable
 fun LibraryScreen(
@@ -71,6 +75,8 @@ fun LibraryScreen(
     onOpenQueue: () -> Unit,
     onOpenDiagnostics: () -> Unit,
     initialTab: LibraryTab = LibraryTab.ALL_SONGS,
+    dynamicCoverThemeEnabled: Boolean = false,
+    coverThemeColorCache: CoverThemeColorCache? = null,
 ) {
     val context = LocalContext.current
     var selectedTab by rememberSaveable { mutableStateOf(initialTab) }
@@ -139,24 +145,7 @@ fun LibraryScreen(
     }
 
     val sortPrefs = libraryState.sortPreferences
-
-    activeTrackSortSheet?.let { scope ->
-        TrackSortBottomSheet(
-            scope = scope,
-            currentSpec = sortPrefs.specFor(scope),
-            onSelectSpec = { spec -> onSetTrackSort(scope, spec) },
-            onDismiss = { activeTrackSortSheet = null },
-        )
-    }
-
-    activeGroupSortSheet?.let { scope ->
-        GroupSortBottomSheet(
-            scope = scope,
-            currentSpec = sortPrefs.specFor(scope),
-            onSelectSpec = { spec -> onSetGroupSort(scope, spec) },
-            onDismiss = { activeGroupSortSheet = null },
-        )
-    }
+    val isAlbumDetailOpen = selectedTab == LibraryTab.ALBUMS && openedGroup != null
 
     val isBitPerfectActive = playbackState.engineState.diagnostics.isBitPerfectMixerActive
     val isBitPerfectOptIn = playbackState.engineState.safetyState.mode == AudioOutputMode.BIT_PERFECT_OPT_IN
@@ -164,11 +153,6 @@ fun LibraryScreen(
         isBitPerfectActive -> "Bit-Perfect USB · Offline"
         isBitPerfectOptIn -> "Clean Native · Offline"
         else -> "Safe Mode · Offline"
-    }
-    val statusDotColor = when {
-        isBitPerfectActive -> IcePrimary
-        isBitPerfectOptIn -> AmberIndicated
-        else -> EmeraldSafe
     }
 
     val launchImportFolder = remember(folderPickerLauncher) { { folderPickerLauncher.launch(null) } }
@@ -178,246 +162,318 @@ fun LibraryScreen(
         openedGroupName = null
     }
 
-    Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
-        contentWindowInsets = ScaffoldDefaults.contentWindowInsets.only(
-            WindowInsetsSides.Top + WindowInsetsSides.Horizontal,
-        ),
-        topBar = {
-            LibraryTopAppBar(
-                openedGroupTitle = openedGroup?.name,
-                selectedTabLabel = selectedTab.label,
-                statusText = statusText,
-                statusDotColor = statusDotColor,
-                isBitPerfectActive = isBitPerfectActive,
-                onCloseGroup = { openedGroupName = null },
-                onImportFolder = launchImportFolder,
-                onOpenQueue = onOpenQueue,
-                onOpenDiagnostics = onOpenDiagnostics,
-            )
+    AlbumDetailDynamicThemeWrapper(
+        enabled = dynamicCoverThemeEnabled && isAlbumDetailOpen,
+        representativeTrack = if (selectedTab == LibraryTab.ALBUMS && openedGroup != null) {
+            openedGroup.tracks.firstOrNull()
+        } else {
+            null
         },
-    ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding),
-        ) {
-            if (libraryState.isScanning) {
-                LinearProgressIndicator(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(2.dp),
-                    color = MaterialTheme.colorScheme.primary,
-                    trackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                )
-            }
+        coverThemeColorCache = coverThemeColorCache,
+    ) {
+        activeTrackSortSheet?.let { scope ->
+            TrackSortBottomSheet(
+                scope = scope,
+                currentSpec = sortPrefs.specFor(scope),
+                onSelectSpec = { spec -> onSetTrackSort(scope, spec) },
+                onDismiss = { activeTrackSortSheet = null },
+            )
+        }
 
-            if (!hasAudioPermission || !hasNotificationPermission) {
-                PermissionRequestBanner(
-                    needsAudioPermission = !hasAudioPermission,
-                    needsNotificationPermission = !hasNotificationPermission,
-                    onRequestPermissions = {
-                        val toRequest = buildList {
-                            if (!hasAudioPermission) add(audioPermission)
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasNotificationPermission) {
-                                add(Manifest.permission.POST_NOTIFICATIONS)
-                            }
-                        }.toTypedArray()
-                        if (toRequest.isNotEmpty()) permissionLauncher.launch(toRequest)
-                    },
-                    onImportFolderInstead = launchImportFolder,
-                )
-            }
+        activeGroupSortSheet?.let { scope ->
+            GroupSortBottomSheet(
+                scope = scope,
+                currentSpec = sortPrefs.specFor(scope),
+                onSelectSpec = { spec -> onSetGroupSort(scope, spec) },
+                onDismiss = { activeGroupSortSheet = null },
+            )
+        }
 
-            if (openedGroup == null) {
-                LibraryTabRow(
-                    selectedTab = selectedTab,
-                    onSelectTab = { tab ->
-                        selectedTab = tab
-                        openedGroupName = null
-                    },
-                )
-            }
+        val statusDotColor = when {
+            isBitPerfectActive -> MaterialTheme.colorScheme.primary
+            isBitPerfectOptIn -> AmberIndicated
+            else -> EmeraldSafe
+        }
 
-            if (openedGroup != null && openedGroupContext != null && openedGroupSortScope != null) {
-                GroupDetailTrackList(
-                    group = openedGroup,
-                    groupContext = openedGroupContext,
-                    sortLabel = sortPrefs.specFor(openedGroupSortScope).compactLabel,
-                    scrollResetKey = Pair(openedGroupSortScope, sortPrefs.specFor(openedGroupSortScope)),
-                    showTrackNumber = selectedTab == LibraryTab.ALBUMS,
-                    activeTrackUri = playbackState.activeTrack?.uriString,
-                    favoriteTrackUris = favoriteTrackUris,
-                    favoriteFingerprints = libraryState.favoriteFingerprints,
-                    albumArtworkLoader = albumArtworkLoader,
-                    onOpenSort = { activeTrackSortSheet = openedGroupSortScope },
-                    onPlayTracks = { tracks, index -> onPlayTracks(tracks, index, openedGroupContext) },
-                    onEnqueueAllNext = { onEnqueueTracksNext(openedGroup.tracks, openedGroupContext) },
-                    onEnqueueAll = { onEnqueueTracks(openedGroup.tracks, openedGroupContext) },
-                    onEnqueueTrack = onEnqueueTrack,
-                    onEnqueueNext = onEnqueueNext,
-                    onAddToPlaylist = onAddToPlaylist,
-                    onShowTrackInfo = onShowTrackInfo,
-                    onToggleFavorite = onToggleFavorite,
+        Scaffold(
+            containerColor = MaterialTheme.colorScheme.background,
+            contentWindowInsets = ScaffoldDefaults.contentWindowInsets.only(
+                WindowInsetsSides.Top + WindowInsetsSides.Horizontal,
+            ),
+            topBar = {
+                LibraryTopAppBar(
+                    openedGroupTitle = openedGroup?.name,
+                    selectedTabLabel = selectedTab.label,
+                    statusText = statusText,
+                    statusDotColor = statusDotColor,
+                    isBitPerfectActive = isBitPerfectActive,
+                    onCloseGroup = { openedGroupName = null },
+                    onImportFolder = launchImportFolder,
+                    onOpenQueue = onOpenQueue,
+                    onOpenDiagnostics = onOpenDiagnostics,
                 )
-            } else {
-                when (selectedTab) {
-                    LibraryTab.ALL_SONGS -> {
-                        val filtered = remember(libraryState.allSongs, searchQuery) {
-                            val q = searchQuery.trim()
-                            if (q.isEmpty()) {
-                                libraryState.allSongs
-                            } else {
-                                libraryState.allSongs.filter {
-                                    it.title.contains(q, ignoreCase = true) ||
-                                        it.artist.contains(q, ignoreCase = true) ||
-                                        it.album.contains(q, ignoreCase = true) ||
-                                        it.fileName.contains(q, ignoreCase = true)
+            },
+        ) { innerPadding ->
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding),
+            ) {
+                if (libraryState.isScanning) {
+                    LinearProgressIndicator(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(2.dp),
+                        color = MaterialTheme.colorScheme.primary,
+                        trackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    )
+                }
+
+                if (!hasAudioPermission || !hasNotificationPermission) {
+                    PermissionRequestBanner(
+                        needsAudioPermission = !hasAudioPermission,
+                        needsNotificationPermission = !hasNotificationPermission,
+                        onRequestPermissions = {
+                            val toRequest = buildList {
+                                if (!hasAudioPermission) add(audioPermission)
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasNotificationPermission) {
+                                    add(Manifest.permission.POST_NOTIFICATIONS)
                                 }
-                            }
-                        }
-                        CompactSearchBarRow(
-                            query = searchQuery,
-                            shownCount = filtered.size,
-                            totalCount = libraryState.allSongs.size,
-                            sortLabel = sortPrefs.allSongs.compactLabel,
-                            onQueryChange = { searchQuery = it },
-                            onRefresh = onRefreshLibrary,
-                            onOpenSort = { activeTrackSortSheet = TrackSortScope.ALL_SONGS },
-                        )
-                        TrackListView(
-                            tracks = filtered,
-                            scrollResetKey = Pair(sortPrefs.allSongs, searchQuery.trim()),
-                            albumArtworkLoader = albumArtworkLoader,
-                            emptyTitle = if (searchQuery.isNotBlank()) "No matching tracks" else "No local audio tracks",
-                            emptySubtitle = if (searchQuery.isNotBlank()) {
-                                "Try a different title, artist, album, or filename."
-                            } else {
-                                "Grant local audio access or import a music folder via SAF."
-                            },
-                            activeTrackUri = playbackState.activeTrack?.uriString,
-                            favoriteTrackUris = favoriteTrackUris,
-                            favoriteFingerprints = libraryState.favoriteFingerprints,
-                            onPlayTracks = { displayedTracks, displayedIndex ->
-                                val tappedTrack = displayedTracks.getOrNull(displayedIndex)
-                                if (tappedTrack != null && searchQuery.isNotBlank()) {
-                                    val (fullQueue, fullIndex) = QueueContextResolver.resolveFullListPlaybackSelection(
-                                        fullTrackList = libraryState.allSongs,
-                                        tappedTrack = tappedTrack,
-                                        fallbackTracks = displayedTracks,
-                                        fallbackIndex = displayedIndex,
-                                    )
-                                    onPlayTracks(fullQueue, fullIndex, QueueContext.allSongs())
+                            }.toTypedArray()
+                            if (toRequest.isNotEmpty()) permissionLauncher.launch(toRequest)
+                        },
+                        onImportFolderInstead = launchImportFolder,
+                    )
+                }
+
+                if (openedGroup == null) {
+                    LibraryTabRow(
+                        selectedTab = selectedTab,
+                        onSelectTab = { tab ->
+                            selectedTab = tab
+                            openedGroupName = null
+                        },
+                    )
+                }
+
+                if (openedGroup != null && openedGroupContext != null && openedGroupSortScope != null) {
+                    GroupDetailTrackList(
+                        group = openedGroup,
+                        groupContext = openedGroupContext,
+                        sortLabel = sortPrefs.specFor(openedGroupSortScope).compactLabel,
+                        scrollResetKey = Pair(openedGroupSortScope, sortPrefs.specFor(openedGroupSortScope)),
+                        showTrackNumber = selectedTab == LibraryTab.ALBUMS,
+                        activeTrackUri = playbackState.activeTrack?.uriString,
+                        favoriteTrackUris = favoriteTrackUris,
+                        favoriteFingerprints = libraryState.favoriteFingerprints,
+                        albumArtworkLoader = albumArtworkLoader,
+                        onOpenSort = { activeTrackSortSheet = openedGroupSortScope },
+                        onPlayTracks = { tracks, index -> onPlayTracks(tracks, index, openedGroupContext) },
+                        onEnqueueAllNext = { onEnqueueTracksNext(openedGroup.tracks, openedGroupContext) },
+                        onEnqueueAll = { onEnqueueTracks(openedGroup.tracks, openedGroupContext) },
+                        onEnqueueTrack = onEnqueueTrack,
+                        onEnqueueNext = onEnqueueNext,
+                        onAddToPlaylist = onAddToPlaylist,
+                        onShowTrackInfo = onShowTrackInfo,
+                        onToggleFavorite = onToggleFavorite,
+                    )
+                } else {
+                    when (selectedTab) {
+                        LibraryTab.ALL_SONGS -> {
+                            val filtered = remember(libraryState.allSongs, searchQuery) {
+                                val q = searchQuery.trim()
+                                if (q.isEmpty()) {
+                                    libraryState.allSongs
                                 } else {
-                                    onPlayTracks(displayedTracks, displayedIndex, QueueContext.allSongs())
+                                    libraryState.allSongs.filter {
+                                        it.title.contains(q, ignoreCase = true) ||
+                                            it.artist.contains(q, ignoreCase = true) ||
+                                            it.album.contains(q, ignoreCase = true) ||
+                                            it.fileName.contains(q, ignoreCase = true)
+                                    }
                                 }
-                            },
-                            onEnqueueTrack = onEnqueueTrack,
-                            onEnqueueNext = onEnqueueNext,
-                            onAddToPlaylist = onAddToPlaylist,
-                            onShowTrackInfo = onShowTrackInfo,
-                            onToggleFavorite = onToggleFavorite,
-                            onImportFolder = if (searchQuery.isBlank()) launchImportFolder else null,
-                        )
-                    }
-                    LibraryTab.FOLDERS -> GroupListView(
-                        groups = libraryState.folders,
-                        scrollResetKey = sortPrefs.foldersList,
-                        singularUnit = "folder",
-                        pluralUnit = "folders",
-                        sortLabel = sortPrefs.foldersList.compactLabel,
-                        onOpenSort = { activeGroupSortSheet = GroupSortScope.FOLDERS_LIST },
-                        icon = Icons.Filled.Folder,
-                        showArtworkThumbnail = false,
-                        albumArtworkLoader = albumArtworkLoader,
-                        emptyMessage = "No music folders scanned yet.",
-                        onSelectGroup = onSelectGroup,
-                        onPlayGroup = { group -> onPlayTracks(group.tracks, 0, QueueContext.folder(group.name)) },
-                    )
-                    LibraryTab.ARTISTS -> GroupListView(
-                        groups = libraryState.artists,
-                        scrollResetKey = sortPrefs.artistsList,
-                        singularUnit = "artist",
-                        pluralUnit = "artists",
-                        sortLabel = sortPrefs.artistsList.compactLabel,
-                        onOpenSort = { activeGroupSortSheet = GroupSortScope.ARTISTS_LIST },
-                        icon = Icons.Filled.Person,
-                        showArtworkThumbnail = false,
-                        albumArtworkLoader = albumArtworkLoader,
-                        emptyMessage = "No artists found in local library.",
-                        onSelectGroup = onSelectGroup,
-                        onPlayGroup = { group -> onPlayTracks(group.tracks, 0, QueueContext.artist(group.name)) },
-                    )
-                    LibraryTab.ALBUMS -> GroupListView(
-                        groups = libraryState.albums,
-                        scrollResetKey = sortPrefs.albumsList,
-                        singularUnit = "album",
-                        pluralUnit = "albums",
-                        sortLabel = sortPrefs.albumsList.compactLabel,
-                        onOpenSort = { activeGroupSortSheet = GroupSortScope.ALBUMS_LIST },
-                        icon = Icons.Filled.Album,
-                        showArtworkThumbnail = true,
-                        albumArtworkLoader = albumArtworkLoader,
-                        emptyMessage = "No albums found in local library.",
-                        onSelectGroup = onSelectGroup,
-                        onPlayGroup = { group -> onPlayTracks(group.tracks, 0, QueueContext.album(group.name)) },
-                    )
-                    LibraryTab.RECENT -> {
-                        if (libraryState.recentlyPlayed.isNotEmpty()) {
-                            val recentCount = libraryState.recentlyPlayed.size
-                            SubtleListSortHeaderRow(
-                                countLabel = "$recentCount ${if (recentCount == 1) "track" else "tracks"}",
-                                sortLabel = sortPrefs.recent.compactLabel,
-                                onOpenSort = { activeTrackSortSheet = TrackSortScope.RECENT },
+                            }
+                            CompactSearchBarRow(
+                                query = searchQuery,
+                                shownCount = filtered.size,
+                                totalCount = libraryState.allSongs.size,
+                                sortLabel = sortPrefs.allSongs.compactLabel,
+                                onQueryChange = { searchQuery = it },
+                                onRefresh = onRefreshLibrary,
+                                onOpenSort = { activeTrackSortSheet = TrackSortScope.ALL_SONGS },
+                            )
+                            TrackListView(
+                                tracks = filtered,
+                                scrollResetKey = Pair(sortPrefs.allSongs, searchQuery.trim()),
+                                albumArtworkLoader = albumArtworkLoader,
+                                emptyTitle = if (searchQuery.isNotBlank()) "No matching tracks" else "No local audio tracks",
+                                emptySubtitle = if (searchQuery.isNotBlank()) {
+                                    "Try a different title, artist, album, or filename."
+                                } else {
+                                    "Grant local audio access or import a music folder via SAF."
+                                },
+                                activeTrackUri = playbackState.activeTrack?.uriString,
+                                favoriteTrackUris = favoriteTrackUris,
+                                favoriteFingerprints = libraryState.favoriteFingerprints,
+                                onPlayTracks = { displayedTracks, displayedIndex ->
+                                    val tappedTrack = displayedTracks.getOrNull(displayedIndex)
+                                    if (tappedTrack != null && searchQuery.isNotBlank()) {
+                                        val (fullQueue, fullIndex) = QueueContextResolver.resolveFullListPlaybackSelection(
+                                            fullTrackList = libraryState.allSongs,
+                                            tappedTrack = tappedTrack,
+                                            fallbackTracks = displayedTracks,
+                                            fallbackIndex = displayedIndex,
+                                        )
+                                        onPlayTracks(fullQueue, fullIndex, QueueContext.allSongs())
+                                    } else {
+                                        onPlayTracks(displayedTracks, displayedIndex, QueueContext.allSongs())
+                                    }
+                                },
+                                onEnqueueTrack = onEnqueueTrack,
+                                onEnqueueNext = onEnqueueNext,
+                                onAddToPlaylist = onAddToPlaylist,
+                                onShowTrackInfo = onShowTrackInfo,
+                                onToggleFavorite = onToggleFavorite,
+                                onImportFolder = if (searchQuery.isBlank()) launchImportFolder else null,
                             )
                         }
-                        TrackListView(
-                            tracks = libraryState.recentlyPlayed,
-                            scrollResetKey = sortPrefs.recent,
+                        LibraryTab.FOLDERS -> GroupListView(
+                            groups = libraryState.folders,
+                            scrollResetKey = sortPrefs.foldersList,
+                            singularUnit = "folder",
+                            pluralUnit = "folders",
+                            sortLabel = sortPrefs.foldersList.compactLabel,
+                            onOpenSort = { activeGroupSortSheet = GroupSortScope.FOLDERS_LIST },
+                            icon = Icons.Filled.Folder,
+                            showArtworkThumbnail = false,
                             albumArtworkLoader = albumArtworkLoader,
-                            emptyTitle = "No recently played tracks",
-                            emptySubtitle = "Tracks you play appear here locally.",
-                            activeTrackUri = playbackState.activeTrack?.uriString,
-                            favoriteTrackUris = favoriteTrackUris,
-                            favoriteFingerprints = libraryState.favoriteFingerprints,
-                            onPlayTracks = { tracks, index -> onPlayTracks(tracks, index, QueueContext.recent()) },
-                            onEnqueueTrack = onEnqueueTrack,
-                            onEnqueueNext = onEnqueueNext,
-                            onAddToPlaylist = onAddToPlaylist,
-                            onShowTrackInfo = onShowTrackInfo,
-                            onToggleFavorite = onToggleFavorite,
-                            onImportFolder = null,
+                            emptyMessage = "No music folders scanned yet.",
+                            onSelectGroup = onSelectGroup,
+                            onPlayGroup = { group -> onPlayTracks(group.tracks, 0, QueueContext.folder(group.name)) },
                         )
-                    }
-                    LibraryTab.FAVORITES -> {
-                        if (libraryState.favorites.isNotEmpty()) {
-                            val favCount = libraryState.favorites.size
-                            SubtleListSortHeaderRow(
-                                countLabel = "$favCount ${if (favCount == 1) "track" else "tracks"}",
-                                sortLabel = sortPrefs.favorites.compactLabel,
-                                onOpenSort = { activeTrackSortSheet = TrackSortScope.FAVORITES },
+                        LibraryTab.ARTISTS -> GroupListView(
+                            groups = libraryState.artists,
+                            scrollResetKey = sortPrefs.artistsList,
+                            singularUnit = "artist",
+                            pluralUnit = "artists",
+                            sortLabel = sortPrefs.artistsList.compactLabel,
+                            onOpenSort = { activeGroupSortSheet = GroupSortScope.ARTISTS_LIST },
+                            icon = Icons.Filled.Person,
+                            showArtworkThumbnail = false,
+                            albumArtworkLoader = albumArtworkLoader,
+                            emptyMessage = "No artists found in local library.",
+                            onSelectGroup = onSelectGroup,
+                            onPlayGroup = { group -> onPlayTracks(group.tracks, 0, QueueContext.artist(group.name)) },
+                        )
+                        LibraryTab.ALBUMS -> GroupListView(
+                            groups = libraryState.albums,
+                            scrollResetKey = sortPrefs.albumsList,
+                            singularUnit = "album",
+                            pluralUnit = "albums",
+                            sortLabel = sortPrefs.albumsList.compactLabel,
+                            onOpenSort = { activeGroupSortSheet = GroupSortScope.ALBUMS_LIST },
+                            icon = Icons.Filled.Album,
+                            showArtworkThumbnail = true,
+                            albumArtworkLoader = albumArtworkLoader,
+                            emptyMessage = "No albums found in local library.",
+                            onSelectGroup = onSelectGroup,
+                            onPlayGroup = { group -> onPlayTracks(group.tracks, 0, QueueContext.album(group.name)) },
+                        )
+                        LibraryTab.RECENT -> {
+                            if (libraryState.recentlyPlayed.isNotEmpty()) {
+                                val recentCount = libraryState.recentlyPlayed.size
+                                SubtleListSortHeaderRow(
+                                    countLabel = "$recentCount ${if (recentCount == 1) "track" else "tracks"}",
+                                    sortLabel = sortPrefs.recent.compactLabel,
+                                    onOpenSort = { activeTrackSortSheet = TrackSortScope.RECENT },
+                                )
+                            }
+                            TrackListView(
+                                tracks = libraryState.recentlyPlayed,
+                                scrollResetKey = sortPrefs.recent,
+                                albumArtworkLoader = albumArtworkLoader,
+                                emptyTitle = "No recently played tracks",
+                                emptySubtitle = "Tracks you play appear here locally.",
+                                activeTrackUri = playbackState.activeTrack?.uriString,
+                                favoriteTrackUris = favoriteTrackUris,
+                                favoriteFingerprints = libraryState.favoriteFingerprints,
+                                onPlayTracks = { tracks, index -> onPlayTracks(tracks, index, QueueContext.recent()) },
+                                onEnqueueTrack = onEnqueueTrack,
+                                onEnqueueNext = onEnqueueNext,
+                                onAddToPlaylist = onAddToPlaylist,
+                                onShowTrackInfo = onShowTrackInfo,
+                                onToggleFavorite = onToggleFavorite,
+                                onImportFolder = null,
                             )
                         }
-                        TrackListView(
-                            tracks = libraryState.favorites,
-                            scrollResetKey = sortPrefs.favorites,
-                            albumArtworkLoader = albumArtworkLoader,
-                            emptyTitle = "No favorite tracks yet",
-                            emptySubtitle = "Tap the heart icon on any track to save it locally.",
-                            activeTrackUri = playbackState.activeTrack?.uriString,
-                            favoriteTrackUris = favoriteTrackUris,
-                            favoriteFingerprints = libraryState.favoriteFingerprints,
-                            onPlayTracks = { tracks, index -> onPlayTracks(tracks, index, QueueContext.favorites()) },
-                            onEnqueueTrack = onEnqueueTrack,
-                            onEnqueueNext = onEnqueueNext,
-                            onAddToPlaylist = onAddToPlaylist,
-                            onShowTrackInfo = onShowTrackInfo,
-                            onToggleFavorite = onToggleFavorite,
-                            onImportFolder = null,
-                        )
+                        LibraryTab.FAVORITES -> {
+                            if (libraryState.favorites.isNotEmpty()) {
+                                val favCount = libraryState.favorites.size
+                                SubtleListSortHeaderRow(
+                                    countLabel = "$favCount ${if (favCount == 1) "track" else "tracks"}",
+                                    sortLabel = sortPrefs.favorites.compactLabel,
+                                    onOpenSort = { activeTrackSortSheet = TrackSortScope.FAVORITES },
+                                )
+                            }
+                            TrackListView(
+                                tracks = libraryState.favorites,
+                                scrollResetKey = sortPrefs.favorites,
+                                albumArtworkLoader = albumArtworkLoader,
+                                emptyTitle = "No favorite tracks yet",
+                                emptySubtitle = "Tap the heart icon on any track to save it locally.",
+                                activeTrackUri = playbackState.activeTrack?.uriString,
+                                favoriteTrackUris = favoriteTrackUris,
+                                favoriteFingerprints = libraryState.favoriteFingerprints,
+                                onPlayTracks = { tracks, index -> onPlayTracks(tracks, index, QueueContext.favorites()) },
+                                onEnqueueTrack = onEnqueueTrack,
+                                onEnqueueNext = onEnqueueNext,
+                                onAddToPlaylist = onAddToPlaylist,
+                                onShowTrackInfo = onShowTrackInfo,
+                                onToggleFavorite = onToggleFavorite,
+                                onImportFolder = null,
+                            )
+                        }
                     }
                 }
             }
         }
     }
+}
+
+/**
+ * Local Album Dynamic Cover Theme scope wrapping ONLY the opened Album Detail subtree so
+ * unrelated global bars and screens never recompose and pressing Back restores cleanly.
+ */
+@Composable
+private fun AlbumDetailDynamicThemeWrapper(
+    enabled: Boolean,
+    representativeTrack: PlaybackTrack?,
+    coverThemeColorCache: CoverThemeColorCache?,
+    content: @Composable () -> Unit,
+) {
+    if (!enabled || representativeTrack == null || coverThemeColorCache == null) {
+        content()
+        return
+    }
+    val parentTokens = LocalActiveDynamicTokens.current
+    val cacheKey = remember(representativeTrack) { coverThemeColorCache.cacheKeyFor(representativeTrack) }
+    var lookup by remember(cacheKey) { mutableStateOf(coverThemeColorCache.peekCached(representativeTrack)) }
+
+    LaunchedEffect(cacheKey) {
+        if (lookup is CoverThemeLookup.Pending) {
+            lookup = CoverThemeLookup.Resolved(coverThemeColorCache.resolveTokens(representativeTrack))
+        }
+    }
+
+    val targetTokens = when (val cur = lookup) {
+        CoverThemeLookup.Pending -> parentTokens
+        is CoverThemeLookup.Resolved -> cur.tokens
+    }
+
+    BitPerfectPlayerTheme(
+        darkTheme = true,
+        dynamicColor = false,
+        dynamicTokens = targetTokens,
+        content = content,
+    )
 }

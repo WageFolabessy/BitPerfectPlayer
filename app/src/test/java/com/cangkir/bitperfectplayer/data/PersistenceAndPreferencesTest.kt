@@ -46,6 +46,7 @@ class PersistenceAndPreferencesTest {
         assertEquals(SpectrumColorStyle.PRISM, snapshot.spectrumColorStyle)
         assertTrue(snapshot.spectrumSparksEnabled)
         assertEquals(DefaultHomepage.ALL_SONGS, snapshot.defaultHomepage)
+        assertFalse(snapshot.dynamicCoverThemeEnabled)
         assertFalse(snapshot.diagnosticLoggingEnabled)
         assertTrue(snapshot.persistedSafTreeUris.isEmpty())
         assertTrue(snapshot.persistedSafFileUris.isEmpty())
@@ -74,6 +75,7 @@ class PersistenceAndPreferencesTest {
         repo.setSpectrumColorStyle(SpectrumColorStyle.ALBUM_ADAPTIVE)
         repo.setSpectrumSparksEnabled(false)
         repo.setDefaultHomepage(DefaultHomepage.PLAYLISTS)
+        repo.setDynamicCoverThemeEnabled(true)
         repo.setDiagnosticLoggingEnabled(true)
         repo.addPersistedSafTreeUri("  content://com.android.externalstorage.documents/tree/primary%3AMusic  ")
         repo.addPersistedSafTreeUri("   ") // Blank URI ignored
@@ -114,6 +116,7 @@ class PersistenceAndPreferencesTest {
         assertEquals(SpectrumColorStyle.ALBUM_ADAPTIVE, snapshot.spectrumColorStyle)
         assertFalse(snapshot.spectrumSparksEnabled)
         assertEquals(DefaultHomepage.PLAYLISTS, snapshot.defaultHomepage)
+        assertTrue(snapshot.dynamicCoverThemeEnabled)
         assertTrue(snapshot.diagnosticLoggingEnabled)
         assertEquals(
             setOf("content://com.android.externalstorage.documents/tree/primary%3AMusic"),
@@ -152,6 +155,7 @@ class PersistenceAndPreferencesTest {
         repo.setSpectrumColorStyle(SpectrumColorStyle.STUDIO)
         repo.setSpectrumSparksEnabled(true)
         repo.setDefaultHomepage(DefaultHomepage.ALBUMS)
+        repo.setDynamicCoverThemeEnabled(false)
         repo.setDiagnosticLoggingEnabled(false)
         repo.clearLastPlaybackState()
 
@@ -163,6 +167,7 @@ class PersistenceAndPreferencesTest {
         assertEquals(SpectrumColorStyle.STUDIO, updated.spectrumColorStyle)
         assertTrue(updated.spectrumSparksEnabled)
         assertEquals(DefaultHomepage.ALBUMS, updated.defaultHomepage)
+        assertFalse(updated.dynamicCoverThemeEnabled)
         assertFalse(updated.diagnosticLoggingEnabled)
         assertTrue(updated.persistedSafTreeUris.isEmpty())
         assertNull(updated.lastPlaybackState.trackUri)

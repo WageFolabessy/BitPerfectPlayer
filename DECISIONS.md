@@ -378,6 +378,33 @@ This file records autonomous architectural, dependency, and environment decision
   - Directly resolves all three real-device POCO F4 video and logcat observations with surgical, testable, zero-regression changes prior to merging `v1.2` into `main`.
 - **Rejected Alternatives:** Filtering out `TYPE_REMOTE_SUBMIX` in `AudioDeviceCallback` (risks ignoring genuine OEM/HAL route transitions on Android 14–16 instead of cleanly deferring paused reloads for *all* routes); adding a post-composition `LaunchedEffect { listState.scrollToItem(...) }` in `QueueScreen` (causes visible post-first-frame scroll jumps).
 
+---
+
+## D12.1 — `v1.3` Monochrome Studio Default Theme & Launcher Icon Overhaul
+- **Decision:**
+  - Replaced all legacy slate-blue default tokens (`IcePrimary` / `#7BA7D9`, `IcePrimaryContainer` / `#1D2733`, `OnIcePrimaryContainer` / `#D7E5F5`) across `ui/theme/{Color.kt, Theme.kt}`, all Compose screens/dialogs/sheets, and `SpectrumVisualDsp.kt` (`STUDIO` + `AlbumPaletteExtractor.FALLBACK_STUDIO_PALETTE`) with the **Monochrome Studio** dark palette: matte-obsidian surfaces (`#0E0E10`, `#161619`, `#1E1E22`, `#26262C`), warm off-white ivory primary accent (`StudioIvoryPrimary = #F2F2F0`, `OnStudioIvoryPrimary = #111113`), brushed silver secondary (`StudioSilverSecondary = #B8B8BE`), and distinct muted dark gray inactive states (`#2A2A30` / `#7C7C84`).
+  - Made active/selected states unambiguous across every interactive control (`NowPlayingTransportRow` play/pause button, `NavigationBar`/`NavigationRail` active pill indicators, `LibraryTabRow` active indicator, `Settings` segmented selectors, `studioSwitchColors()` switches, `Slider` thumbs/tracks, `Play All` CTA buttons, and active dialog chips) by using bright `MaterialTheme.colorScheme.primary` fill paired with dark `MaterialTheme.colorScheme.onPrimary` foreground ink.
+  - Preserved all semantic status and safety colors (`EmeraldSafe`, `AmberIndicated`, `CoralWarning` and their containers) across Audio Diagnostics, Safe Mode / Clean Native indicators, and destructive actions.
+  - Overhauled all app launcher assets (`ic_launcher_background.xml`, `ic_launcher_foreground.xml`, and all 10 regenerated `mipmap-{mdpi..xxxhdpi}/ic_launcher{,_round}.webp` lossless icons via `8x` supersampling) to the Monochrome Studio `#18181B -> #0E0E10` obsidian surface and silver/ivory symmetric PCM bar motif (stripping `#7BA7D9` completely while keeping `ic_launcher_monochrome.xml` Android 13+ themed icon geometry intact).
+- **Rationale:**
+  - Eliminates all lingering blue accents on launchers (API 26–37) and every in-app surface while providing crisp, studio-grade contrast between active and inactive controls without AMOLED pure-black smearing or harsh `#FFFFFF` glare.
+- **Rejected Alternatives:** Pure `#000000` background with `#FFFFFF` primary (causes AMOLED dark-smear artifacts and eye fatigue in low-light listening); keeping `IcePrimaryContainer` dim fills on active segmented pills and navigation bars (weak active/inactive affordance under Monochrome Studio).
+
+---
+
+## D12.2 — `v1.3` Pure-Kotlin WCAG-Clamped Cover Color Extraction & Two-Layer Dynamic Cover Theme
+- **Decision:**
+  - Implemented pure-Kotlin `CoverThemePaletteGenerator` (`0` `android.*`/`androidx.*` imports) sampling downsampled pixels (`<= 32x32`) into 36 saturation-weighted hue buckets, returning `null` for empty/transparent/grayscale/near-monochrome covers so UI gracefully falls back to `MONOCHROME_STUDIO_TOKENS`.
+  - Programmatically enforced WCAG 2.1 relative luminance and contrast clamping (`contrastRatio(primary, onPrimary) >= 4.5`, `contrastRatio(primary, surface) >= 4.5`, `contrastRatio(primary, surfaceVariant) >= 4.5`, `contrastRatio(onSurface, background) >= 7.0`, `background luminance < 0.05`, and restrained studio `primary luminance <= 0.65`) via bidirectional lightness solving in `solveStudioAccent`, taming neon yellow/lime/cyan glare while lifting deep navy/crimson accents.
+  - Created `CoverThemeColorCache` (`Dispatchers.Default` extraction from `<= 32x32` software/ARGB_8888 copies + `128`-entry `LruCache` reusing `AlbumArtworkLoader` thumbnail keys, never modifying bitmaps owned by `AlbumArtworkLoader`).
+  - Added opt-in `dynamicCoverThemeEnabled: Boolean = false` to `UserPreferences`, `UserPreferencesRepository`, `LocalBackupCodec` (`schemaVersion = 1`, backward-compatible with v1.0–v1.2 backups lacking the field -> `false`), `MainViewModel`, and `SettingsDisplaySection`, and wired two independent animated (`300 ms` `animateColorAsState`) layers:
+    - **Global Layer (`MainActivity`):** Tracks the active playing track cover off-main when opted in and animates app-wide `MaterialTheme.colorScheme` smoothly.
+    - **Local Album Layer (`LibraryScreen` -> `AlbumDetailDynamicThemeWrapper`):** Wraps only the opened Album Detail subtree on `LibraryTab.ALBUMS` in a nested `BitPerfectPlayerTheme(dynamicTokens = albumTokens)`, cleanly reverting on Back without recomposing unrelated global roots or navigation chrome.
+- **Rationale:**
+  - Delivers album-reactive dark studio personalization with zero third-party libraries (`androidx.palette`), zero extra permissions, zero audio-path side effects, zero 120 Hz canvas frame allocations, and strict deterministic WCAG legibility across extreme covers.
+- **Rejected Alternatives:** Adding `androidx.palette:palette-ktx` (unnecessary external dependency for a single-hue quantized dark palette); extracting pixels on the Main Thread or from full `600 px` hero bitmaps (avoided via `<= 32x32` `Dispatchers.Default` sampling cached per album); mutating global theme state when browsing Album Details (risks full-tree recomposition and flickering mini-player/nav chrome on Back).
+
+
 
 
 

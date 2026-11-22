@@ -61,10 +61,8 @@ import com.cangkir.bitperfectplayer.audio.PlaybackTrack
 import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
 import com.cangkir.bitperfectplayer.ui.theme.AmberIndicatedContainer
 import com.cangkir.bitperfectplayer.ui.theme.EmeraldSafeContainer
-import com.cangkir.bitperfectplayer.ui.theme.IcePrimaryContainer
 import com.cangkir.bitperfectplayer.ui.theme.OnAmberIndicatedContainer
 import com.cangkir.bitperfectplayer.ui.theme.OnEmeraldSafeContainer
-import com.cangkir.bitperfectplayer.ui.theme.OnIcePrimaryContainer
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
 
@@ -240,8 +238,8 @@ fun AudioModeSegmentedSwitch(
                     .sizeIn(minHeight = 48.dp),
                 colors = if (!isSafe) {
                     ButtonDefaults.buttonColors(
-                        containerColor = if (isBitPerfectMixerActive) IcePrimaryContainer else AmberIndicatedContainer,
-                        contentColor = if (isBitPerfectMixerActive) OnIcePrimaryContainer else OnAmberIndicatedContainer,
+                        containerColor = if (isBitPerfectMixerActive) MaterialTheme.colorScheme.primary else AmberIndicatedContainer,
+                        contentColor = if (isBitPerfectMixerActive) MaterialTheme.colorScheme.onPrimary else OnAmberIndicatedContainer,
                     )
                 } else {
                     ButtonDefaults.textButtonColors(

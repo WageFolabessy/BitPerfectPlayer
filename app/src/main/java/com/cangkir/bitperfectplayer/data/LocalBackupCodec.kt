@@ -19,6 +19,7 @@ data class LocalBackupPayload(
     val appId: String = LocalBackupCodec.APP_ID,
     val exportedAtEpochMs: Long = 0L,
     val defaultHomepage: DefaultHomepage = DefaultHomepage.ALL_SONGS,
+    val dynamicCoverThemeEnabled: Boolean = false,
     val playlists: List<BackupPlaylist> = emptyList(),
     val lyrics: List<LyricsRecord> = emptyList(),
     val favorites: List<FavoriteTrackRecord> = emptyList(),
@@ -52,6 +53,7 @@ object LocalBackupCodec {
         sb.append("  \"defaultHomepage\": ")
         appendJsonString(sb, payload.defaultHomepage.name)
         sb.append(",\n")
+        sb.append("  \"dynamicCoverThemeEnabled\": ").append(payload.dynamicCoverThemeEnabled).append(",\n")
 
         appendPlaylistsJson(sb, payload.playlists)
         appendLyricsJson(sb, payload.lyrics)
@@ -199,12 +201,14 @@ object LocalBackupCodec {
         val appId = root.optionalString("appId") ?: APP_ID
         val exportedAt = root.optionalLong("exportedAtEpochMs")?.coerceAtLeast(0L) ?: 0L
         val defaultHomepage = DefaultHomepage.fromStoredName(root.optionalString("defaultHomepage"))
+        val dynamicCoverThemeEnabled = root.optionalBoolean("dynamicCoverThemeEnabled") ?: false
 
         LocalBackupPayload(
             schemaVersion = schemaVersion,
             appId = appId,
             exportedAtEpochMs = exportedAt,
             defaultHomepage = defaultHomepage,
+            dynamicCoverThemeEnabled = dynamicCoverThemeEnabled,
             playlists = decodePlaylists(root.requireArray("playlists")),
             lyrics = decodeLyrics(root.requireArray("lyrics")),
             favorites = decodeFavorites(root.requireArray("favorites")),

@@ -25,8 +25,11 @@ class LocalBackupRepository(
 
     suspend fun exportBackupToUri(destinationUri: Uri): Result<LocalBackupExportSummary> = withContext(Dispatchers.IO) {
         runCatching {
-            val defaultHomepage = preferencesRepository?.getSnapshot()?.defaultHomepage ?: DefaultHomepage.ALL_SONGS
-            val payload = persistenceRepository.exportLocalBackupPayload(defaultHomepage = defaultHomepage)
+            val prefsSnapshot = preferencesRepository?.getSnapshot()
+            val payload = persistenceRepository.exportLocalBackupPayload(
+                defaultHomepage = prefsSnapshot?.defaultHomepage ?: DefaultHomepage.ALL_SONGS,
+                dynamicCoverThemeEnabled = prefsSnapshot?.dynamicCoverThemeEnabled ?: false,
+            )
             val json = LocalBackupCodec.encode(payload)
             val out = appContext.contentResolver.openOutputStream(destinationUri, "wt")
                 ?: throw IllegalStateException("Unable to open destination file for backup")
@@ -66,6 +69,7 @@ class LocalBackupRepository(
             val payload = LocalBackupCodec.decode(rawJson).getOrThrow()
             val summary = persistenceRepository.importLocalBackupPayload(payload)
             preferencesRepository?.setDefaultHomepage(payload.defaultHomepage)
+            preferencesRepository?.setDynamicCoverThemeEnabled(payload.dynamicCoverThemeEnabled)
             summary
         }
     }

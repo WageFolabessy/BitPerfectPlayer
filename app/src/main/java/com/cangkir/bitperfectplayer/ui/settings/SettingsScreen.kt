@@ -55,7 +55,6 @@ import com.cangkir.bitperfectplayer.ui.SleepTimerBottomSheet
 import com.cangkir.bitperfectplayer.ui.WindowLayoutMetrics
 import com.cangkir.bitperfectplayer.ui.theme.AmberIndicated
 import com.cangkir.bitperfectplayer.ui.theme.EmeraldSafe
-import com.cangkir.bitperfectplayer.ui.theme.IcePrimary
 import kotlinx.coroutines.flow.StateFlow
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -74,6 +73,8 @@ fun SettingsScreen(
     onSetSpectrumColorStyle: (SpectrumColorStyle) -> Unit = {},
     spectrumSparksEnabled: Boolean = true,
     onSetSpectrumSparksEnabled: (Boolean) -> Unit = {},
+    dynamicCoverThemeEnabled: Boolean = false,
+    onSetDynamicCoverThemeEnabled: (Boolean) -> Unit = {},
     diagnosticLoggingEnabled: Boolean = false,
     diagnosticLogStats: DiagnosticLogStats = DiagnosticLogStats(),
     onSetDiagnosticLoggingEnabled: (Boolean) -> Unit = {},
@@ -149,8 +150,8 @@ fun SettingsScreen(
                 @Suppress("DEPRECATION")
                 context.packageManager.getPackageInfo(context.packageName, 0)
             }
-            pkgInfo.versionName ?: "1.2"
-        }.getOrDefault("1.2")
+            pkgInfo.versionName ?: "1.3"
+        }.getOrDefault("1.3")
     }
 
     val safetyState = playbackState.engineState.safetyState
@@ -164,7 +165,7 @@ fun SettingsScreen(
         else -> "Safe Mode (Volume Active)"
     }
     val modeDotColor = when {
-        diagnostics.isBitPerfectMixerActive -> IcePrimary
+        diagnostics.isBitPerfectMixerActive -> MaterialTheme.colorScheme.primary
         isBitPerfectOptIn -> AmberIndicated
         else -> EmeraldSafe
     }
@@ -267,6 +268,8 @@ fun SettingsScreen(
                         onSetSpectrumColorStyle = onSetSpectrumColorStyle,
                         spectrumSparksEnabled = spectrumSparksEnabled,
                         onSetSpectrumSparksEnabled = onSetSpectrumSparksEnabled,
+                        dynamicCoverThemeEnabled = dynamicCoverThemeEnabled,
+                        onSetDynamicCoverThemeEnabled = onSetDynamicCoverThemeEnabled,
                     )
                 }
 

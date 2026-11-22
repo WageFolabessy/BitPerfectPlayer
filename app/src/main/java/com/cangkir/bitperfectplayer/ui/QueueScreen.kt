@@ -87,8 +87,6 @@ import com.cangkir.bitperfectplayer.audio.QueueSourceType
 import com.cangkir.bitperfectplayer.audio.RepeatMode
 import com.cangkir.bitperfectplayer.audio.VisibleQueueItemMetric
 import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
-import com.cangkir.bitperfectplayer.ui.theme.IcePrimary
-import com.cangkir.bitperfectplayer.ui.theme.IcePrimaryContainer
 import com.cangkir.bitperfectplayer.ui.theme.TextMuted
 import kotlin.math.abs
 
@@ -501,7 +499,7 @@ private fun QueueTrackRow(
     val dragBorderModifier = if (isDragged) {
         Modifier.border(
             width = 0.75.dp,
-            color = IcePrimary.copy(alpha = 0.55f),
+            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.65f),
             shape = QueueDraggedRowShape,
         )
     } else {
@@ -777,7 +775,7 @@ private fun QueueDialogScopeChip(label: String, selected: Boolean, onClick: () -
             .clip(RoundedCornerShape(8.dp))
             .clickable(onClick = onClick),
         shape = RoundedCornerShape(8.dp),
-        color = if (selected) IcePrimaryContainer else MaterialTheme.colorScheme.surface,
+        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface,
         border = BorderStroke(
             width = 0.5.dp,
             color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.6f),
@@ -791,7 +789,7 @@ private fun QueueDialogScopeChip(label: String, selected: Boolean, onClick: () -
                 text = label,
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
-                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
                 softWrap = false,
                 overflow = TextOverflow.Ellipsis,

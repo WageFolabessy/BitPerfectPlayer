@@ -62,7 +62,6 @@ import com.cangkir.bitperfectplayer.audio.RepeatMode
 import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
 import com.cangkir.bitperfectplayer.ui.TrackArtworkThumbnail
 import com.cangkir.bitperfectplayer.ui.formatDurationMs
-import com.cangkir.bitperfectplayer.ui.theme.IcePrimary
 import com.cangkir.bitperfectplayer.ui.theme.TextMuted
 import kotlinx.coroutines.flow.StateFlow
 
@@ -173,7 +172,7 @@ internal fun NowPlayingSeekSection(
         },
         valueRange = 0f..sliderMax,
         colors = SliderDefaults.colors(
-            thumbColor = MaterialTheme.colorScheme.onSurface,
+            thumbColor = MaterialTheme.colorScheme.primary,
             activeTrackColor = MaterialTheme.colorScheme.primary,
             inactiveTrackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
         ),
@@ -186,7 +185,7 @@ internal fun NowPlayingSeekSection(
         Text(
             text = formatDurationMs(displayedPosMs),
             style = MaterialTheme.typography.labelSmall,
-            color = if (externalPreviewMs != null) IcePrimary else TextMuted,
+            color = if (externalPreviewMs != null) MaterialTheme.colorScheme.primary else TextMuted,
             maxLines = 1,
             softWrap = false,
         )
@@ -244,8 +243,8 @@ internal fun NowPlayingTransportRow(
             modifier = Modifier.size(64.dp),
             shape = CircleShape,
             colors = IconButtonDefaults.filledIconButtonColors(
-                containerColor = MaterialTheme.colorScheme.onSurface,
-                contentColor = MaterialTheme.colorScheme.background,
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
             ),
         ) {
             Icon(
