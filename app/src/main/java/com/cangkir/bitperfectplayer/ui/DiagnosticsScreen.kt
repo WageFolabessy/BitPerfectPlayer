@@ -149,6 +149,8 @@ fun DiagnosticsScreen(
                                 Text(
                                     text = when {
                                         diagnostics.isBitPerfectMixerActive -> "BIT-PERFECT HAL ACTIVE"
+                                        diagnostics.isNativeSampleRateMixerActive && isSafe -> "SAFE MODE · NATIVE RATE USB"
+                                        diagnostics.isNativeSampleRateMixerActive -> "NATIVE RATE USB MIXER"
                                         isSafe -> "SAFE MODE ACTIVE"
                                         else -> "CLEAN NATIVE FALLBACK"
                                     },

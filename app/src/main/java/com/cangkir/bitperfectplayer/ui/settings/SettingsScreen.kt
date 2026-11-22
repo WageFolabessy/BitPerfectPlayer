@@ -30,6 +30,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -43,9 +44,12 @@ import com.cangkir.bitperfectplayer.audio.PlaybackControllerState
 import com.cangkir.bitperfectplayer.audio.ReplayGainMode
 import com.cangkir.bitperfectplayer.audio.SleepTimerPreset
 import com.cangkir.bitperfectplayer.audio.SleepTimerState
+import com.cangkir.bitperfectplayer.data.DefaultHomepage
 import com.cangkir.bitperfectplayer.data.LocalBackupRepository
 import com.cangkir.bitperfectplayer.data.NowPlayingArtworkStyle
 import com.cangkir.bitperfectplayer.data.SpectrumColorStyle
+import com.cangkir.bitperfectplayer.diagnostics.DiagnosticLogExporter
+import com.cangkir.bitperfectplayer.diagnostics.DiagnosticLogStats
 import com.cangkir.bitperfectplayer.library.LibrarySnapshot
 import com.cangkir.bitperfectplayer.ui.SleepTimerBottomSheet
 import com.cangkir.bitperfectplayer.ui.WindowLayoutMetrics
@@ -60,6 +64,8 @@ fun SettingsScreen(
     libraryState: LibrarySnapshot,
     playbackState: PlaybackControllerState,
     sleepTimerStateFlow: StateFlow<SleepTimerState>,
+    defaultHomepage: DefaultHomepage = DefaultHomepage.ALL_SONGS,
+    onSetDefaultHomepage: (DefaultHomepage) -> Unit = {},
     artworkStyle: NowPlayingArtworkStyle = NowPlayingArtworkStyle.VINYL_DISC,
     onSetArtworkStyle: (NowPlayingArtworkStyle) -> Unit = {},
     spectrumVisualizerEnabled: Boolean = true,
@@ -68,6 +74,13 @@ fun SettingsScreen(
     onSetSpectrumColorStyle: (SpectrumColorStyle) -> Unit = {},
     spectrumSparksEnabled: Boolean = true,
     onSetSpectrumSparksEnabled: (Boolean) -> Unit = {},
+    diagnosticLoggingEnabled: Boolean = false,
+    diagnosticLogStats: DiagnosticLogStats = DiagnosticLogStats(),
+    onSetDiagnosticLoggingEnabled: (Boolean) -> Unit = {},
+    onExportDiagnosticLogs: (Uri) -> Unit = {},
+    onShareDiagnosticLogs: () -> Unit = {},
+    onClearDiagnosticLogs: () -> Unit = {},
+    onRefreshDiagnosticLogStats: () -> Unit = {},
     onImportFolder: (Uri) -> Unit,
     onRemoveSafFolder: (String) -> Unit,
     onRefreshLibrary: () -> Unit,
@@ -82,6 +95,11 @@ fun SettingsScreen(
 ) {
     val context = LocalContext.current
     var showSleepTimerSheet by remember { mutableStateOf(false) }
+    var showDefaultHomepageSheet by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        onRefreshDiagnosticLogStats()
+    }
 
     val folderPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree(),
@@ -108,6 +126,14 @@ fun SettingsScreen(
         }
     }
 
+    val diagnosticExportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/zip"),
+    ) { destinationUri ->
+        if (destinationUri != null) {
+            onExportDiagnosticLogs(destinationUri)
+        }
+    }
+
     val sortedFolders = remember(libraryState.persistedSafTreeUris) {
         libraryState.persistedSafTreeUris.sorted()
     }
@@ -123,8 +149,8 @@ fun SettingsScreen(
                 @Suppress("DEPRECATION")
                 context.packageManager.getPackageInfo(context.packageName, 0)
             }
-            pkgInfo.versionName ?: "1.1"
-        }.getOrDefault("1.1")
+            pkgInfo.versionName ?: "1.2"
+        }.getOrDefault("1.2")
     }
 
     val safetyState = playbackState.engineState.safetyState
@@ -149,6 +175,17 @@ fun SettingsScreen(
             isBitPerfectOptIn = isBitPerfectOptIn,
             onSelectPreset = onSelectSleepTimerPreset,
             onDismiss = { showSleepTimerSheet = false },
+        )
+    }
+
+    if (showDefaultHomepageSheet) {
+        DefaultHomepageBottomSheet(
+            currentHomepage = defaultHomepage,
+            onSelectHomepage = { selected ->
+                onSetDefaultHomepage(selected)
+                showDefaultHomepageSheet = false
+            },
+            onDismiss = { showDefaultHomepageSheet = false },
         )
     }
 
@@ -186,7 +223,7 @@ fun SettingsScreen(
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
                 item(key = "section_audio_engine", contentType = "settings_group") {
-                    SettingsAudioEngineSection(
+                    val audioEngineUiState = SettingsAudioEngineUiState(
                         gaplessEnabled = playbackState.gaplessEnabled,
                         isBitPerfectOptIn = isBitPerfectOptIn,
                         isBitPerfectMixerActive = diagnostics.isBitPerfectMixerActive,
@@ -194,18 +231,34 @@ fun SettingsScreen(
                         modeLabel = modeLabel,
                         modeDotColor = modeDotColor,
                         activeDeviceName = safetyState.activeDeviceName,
+                    )
+                    val audioEngineCallbacks = remember(
+                        onSetGaplessEnabled,
+                        onSetReplayGainMode,
+                        onSetReplayGainPreampDb,
+                        onSetReplayGainPreventClipping,
+                        onOpenDiagnostics,
+                    ) {
+                        SettingsAudioEngineCallbacks(
+                            onSetGaplessEnabled = onSetGaplessEnabled,
+                            onSetReplayGainMode = onSetReplayGainMode,
+                            onSetReplayGainPreampDb = onSetReplayGainPreampDb,
+                            onSetReplayGainPreventClipping = onSetReplayGainPreventClipping,
+                            onOpenSleepTimer = { showSleepTimerSheet = true },
+                            onOpenDiagnostics = onOpenDiagnostics,
+                        )
+                    }
+                    SettingsAudioEngineSection(
+                        uiState = audioEngineUiState,
                         sleepTimerStateFlow = sleepTimerStateFlow,
-                        onSetGaplessEnabled = onSetGaplessEnabled,
-                        onSetReplayGainMode = onSetReplayGainMode,
-                        onSetReplayGainPreampDb = onSetReplayGainPreampDb,
-                        onSetReplayGainPreventClipping = onSetReplayGainPreventClipping,
-                        onOpenSleepTimer = { showSleepTimerSheet = true },
-                        onOpenDiagnostics = onOpenDiagnostics,
+                        callbacks = audioEngineCallbacks,
                     )
                 }
 
                 item(key = "section_display", contentType = "settings_group") {
                     SettingsDisplaySection(
+                        defaultHomepage = defaultHomepage,
+                        onOpenDefaultHomepagePicker = { showDefaultHomepageSheet = true },
                         artworkStyle = artworkStyle,
                         onSetArtworkStyle = onSetArtworkStyle,
                         spectrumVisualizerEnabled = spectrumVisualizerEnabled,
@@ -234,6 +287,19 @@ fun SettingsScreen(
                         onImportClick = {
                             backupImportLauncher.launch(arrayOf("application/json", "*/*"))
                         },
+                    )
+                }
+
+                item(key = "section_diagnostic_logging", contentType = "settings_group") {
+                    SettingsDiagnosticLoggingSection(
+                        enabled = diagnosticLoggingEnabled,
+                        logStats = diagnosticLogStats,
+                        onSetEnabled = onSetDiagnosticLoggingEnabled,
+                        onExportClick = {
+                            diagnosticExportLauncher.launch(DiagnosticLogExporter.suggestZipFileName(appVersionName))
+                        },
+                        onShareClick = onShareDiagnosticLogs,
+                        onClearClick = onClearDiagnosticLogs,
                     )
                 }
 

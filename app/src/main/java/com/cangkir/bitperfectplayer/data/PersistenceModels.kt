@@ -177,6 +177,29 @@ enum class SpectrumColorStyle(val displayName: String) {
 }
 
 /**
+ * Persisted startup homepage preference (defaults to [ALL_SONGS]).
+ * Pure Kotlin (zero `android.*` imports) for deterministic DataStore & JSON backup persistence.
+ */
+enum class DefaultHomepage(val displayName: String) {
+    ALL_SONGS("All Songs"),
+    FOLDERS("Folders"),
+    ARTISTS("Artists"),
+    ALBUMS("Albums"),
+    RECENT("Recent"),
+    FAVORITES("Favorites"),
+    PLAYLISTS("Playlists"),
+    ;
+
+    val isPlaylistsRoute: Boolean
+        get() = this == PLAYLISTS
+
+    companion object {
+        fun fromStoredName(raw: String?): DefaultHomepage =
+            entries.firstOrNull { it.name.equals(raw?.trim(), ignoreCase = true) } ?: ALL_SONGS
+    }
+}
+
+/**
  * Snapshot of the last active track, playback position, and queue origin context for scoped
  * restoration on app relaunch.
  */
@@ -210,6 +233,8 @@ data class UserPreferences(
     val spectrumVisualizerEnabled: Boolean = true,
     val spectrumColorStyle: SpectrumColorStyle = SpectrumColorStyle.PRISM,
     val spectrumSparksEnabled: Boolean = true,
+    val defaultHomepage: DefaultHomepage = DefaultHomepage.ALL_SONGS,
+    val diagnosticLoggingEnabled: Boolean = false,
     val persistedSafTreeUris: Set<String> = emptySet(),
     val persistedSafFileUris: Set<String> = emptySet(),
     val lastPlaybackState: LastPlaybackState = LastPlaybackState(),

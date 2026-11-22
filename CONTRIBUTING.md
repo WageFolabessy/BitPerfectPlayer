@@ -17,7 +17,7 @@ Thank you for your interest in contributing to **BitPerfectPlayer** (`com.cangki
 ## Mandatory Project Invariants
 
 1. **100% Offline and Privacy-First:**
-   - Never add `android.permission.INTERNET`, `android.permission.MANAGE_EXTERNAL_STORAGE`, or `android.permission.RECORD_AUDIO` to `app/src/main/AndroidManifest.xml` or transitively via dependencies.
+   - Never add `android.permission.INTERNET`, `android.permission.MANAGE_EXTERNAL_STORAGE`, `android.permission.WRITE_EXTERNAL_STORAGE`, or `android.permission.RECORD_AUDIO` to `app/src/main/AndroidManifest.xml` or transitively via dependencies.
    - Do not add networking libraries, crash reporters, telemetry, analytics, or online metadata/artwork/lyrics fetchers.
    - Only add dependencies with permissive open-source licenses (**Apache 2.0, MIT, BSD**). Never introduce FFmpeg, heavy NDK toolchains, or GPL/LGPL dependencies.
 
@@ -32,7 +32,7 @@ Thank you for your interest in contributing to **BitPerfectPlayer** (`com.cangki
    - Never claim bit-perfect output on fallback paths, non-USB routes, or API < 34, and preserve the internal DAC firmware verification boundary notice.
 
 4. **Pure-Kotlin Domain Boundary and Database Safety:**
-   - Keep core domain modules (content fingerprinting, `.lrc` parsing, WAV header/PCM parsing, playback queue, safety state machine, diagnostics mapping, ReplayGain, sleep timer, sort policy, backup JSON codec, `.m3u8` codec, turntable DSP, FFT spectrum DSP, foreground playback gate, adaptive layout metrics) free of `android.*` imports so they remain fast and deterministic under JVM unit tests.
+   - Keep core domain modules (content fingerprinting, `.lrc` parsing, WAV header/PCM parsing, `PcmStreamRules`, playback queue, `QueueDragReorderMath`, safety state machine, `RouteChangeReconfigurePolicy`, `UsbMixerProfileSelector`, diagnostics mapping, ReplayGain, sleep timer, sort policy, `DefaultHomepage`, `AlbumArtworkHelper`, backup JSON codec, `.m3u8` codec, turntable DSP & `TurntableFlushHeadTracker`, FFT spectrum DSP, foreground playback gate, adaptive layout metrics, and diagnostic log formatting/rotation/buffering) free of `android.*` imports so they remain fast and deterministic under JVM unit tests.
    - Any Room schema changes in `BitPerfectDatabase` must include explicit non-destructive SQLite `Migration` objects and migration unit tests (never use `fallbackToDestructiveMigration()`).
 
 5. **120 Hz Compose UI Hygiene:**
@@ -60,7 +60,7 @@ Before opening a pull request, run the full software verification suite locally 
 ./gradlew assembleDebug
 
 # 5. Verify zero forbidden permissions in source and merged manifests
-grep -Eni "permission\.(INTERNET|MANAGE_EXTERNAL_STORAGE|RECORD_AUDIO)" \
+grep -Eni "permission\.(INTERNET|MANAGE_EXTERNAL_STORAGE|WRITE_EXTERNAL_STORAGE|RECORD_AUDIO)" \
   app/src/main/AndroidManifest.xml \
   $(find app/build/intermediates/merged_manifest* -name 'AndroidManifest.xml' 2>/dev/null)
 ```

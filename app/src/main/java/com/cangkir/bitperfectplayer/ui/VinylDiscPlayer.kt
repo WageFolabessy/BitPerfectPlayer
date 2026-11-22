@@ -742,6 +742,8 @@ private fun VinylCircularArtwork(track: PlaybackTrack, artworkLoader: AlbumArtwo
             if (currentBitmap != null && !currentBitmap.isRecycled) currentBitmap.asImageBitmap() else null
         }
         if (imageBitmap != null) {
+            // Option B: Preserve the authentic circular vinyl center label using uniform,
+            // distortion-free center-fill over the aspect-preserved bitmap from AlbumArtworkLoader.
             Image(
                 bitmap = imageBitmap,
                 contentDescription = "Album art for ${track.title}",

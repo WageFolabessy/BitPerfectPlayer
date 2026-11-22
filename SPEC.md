@@ -107,7 +107,7 @@ Required real-time diagnostic fields:
 ## 4. MVP Application Features
 
 ### 4.1 Local Music Player & Library Management
-- Scan local audio via `MediaStore` and allow manual folder/file selection via Storage Access Framework (SAF, using `takePersistableUriPermission` defensively), complying with Scoped Storage using only minimal local permissions (`MODIFY_AUDIO_SETTINGS` normal install-time permission for Android 14+ mixer APIs, `READ_MEDIA_AUDIO` on API 33+, `READ_EXTERNAL_STORAGE` capped at `android:maxSdkVersion="32"` for API 26–32 compatibility, `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_MEDIA_PLAYBACK`, and `POST_NOTIFICATIONS`; never `MANAGE_EXTERNAL_STORAGE`, `INTERNET`, or `RECORD_AUDIO`).
+- Scan local audio via `MediaStore` and allow manual folder/file selection via Storage Access Framework (SAF, using `takePersistableUriPermission` defensively), complying with Scoped Storage using only minimal local permissions (`MODIFY_AUDIO_SETTINGS` normal install-time permission for Android 14+ mixer APIs, `READ_MEDIA_AUDIO` on API 33+, `READ_EXTERNAL_STORAGE` capped at `android:maxSdkVersion="32"` for API 26–32 compatibility, `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_MEDIA_PLAYBACK`, and `POST_NOTIFICATIONS`; never `MANAGE_EXTERNAL_STORAGE`, `WRITE_EXTERNAL_STORAGE`, `INTERNET`, or `RECORD_AUDIO`).
 - Library navigation views: **All Songs, Folders, Artists, Albums, Recently Played, Playback Queue, and Favorites**.
 - Graceful handling of missing/corrupted metadata (fallback to filename).
 - Full playback controls: Play, Pause, Next, Previous, Seek, Progress Bar, Queue management (add, remove, reorder), Shuffle, and Repeat (`OFF` / `ALL` / `ONE`).
@@ -197,3 +197,27 @@ Having graduated from the verified MVP baseline, the Full APK roadmap authorizes
    - Explicit `ForegroundServiceStartNotAllowedException` (API 31+) and `SecurityException` guards plus defensive `AUDIOFOCUS_REQUEST_FAILED` revert-to-paused handling.
 4. **Adaptive Large-Screen, Foldable, Tablet, & Multi-Window UI (`D10.5`):**
    - Pure-Kotlin `WindowLayoutMetrics` drives adaptive top-level navigation (`NavigationRail` + right-pane `MiniPlayerBar` at `width >= 600.dp`; bottom `NavigationBar` at `< 600.dp`), a balanced 2-column `NowPlayingScreen` (`46%` scaled `220..316.dp` Vinyl + Radial Spectrum left pane / `54%` scrollable controls right pane) in landscape and tablet viewports, and centered `840.dp` max-width containers on `SettingsScreen`, `DiagnosticsScreen`, `QueueScreen`, and `LyricsScreen`.
+
+---
+
+## 8. Version `1.2` Audio Engine Fixes & Playback / Display UX Upgrades
+
+1. **Direct `audio/raw` (`FLAC (PCM)`) Reader (`D11.1`):**
+   - `RawExtractorPcmDecoder` reads `MediaFormat.MIMETYPE_AUDIO_RAW` streams directly from `MediaExtractor` (eliminating Android 16 / Custom ROM `c2.android.raw.decoder` white-noise corruption on 24-bit/96 kHz FLAC) with API 31+ native integer passthrough and API 26–30 lossless float32 conversion via pure-Kotlin `PcmStreamRules`.
+2. **Live Turntable Post-Paused-Load Scratch Reliability (`D11.2`):**
+   - Cold worker startup ordering, API 31+ `AudioTrack.startThresholdInFrames` scratch headroom, and pure-Kotlin `TurntableFlushHeadTracker` eliminate post-`loadTrack(autoPlay = false) -> play()` silence/deadlock while preserving zero-DSP isolation in `BIT_PERFECT_OPT_IN`.
+3. **API 34+ USB `MIXER_BEHAVIOR_DEFAULT` Native Sample-Rate Negotiation (`D11.3`):**
+   - Pure-Kotlin `UsbMixerProfileSelector` negotiates `MIXER_BEHAVIOR_BIT_PERFECT` -> `MIXER_BEHAVIOR_DEFAULT` (native sample rate) in `BIT_PERFECT_OPT_IN`, and strictly `MIXER_BEHAVIOR_DEFAULT` only in `SAFE_VOLUME_MODE`, with honest Stage 4 diagnostics (`DEFAULT_NATIVE_RATE`, never claiming bit-perfect) and unconditional `clearPreferredMixerAttributes` cleanup.
+4. **Passive Queue Icon, Pure-Compose Drag-and-Drop Reorder, & Full-List `All Songs` Search Playback (`D11.4`–`D11.6`):**
+   - Queue top-bar navigation is strictly passive (read-only) across every screen; `QueueScreen` replaces Up/Down arrows with zero-dependency stationary-coordinate drag-and-drop via `Icons.Rounded.DragHandle` (`48.dp`) + unique `QueueSnapshot.entryIds` + `QueueDragReorderMath`; tapping a searched track in `All Songs` loads the full sorted `allSongs` queue at that track's index.
+5. **Configurable Default Homepage & Full Uncropped Album Artwork (`D11.7`, `D11.8`):**
+   - Pure-Kotlin `DefaultHomepage` (`All Songs`, `Folders`, `Artists`, `Albums`, `Recent`, `Favorites`, `Playlists`) persisted in DataStore and backward-compatible offline `.json` backups (`LocalBackupCodec`), applied strictly once on cold startup without hijacking subsequent navigation.
+   - Pure-Kotlin `AlbumArtworkHelper.computeProportionalTargetDimensions` preserves exact original aspect ratios during decode/cache scaling, and `TrackArtworkThumbnail` renders full uncropped artwork (`ContentScale.Fit` on a matte-obsidian backdrop) across all rectangular/square surfaces while preserving the natural circular Vinyl Disc (`CircleShape`, Option B).
+6. **Opt-In Local Diagnostic Logging for Release APK Field Diagnostics (`D11.9`):**
+   - Strictly **OFF by default** (`diagnosticLoggingEnabled = false`, never restored/auto-enabled by `.json` backup restore) with zero extra permissions, zero disk I/O or crash recording when disabled, and single `@Volatile Boolean` gating with zero lambda/string allocations on hot paths.
+   - Pure-Kotlin `DiagnosticLogChannel`, `DiagnosticLogFormatter` (single-line UTC ISO-8601 `key=value`, `--- CRASH_START/END ---`, defense-in-depth URI/path/PII redaction), `DiagnosticLogRotationPolicy` (`256 KB` cap + 1 `.prev.txt` backup per append channel, `< 2 MB` total), and `DiagnosticLogBuffer` (`512`-entry drop-oldest ring queue) back the non-blocking `LocalDiagnosticLogger`, chained `DiagnosticCrashHandler`, and standard-JDK `ZipOutputStream` `DiagnosticLogExporter` (`README_LOGS.txt` + SAF `.zip` export + scoped `FileProvider` Share Sheet).
+   - Retains `SourceFile` and `LineNumberTable` attributes in `app/src/main/keepRules/rules.keep` so Release APK crash traces deobfuscate cleanly with `app/build/outputs/mapping/release/mapping.txt`.
+7. **Real-Device Polish & Runtime Hardening (`D11.10`, `D11.11`):**
+   - Pure-Kotlin `RouteChangeReconfigurePolicy` defers `MediaCodec` + `AudioTrack` teardown/re-creation when an audio route change fires while playback is already paused (still clearing stale USB preferred mixer attributes, updating 6-stage diagnostics, and enforcing Safe Mode auto-pause rules immediately), refreshing output routing cleanly on the next `play()` without interfering with paused seeking or post-paused Live Turntable scrubbing.
+   - `QueueScreen` uses zero-overlap navigation transitions in `BitPerfectAppNav.kt`, direct `initialFirstVisibleItemIndex` initialization (zero post-first-frame scroll jump), zero-copy `entryIds` row keys, and skippable `QueueTrackRow` composition without per-row `graphicsLayer` RenderNodes on stationary rows.
+   - `SettingsAudioEngineSection` is decomposed into lean private composable rows with grouped state/callback holders so ART JIT compilation stays compact and fast.

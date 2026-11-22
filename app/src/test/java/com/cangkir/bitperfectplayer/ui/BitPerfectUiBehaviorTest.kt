@@ -8,7 +8,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasScrollToIndexAction
+import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
@@ -31,6 +35,7 @@ import com.cangkir.bitperfectplayer.audio.QueueSnapshot
 import com.cangkir.bitperfectplayer.audio.ReplayGainMetadata
 import com.cangkir.bitperfectplayer.audio.SleepTimerPreset
 import com.cangkir.bitperfectplayer.audio.SleepTimerState
+import com.cangkir.bitperfectplayer.data.DefaultHomepage
 import com.cangkir.bitperfectplayer.data.NowPlayingArtworkStyle
 import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
 import com.cangkir.bitperfectplayer.library.LibrarySnapshot
@@ -1153,5 +1158,686 @@ class BitPerfectUiBehaviorTest {
 
         composeRule.onNodeWithContentDescription("Settings").assertIsDisplayed().performClick()
         assertEquals("settings", selectedRoute)
+    }
+
+    @Test
+    fun queueIcon_isStrictlyPassiveAcrossLibraryTabsDetailViewsAndPlaylists() {
+        val albumTrack = hiResFlacTrack
+        val secondTrack = hiResFlacTrack.copy(
+            uriString = "content://test/audio/boulevard.flac",
+            title = "Boulevard",
+            artist = "Another Artist",
+            album = "Other Album",
+            fileName = "02 - Boulevard.flac",
+            trackNumber = 2,
+        )
+        val snapshot = LibrarySnapshot(
+            allSongs = listOf(albumTrack, secondTrack),
+            albums = listOf(
+                com.cangkir.bitperfectplayer.library.LibraryGroup(
+                    name = "21st Century Breakdown",
+                    subtitle = "Green Day · 1 track",
+                    tracks = listOf(albumTrack),
+                ),
+            ),
+            artists = listOf(
+                com.cangkir.bitperfectplayer.library.LibraryGroup(
+                    name = "Green Day",
+                    subtitle = "1 track",
+                    tracks = listOf(albumTrack),
+                ),
+            ),
+            favorites = listOf(albumTrack),
+        )
+        val activePlayback = PlaybackControllerState(
+            queue = QueueSnapshot(items = listOf(secondTrack), currentIndex = 0),
+            queueContext = QueueContext.allSongs(),
+            activeTrack = secondTrack,
+            engineState = EnginePlaybackState(status = PlaybackStatus.PLAYING, durationMs = secondTrack.durationMs),
+        )
+
+        var openQueueClicks = 0
+        var playInvocations = 0
+
+        composeRule.setContent {
+            BitPerfectPlayerTheme {
+                LibraryScreen(
+                    libraryState = snapshot,
+                    favoriteTrackUris = setOf(albumTrack.uriString),
+                    playbackState = activePlayback,
+                    albumArtworkLoader = artworkLoader,
+                    onRefreshLibrary = {},
+                    onImportFolder = {},
+                    onPlayTracks = { _, _, _ -> playInvocations++ },
+                    onEnqueueTrack = {},
+                    onEnqueueNext = {},
+                    onEnqueueTracks = { _, _ -> playInvocations++ },
+                    onEnqueueTracksNext = { _, _ -> playInvocations++ },
+                    onSetTrackSort = { _, _ -> },
+                    onSetGroupSort = { _, _ -> },
+                    onAddToPlaylist = {},
+                    onShowTrackInfo = {},
+                    onToggleFavorite = {},
+                    onOpenQueue = { openQueueClicks++ },
+                    onOpenDiagnostics = {},
+                )
+            }
+        }
+
+        // 1. All Songs tab -> tapping Queue icon is purely passive
+        composeRule.onNodeWithContentDescription("Open playback queue").assertIsDisplayed().performClick()
+        assertEquals(1, openQueueClicks)
+        assertEquals(0, playInvocations)
+
+        // 2. Albums tab -> open Album detail -> tapping Queue icon is purely passive (no auto-switch/pause)
+        composeRule.onNodeWithText("Albums").assertIsDisplayed().performClick()
+        composeRule.onNodeWithText("21st Century Breakdown").assertIsDisplayed().performClick()
+        composeRule.onNodeWithContentDescription("Open playback queue").assertIsDisplayed().performClick()
+        assertEquals(2, openQueueClicks)
+        assertEquals(0, playInvocations)
+
+        // 3. Back -> Artists tab -> open Artist detail -> tapping Queue icon is purely passive
+        composeRule.onNodeWithContentDescription("Back to Albums").assertIsDisplayed().performClick()
+        composeRule.onNodeWithText("Artists").assertIsDisplayed().performClick()
+        composeRule.onNodeWithText("Green Day").assertIsDisplayed().performClick()
+        composeRule.onNodeWithContentDescription("Open playback queue").assertIsDisplayed().performClick()
+        assertEquals(3, openQueueClicks)
+        assertEquals(0, playInvocations)
+
+        // 4. Back -> Favorites tab -> tapping Queue icon is purely passive
+        composeRule.onNodeWithContentDescription("Back to Artists").assertIsDisplayed().performClick()
+        composeRule.onNodeWithText("Favorites").performScrollTo().assertIsDisplayed().performClick()
+        composeRule.onNodeWithContentDescription("Open playback queue").assertIsDisplayed().performClick()
+        assertEquals(4, openQueueClicks)
+        assertEquals(0, playInvocations)
+    }
+
+    @Test
+    fun queueScreen_usesDragHandlesWithoutArrowButtonsAndReordersViaDragGesture() {
+        val trackA = hiResFlacTrack.copy(uriString = "content://test/audio/a.flac", title = "Track Alpha")
+        val trackB = hiResFlacTrack.copy(uriString = "content://test/audio/b.flac", title = "Track Beta")
+        val trackC = hiResFlacTrack.copy(uriString = "content://test/audio/c.flac", title = "Track Gamma")
+
+        val manager = com.cangkir.bitperfectplayer.audio.PlaybackQueueManager<PlaybackTrack>()
+        manager.setQueue(listOf(trackA, trackB, trackC), startIndex = 1) // Track Beta actively playing
+
+        var queueSnapshot by mutableStateOf(manager.snapshot())
+        var selectCalls = 0
+        var removeCalls = 0
+
+        composeRule.setContent {
+            BitPerfectPlayerTheme {
+                QueueScreen(
+                    playbackState = PlaybackControllerState(
+                        queue = queueSnapshot,
+                        queueContext = QueueContext.allSongs(),
+                        activeTrack = queueSnapshot.currentItem,
+                        engineState = EnginePlaybackState(status = PlaybackStatus.PLAYING),
+                    ),
+                    libraryTracks = listOf(trackA, trackB, trackC),
+                    activeContextTracks = emptyList(),
+                    albumArtworkLoader = artworkLoader,
+                    onBack = {},
+                    onSelectQueueIndex = { selectCalls++ },
+                    onAddTrackToQueue = {},
+                    onRemoveQueueItem = { removeCalls++ },
+                    onMoveQueueItem = { from, to ->
+                        if (manager.moveItem(from, to)) {
+                            queueSnapshot = manager.snapshot()
+                        }
+                    },
+                    onToggleShuffle = {},
+                    onCycleRepeatMode = {},
+                )
+            }
+        }
+
+        // Up/Down arrow buttons are completely removed
+        assertEquals(
+            0,
+            composeRule.onAllNodesWithContentDescription("up in queue", substring = true).fetchSemanticsNodes().size,
+        )
+        assertEquals(
+            0,
+            composeRule.onAllNodesWithContentDescription("down in queue", substring = true).fetchSemanticsNodes().size,
+        )
+
+        // All 3 rows expose tactile DragHandle nodes
+        val handles = composeRule.onAllNodesWithContentDescription("Reorder track")
+        assertEquals(3, handles.fetchSemanticsNodes().size)
+        val row0CenterY = handles[0].fetchSemanticsNode().boundsInRoot.center.y
+        val row1CenterY = handles[1].fetchSemanticsNode().boundsInRoot.center.y
+        val rowPitchPx = (row1CenterY - row0CenterY).coerceAtLeast(60f)
+
+        // Drag row 0 ("Track Alpha") downward past row 1 ("Track Beta") midpoint
+        handles[0].performTouchInput {
+            down(center)
+            advanceEventTime(40L)
+            moveBy(Offset(0f, 16f))
+            advanceEventTime(40L)
+            moveBy(Offset(0f, rowPitchPx * 0.85f))
+            advanceEventTime(40L)
+            up()
+        }
+        composeRule.waitForIdle()
+
+        // Order updated to [Track Beta, Track Alpha, Track Gamma] while active track stayed anchored to Track Beta (index 0)
+        assertEquals(listOf("Track Beta", "Track Alpha", "Track Gamma"), queueSnapshot.items.map { it.title })
+        assertEquals(0, queueSnapshot.currentIndex)
+        assertEquals("Track Beta", queueSnapshot.currentItem?.title)
+        assertEquals(0, selectCalls)
+        assertEquals(0, removeCalls)
+    }
+
+    @Test
+    fun playlistsScreen_queueIconIsStrictlyPassiveAcrossOverviewAndPlaylistDetail() {
+        val playlist = com.cangkir.bitperfectplayer.library.ResolvedPlaylist(
+            id = 7L,
+            name = "Late Night",
+            createdAtEpochMs = 1_700_000_000_000L,
+            updatedAtEpochMs = 1_700_000_000_000L,
+            entries = listOf(
+                com.cangkir.bitperfectplayer.library.ResolvedPlaylistEntry(
+                    entryId = 101L,
+                    playlistId = 7L,
+                    positionIndex = 0,
+                    track = hiResFlacTrack,
+                ),
+            ),
+        )
+        var openQueueClicks = 0
+        var playCalls = 0
+
+        composeRule.setContent {
+            BitPerfectPlayerTheme {
+                PlaylistsScreen(
+                    playlistsState = PlaylistsUiSnapshot(
+                        playlists = listOf(playlist),
+                        isLoaded = true,
+                    ),
+                    activeTrackUri = hiResFlacTrack.uriString,
+                    albumArtworkLoader = artworkLoader,
+                    onPlayTracks = { _, _, _ -> playCalls++ },
+                    onEnqueueTracks = { _, _ -> playCalls++ },
+                    onEnqueueTracksNext = { _, _ -> playCalls++ },
+                    onSetPlaylistSort = { _, _ -> },
+                    onOpenQueue = { openQueueClicks++ },
+                    onCreatePlaylist = {},
+                    onRenamePlaylist = { _, _ -> },
+                    onDeletePlaylist = { _, _ -> },
+                    onRemovePlaylistEntry = { _, _ -> },
+                    onMovePlaylistEntry = { _, _, _ -> },
+                    onExportPlaylist = { _, _ -> },
+                    onImportPlaylist = {},
+                )
+            }
+        }
+
+        // Overview tab Queue icon is strictly passive
+        composeRule.onNodeWithContentDescription("Open playback queue").assertIsDisplayed().performClick()
+        assertEquals(1, openQueueClicks)
+        assertEquals(0, playCalls)
+
+        // Open Playlist detail -> Queue icon remains strictly passive (never auto-replaces queue or pauses)
+        composeRule.onNodeWithText("Late Night").assertIsDisplayed().performClick()
+        composeRule.onNodeWithContentDescription("Open playback queue").assertIsDisplayed().performClick()
+        assertEquals(2, openQueueClicks)
+        assertEquals(0, playCalls)
+    }
+
+    @Test
+    fun libraryScreen_allSongsSearchPlaybackLoadsFullSortedListAtTappedTrackIndex() {
+        val t1 = hiResFlacTrack.copy(uriString = "content://test/audio/1.flac", title = "Alpha Song", fileName = "01_alpha.flac")
+        val t2 = hiResFlacTrack.copy(uriString = "content://test/audio/2.flac", title = "Beta Song", fileName = "02_beta.flac")
+        val t3 = hiResFlacTrack.copy(uriString = "content://test/audio/3.flac", title = "Peacemaker", fileName = "03_peacemaker.flac")
+        val t4 = hiResFlacTrack.copy(uriString = "content://test/audio/4.flac", title = "Zulu Song", fileName = "04_zulu.flac")
+        val fullSorted = listOf(t1, t2, t3, t4)
+
+        var playedTracks: List<PlaybackTrack>? = null
+        var playedStartIndex: Int = -1
+        var playedContext: QueueContext? = null
+
+        composeRule.setContent {
+            BitPerfectPlayerTheme {
+                LibraryScreen(
+                    libraryState = LibrarySnapshot(allSongs = fullSorted),
+                    favoriteTrackUris = emptySet(),
+                    playbackState = PlaybackControllerState(),
+                    albumArtworkLoader = artworkLoader,
+                    onRefreshLibrary = {},
+                    onImportFolder = {},
+                    onPlayTracks = { tracks, index, context ->
+                        playedTracks = tracks
+                        playedStartIndex = index
+                        playedContext = context
+                    },
+                    onEnqueueTrack = {},
+                    onEnqueueNext = {},
+                    onEnqueueTracks = { _, _ -> },
+                    onEnqueueTracksNext = { _, _ -> },
+                    onSetTrackSort = { _, _ -> },
+                    onSetGroupSort = { _, _ -> },
+                    onAddToPlaylist = {},
+                    onShowTrackInfo = {},
+                    onToggleFavorite = {},
+                    onOpenQueue = {},
+                    onOpenDiagnostics = {},
+                )
+            }
+        }
+
+        // Filter All Songs down to a single search hit ("Peacemaker")
+        composeRule.onNode(hasSetTextAction()).performTextInput("Peacemaker")
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("1 of 4 tracks").assertIsDisplayed()
+        assertEquals(0, composeRule.onAllNodesWithText("Alpha Song").fetchSemanticsNodes().size)
+
+        // Tap the single filtered result -> must queue ALL 4 sorted All Songs starting at index 2!
+        composeRule.onNode(hasText("Peacemaker") and !hasSetTextAction()).assertIsDisplayed().performClick()
+        assertEquals(fullSorted, playedTracks)
+        assertEquals(2, playedStartIndex)
+        assertEquals(QueueContext.allSongs(), playedContext)
+    }
+
+    @Test
+    fun settingsScreen_defaultHomepagePickerDisplaysAllSevenOptionsAndUpdatesPreference() {
+        var currentHomepage by mutableStateOf(DefaultHomepage.ALL_SONGS)
+        val selections = mutableListOf<DefaultHomepage>()
+
+        composeRule.setContent {
+            BitPerfectPlayerTheme {
+                SettingsScreen(
+                    libraryState = LibrarySnapshot(),
+                    playbackState = PlaybackControllerState(),
+                    sleepTimerStateFlow = MutableStateFlow(SleepTimerState()),
+                    defaultHomepage = currentHomepage,
+                    onSetDefaultHomepage = { selected ->
+                        selections.add(selected)
+                        currentHomepage = selected
+                    },
+                    onImportFolder = {},
+                    onRemoveSafFolder = {},
+                    onRefreshLibrary = {},
+                    onSetGaplessEnabled = {},
+                    onSetReplayGainMode = {},
+                    onSetReplayGainPreampDb = {},
+                    onSetReplayGainPreventClipping = {},
+                    onSelectSleepTimerPreset = {},
+                    onExportLocalBackup = {},
+                    onImportLocalBackup = {},
+                    onOpenDiagnostics = {},
+                )
+            }
+        }
+
+        composeRule.onNode(hasScrollToIndexAction()).performScrollToIndex(1)
+        composeRule.onNodeWithContentDescription("Default Homepage: All Songs").assertIsDisplayed().performClick()
+        composeRule.waitForIdle()
+
+        // All 7 options rendered inside the modal bottom sheet
+        DefaultHomepage.entries.forEach { option ->
+            composeRule.onAllNodesWithText(option.displayName).fetchSemanticsNodes().let { nodes ->
+                assertTrue("Expected option '${option.displayName}' in Default Homepage sheet", nodes.isNotEmpty())
+            }
+        }
+
+        // Selecting Playlists updates preference and dismisses sheet
+        composeRule.onNodeWithText("Playlists").performScrollTo().assertIsDisplayed().performClick()
+        composeRule.waitForIdle()
+
+        assertEquals(listOf(DefaultHomepage.PLAYLISTS), selections)
+        composeRule.onNodeWithContentDescription("Default Homepage: Playlists").assertIsDisplayed()
+    }
+
+    @Test
+    fun startupNavHost_honorsDefaultHomepagePlaylistsAndDoesNotHijackWhenPreferenceChanges() {
+        var homepagePref by mutableStateOf(DefaultHomepage.PLAYLISTS)
+
+        composeRule.setContent {
+            BitPerfectPlayerTheme {
+                BitPerfectStartupNavHost(
+                    startupHomepage = homepagePref,
+                    libraryContent = { initialTab ->
+                        LibraryScreen(
+                            libraryState = LibrarySnapshot(allSongs = listOf(hiResFlacTrack)),
+                            favoriteTrackUris = emptySet(),
+                            playbackState = PlaybackControllerState(),
+                            albumArtworkLoader = artworkLoader,
+                            onRefreshLibrary = {},
+                            onImportFolder = {},
+                            onPlayTracks = { _, _, _ -> },
+                            onEnqueueTrack = {},
+                            onEnqueueNext = {},
+                            onEnqueueTracks = { _, _ -> },
+                            onEnqueueTracksNext = { _, _ -> },
+                            onSetTrackSort = { _, _ -> },
+                            onSetGroupSort = { _, _ -> },
+                            onAddToPlaylist = {},
+                            onShowTrackInfo = {},
+                            onToggleFavorite = {},
+                            onOpenQueue = {},
+                            onOpenDiagnostics = {},
+                            initialTab = initialTab,
+                        )
+                    },
+                    playlistsContent = {
+                        PlaylistsScreen(
+                            playlistsState = PlaylistsUiSnapshot(isLoaded = true),
+                            activeTrackUri = null,
+                            albumArtworkLoader = artworkLoader,
+                            onPlayTracks = { _, _, _ -> },
+                            onEnqueueTracks = { _, _ -> },
+                            onEnqueueTracksNext = { _, _ -> },
+                            onSetPlaylistSort = { _, _ -> },
+                            onOpenQueue = {},
+                            onCreatePlaylist = {},
+                            onRenamePlaylist = { _, _ -> },
+                            onDeletePlaylist = { _, _ -> },
+                            onRemovePlaylistEntry = { _, _ -> },
+                            onMovePlaylistEntry = { _, _, _ -> },
+                            onExportPlaylist = { _, _ -> },
+                            onImportPlaylist = {},
+                        )
+                    },
+                    settingsContent = {
+                        SettingsScreen(
+                            libraryState = LibrarySnapshot(),
+                            playbackState = PlaybackControllerState(),
+                            sleepTimerStateFlow = MutableStateFlow(SleepTimerState()),
+                            defaultHomepage = homepagePref,
+                            onSetDefaultHomepage = { homepagePref = it },
+                            onImportFolder = {},
+                            onRemoveSafFolder = {},
+                            onRefreshLibrary = {},
+                            onSetGaplessEnabled = {},
+                            onSetReplayGainMode = {},
+                            onSetReplayGainPreampDb = {},
+                            onSetReplayGainPreventClipping = {},
+                            onSelectSleepTimerPreset = {},
+                            onExportLocalBackup = {},
+                            onImportLocalBackup = {},
+                            onOpenDiagnostics = {},
+                        )
+                    },
+                )
+            }
+        }
+
+        // Cold startup lands directly on Playlists
+        composeRule.onNodeWithText("YOUR PLAYLISTS").assertIsDisplayed()
+
+        // Navigate manually to Settings, change preference to Albums -> MUST NOT hijack back to Library!
+        composeRule.onNodeWithContentDescription("Settings").assertIsDisplayed().performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("AUDIO ENGINE").assertIsDisplayed()
+
+        homepagePref = DefaultHomepage.ALBUMS
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("AUDIO ENGINE").assertIsDisplayed()
+    }
+
+    @Test
+    fun startupNavHost_honorsDefaultHomepageAlbumsTabAndAllowsManualTabSwitching() {
+        val albumGroup = com.cangkir.bitperfectplayer.library.LibraryGroup(
+            name = "21st Century Breakdown",
+            subtitle = "Green Day · 1 track",
+            tracks = listOf(hiResFlacTrack),
+        )
+        var homepagePref by mutableStateOf(DefaultHomepage.ALBUMS)
+
+        composeRule.setContent {
+            BitPerfectPlayerTheme {
+                BitPerfectStartupNavHost(
+                    startupHomepage = homepagePref,
+                    libraryContent = { initialTab ->
+                        LibraryScreen(
+                            libraryState = LibrarySnapshot(
+                                allSongs = listOf(hiResFlacTrack),
+                                albums = listOf(albumGroup),
+                            ),
+                            favoriteTrackUris = emptySet(),
+                            playbackState = PlaybackControllerState(),
+                            albumArtworkLoader = artworkLoader,
+                            onRefreshLibrary = {},
+                            onImportFolder = {},
+                            onPlayTracks = { _, _, _ -> },
+                            onEnqueueTrack = {},
+                            onEnqueueNext = {},
+                            onEnqueueTracks = { _, _ -> },
+                            onEnqueueTracksNext = { _, _ -> },
+                            onSetTrackSort = { _, _ -> },
+                            onSetGroupSort = { _, _ -> },
+                            onAddToPlaylist = {},
+                            onShowTrackInfo = {},
+                            onToggleFavorite = {},
+                            onOpenQueue = {},
+                            onOpenDiagnostics = {},
+                            initialTab = initialTab,
+                        )
+                    },
+                    playlistsContent = {},
+                    settingsContent = {},
+                )
+            }
+        }
+
+        // Cold startup opens Library directly on Albums tab
+        composeRule.onNodeWithText("1 album").assertIsDisplayed()
+        composeRule.onNodeWithText("21st Century Breakdown").assertIsDisplayed()
+
+        // Manually switch to All Songs tab -> changing preference later never resets user's active tab
+        composeRule.onNodeWithText("All Songs").performScrollTo().assertIsDisplayed().performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("1 track").assertIsDisplayed()
+
+        homepagePref = DefaultHomepage.FAVORITES
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("1 track").assertIsDisplayed()
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h915dp")
+    fun settingsScreen_diagnosticLoggingSectionDefaultsOffAndSupportsToggleShareClear() {
+        var loggingEnabled by mutableStateOf(false)
+        var logStats by mutableStateOf(com.cangkir.bitperfectplayer.diagnostics.DiagnosticLogStats())
+        val toggleEvents = mutableListOf<Boolean>()
+        var shareClicks = 0
+        var clearClicks = 0
+
+        composeRule.setContent {
+            BitPerfectPlayerTheme {
+                SettingsScreen(
+                    libraryState = LibrarySnapshot(),
+                    playbackState = PlaybackControllerState(),
+                    sleepTimerStateFlow = MutableStateFlow(SleepTimerState()),
+                    diagnosticLoggingEnabled = loggingEnabled,
+                    diagnosticLogStats = logStats,
+                    onSetDiagnosticLoggingEnabled = { next ->
+                        toggleEvents.add(next)
+                        loggingEnabled = next
+                        if (next) {
+                            logStats = com.cangkir.bitperfectplayer.diagnostics.DiagnosticLogStats(
+                                fileCount = 3,
+                                totalBytes = 14_541L,
+                            )
+                        }
+                    },
+                    onShareDiagnosticLogs = { shareClicks++ },
+                    onClearDiagnosticLogs = {
+                        clearClicks++
+                        logStats = com.cangkir.bitperfectplayer.diagnostics.DiagnosticLogStats()
+                    },
+                    onImportFolder = {},
+                    onRemoveSafFolder = {},
+                    onRefreshLibrary = {},
+                    onSetGaplessEnabled = {},
+                    onSetReplayGainMode = {},
+                    onSetReplayGainPreampDb = {},
+                    onSetReplayGainPreventClipping = {},
+                    onSelectSleepTimerPreset = {},
+                    onExportLocalBackup = {},
+                    onImportLocalBackup = {},
+                    onOpenDiagnostics = {},
+                )
+            }
+        }
+
+        // Scroll to section_diagnostic_logging (index 4: audio, display, library, backup, diagnostic)
+        composeRule.onNode(hasScrollToIndexAction()).performScrollToIndex(4)
+        composeRule.onNodeWithText("DIAGNOSTIC LOGGING").assertIsDisplayed()
+        composeRule.onNodeWithText("Enable Local Diagnostic Logging").assertIsDisplayed()
+        composeRule.onNodeWithText("No logs stored").assertIsDisplayed()
+
+        // Default OFF + no logs -> Export, Share, and Clear are disabled
+        composeRule.onNodeWithText("Export Logs (.zip)").assertIsNotEnabled()
+        composeRule.onNodeWithText("Share Logs").assertIsNotEnabled()
+        composeRule.onNodeWithText("Clear Logs").assertIsNotEnabled()
+
+        // Toggle ON -> enables actions and displays live footprint
+        composeRule.onNodeWithContentDescription("Toggle local diagnostic logging")
+            .assertIsDisplayed()
+            .performClick()
+        assertEquals(listOf(true), toggleEvents)
+        composeRule.onNodeWithText("3 files · 14.2 KB").assertIsDisplayed()
+        composeRule.onNodeWithText("Export Logs (.zip)").assertIsEnabled()
+        composeRule.onNodeWithText("Share Logs").assertIsEnabled().performClick()
+        assertEquals(1, shareClicks)
+
+        // Clear Logs -> resets stats back to "No logs stored" and disables Clear button
+        composeRule.onNodeWithText("Clear Logs").assertIsEnabled().performClick()
+        assertEquals(1, clearClicks)
+        composeRule.onNodeWithText("No logs stored").assertIsDisplayed()
+        composeRule.onNodeWithText("Clear Logs").assertIsNotEnabled()
+    }
+
+    @Test
+    fun queueScreen_duplicateTracksInQueueAndAddDialog_neverCrashLazyColumn() {
+        val duplicateQueue = QueueSnapshot(
+            items = listOf(hiResFlacTrack, hiResFlacTrack),
+            originalItems = listOf(hiResFlacTrack, hiResFlacTrack),
+            currentIndex = 0,
+            entryIds = listOf(10L, 11L),
+        )
+        val duplicatePlaylistContext = listOf(hiResFlacTrack, hiResFlacTrack)
+        val addedTracks = mutableListOf<PlaybackTrack>()
+
+        composeRule.setContent {
+            BitPerfectPlayerTheme {
+                QueueScreen(
+                    playbackState = PlaybackControllerState(
+                        queue = duplicateQueue,
+                        queueContext = QueueContext.playlist(1L, "Repeat Favorites"),
+                        activeTrack = hiResFlacTrack,
+                    ),
+                    libraryTracks = listOf(hiResFlacTrack),
+                    activeContextTracks = duplicatePlaylistContext,
+                    albumArtworkLoader = artworkLoader,
+                    onBack = {},
+                    onSelectQueueIndex = {},
+                    onAddTrackToQueue = { addedTracks.add(it) },
+                    onRemoveQueueItem = {},
+                    onMoveQueueItem = { _, _ -> },
+                    onToggleShuffle = {},
+                    onCycleRepeatMode = {},
+                )
+            }
+        }
+
+        // Duplicate entries in queue render cleanly without duplicate-key crash
+        assertEquals(2, composeRule.onAllNodesWithText(hiResFlacTrack.title).fetchSemanticsNodes().size)
+
+        // Opening AddTrackToQueueDialog with duplicate playlist context tracks deduplicates cleanly
+        composeRule.onNodeWithContentDescription("Add track to queue").assertIsDisplayed().performClick()
+        composeRule.onNodeWithText("Add Track to Queue").assertIsDisplayed()
+        composeRule.onNodeWithText("Current Context").assertIsDisplayed()
+        // Exactly 1 deduplicated track row appears in the dialog (in addition to the 2 rows behind it)
+        composeRule.onNodeWithText("Close").assertIsDisplayed().performClick()
+        assertTrue(addedTracks.isEmpty())
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h915dp")
+    fun startupNavHost_stateRestorationAfterConfigChange_preservesActiveRouteWithoutSnappingToDefaultHomepage() {
+        val restorationTester = androidx.compose.ui.test.junit4.StateRestorationTester(composeRule)
+        restorationTester.setContent {
+            BitPerfectPlayerTheme {
+                BitPerfectStartupNavHost(
+                    startupHomepage = DefaultHomepage.PLAYLISTS,
+                    libraryContent = { initialTab ->
+                        LibraryScreen(
+                            libraryState = LibrarySnapshot(allSongs = listOf(hiResFlacTrack)),
+                            favoriteTrackUris = emptySet(),
+                            playbackState = PlaybackControllerState(),
+                            albumArtworkLoader = artworkLoader,
+                            onRefreshLibrary = {},
+                            onImportFolder = {},
+                            onPlayTracks = { _, _, _ -> },
+                            onEnqueueTrack = {},
+                            onEnqueueNext = {},
+                            onEnqueueTracks = { _, _ -> },
+                            onEnqueueTracksNext = { _, _ -> },
+                            onSetTrackSort = { _, _ -> },
+                            onSetGroupSort = { _, _ -> },
+                            onAddToPlaylist = {},
+                            onShowTrackInfo = {},
+                            onToggleFavorite = {},
+                            onOpenQueue = {},
+                            onOpenDiagnostics = {},
+                            initialTab = initialTab,
+                        )
+                    },
+                    playlistsContent = {
+                        PlaylistsScreen(
+                            playlistsState = PlaylistsUiSnapshot(isLoaded = true),
+                            activeTrackUri = null,
+                            albumArtworkLoader = artworkLoader,
+                            onPlayTracks = { _, _, _ -> },
+                            onEnqueueTracks = { _, _ -> },
+                            onEnqueueTracksNext = { _, _ -> },
+                            onSetPlaylistSort = { _, _ -> },
+                            onOpenQueue = {},
+                            onCreatePlaylist = {},
+                            onRenamePlaylist = { _, _ -> },
+                            onDeletePlaylist = { _, _ -> },
+                            onRemovePlaylistEntry = { _, _ -> },
+                            onMovePlaylistEntry = { _, _, _ -> },
+                            onExportPlaylist = { _, _ -> },
+                            onImportPlaylist = {},
+                        )
+                    },
+                    settingsContent = {
+                        SettingsScreen(
+                            libraryState = LibrarySnapshot(),
+                            playbackState = PlaybackControllerState(),
+                            sleepTimerStateFlow = MutableStateFlow(SleepTimerState()),
+                            onImportFolder = {},
+                            onRemoveSafFolder = {},
+                            onRefreshLibrary = {},
+                            onSetGaplessEnabled = {},
+                            onSetReplayGainMode = {},
+                            onSetReplayGainPreampDb = {},
+                            onSetReplayGainPreventClipping = {},
+                            onSelectSleepTimerPreset = {},
+                            onExportLocalBackup = {},
+                            onImportLocalBackup = {},
+                            onOpenDiagnostics = {},
+                        )
+                    },
+                )
+            }
+        }
+
+        // Cold startup lands on Playlists
+        composeRule.onNodeWithText("YOUR PLAYLISTS").assertIsDisplayed()
+
+        // Navigate manually to Settings
+        composeRule.onNodeWithContentDescription("Settings").assertIsDisplayed().performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("AUDIO ENGINE").assertIsDisplayed()
+
+        // Simulate Android configuration change / activity recreation -> MUST remain on Settings!
+        restorationTester.emulateSavedInstanceStateRestore()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("AUDIO ENGINE").assertIsDisplayed()
     }
 }

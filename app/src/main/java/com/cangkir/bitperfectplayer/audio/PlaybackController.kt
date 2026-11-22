@@ -8,6 +8,8 @@ import com.cangkir.bitperfectplayer.data.RepeatModePreference
 import com.cangkir.bitperfectplayer.data.ReplayGainModePreference
 import com.cangkir.bitperfectplayer.data.TrackHistoryRecord
 import com.cangkir.bitperfectplayer.data.UserPreferencesRepository
+import com.cangkir.bitperfectplayer.diagnostics.DiagnosticLogFormatter
+import com.cangkir.bitperfectplayer.diagnostics.LocalDiagnosticLogger
 import com.cangkir.bitperfectplayer.library.LibrarySnapshot
 import com.cangkir.bitperfectplayer.library.PlaylistsUiSnapshot
 import com.cangkir.bitperfectplayer.lyrics.AndroidContentFingerprintProvider
@@ -57,6 +59,7 @@ class PlaybackController(
     private val persistenceRepository: LocalPersistenceRepository,
     private val fingerprintProvider: AndroidContentFingerprintProvider,
     private val foregroundPlaybackGate: ForegroundPlaybackGate = ForegroundPlaybackGate(initialAppInForeground = true),
+    private val diagnosticLogger: LocalDiagnosticLogger? = null,
 ) {
     private val appContext = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -72,6 +75,7 @@ class PlaybackController(
         onTrackCompleted = { handleTrackCompleted() },
         onGaplessTransition = { transitioned -> handleGaplessTransition(transitioned) },
         onActivePlaybackElapsedMs = { deltaMs -> handleActivePlaybackElapsed(deltaMs) },
+        diagnosticLogger = diagnosticLogger,
     )
 
     private val sleepTimerController = SleepTimerController(
@@ -98,6 +102,7 @@ class PlaybackController(
     private var positionPersistenceJob: Job? = null
     private var fingerprintJob: Job? = null
     private var foregroundHandshakeJob: Job? = null
+    private var queueReorderSyncJob: Job? = null
     private var hasRestoredInitialSession = false
     private var isRestoreInFlight = false
     private var hasRecordedHistoryForActiveTrack = false
@@ -161,21 +166,6 @@ class PlaybackController(
             )
         }
         loadActiveTrack(active, startPositionMs = startPositionMs, autoPlay = autoPlay)
-    }
-
-    /**
-     * Switches the active queue immediately to [context]'s ordered tracks (prepared paused at index
-     * 0 by default for hearing safety unless [autoPlay] is requested).
-     */
-    fun loadContextQueue(tracks: List<PlaybackTrack>, context: QueueContext, autoPlay: Boolean = false) {
-        if (tracks.isEmpty()) return
-        playQueue(
-            tracks = tracks,
-            startIndex = 0,
-            startPositionMs = 0L,
-            autoPlay = autoPlay,
-            context = context,
-        )
     }
 
     fun playTrackAt(queueIndex: Int) {
@@ -281,6 +271,14 @@ class PlaybackController(
         if (queueManager.moveItem(fromIndex, toIndex)) {
             val snapshot = queueManager.snapshot()
             _state.update { it.copy(queue = snapshot, activeTrack = snapshot.currentItem) }
+            scheduleDebouncedNextTrackSync()
+        }
+    }
+
+    private fun scheduleDebouncedNextTrackSync() {
+        queueReorderSyncJob?.cancel()
+        queueReorderSyncJob = scope.launch {
+            delay(QUEUE_REORDER_PRELOAD_DEBOUNCE_MS)
             syncNextTrackToEngine()
         }
     }
@@ -310,7 +308,9 @@ class PlaybackController(
         val token = foregroundPlaybackGate.beginHandshake()
         PlaybackForegroundService.startService(appContext, foregroundPlaybackGate)
         foregroundHandshakeJob = scope.launch {
-            when (foregroundPlaybackGate.awaitServicePromotion(token = token)) {
+            val result = foregroundPlaybackGate.awaitServicePromotion(token = token)
+            logForegroundHandshakeOutcome(source = "play", result = result)
+            when (result) {
                 ForegroundHandshakeResult.READY_IMMEDIATELY,
                 ForegroundHandshakeResult.PROMOTED,
                 -> {
@@ -420,6 +420,7 @@ class PlaybackController(
 
     fun stop() {
         foregroundHandshakeJob?.cancel()
+        queueReorderSyncJob?.cancel()
         foregroundPlaybackGate.cancelPendingHandshake()
         playCountTracker.clearSession()?.let { persistPlayCountFlush(it) }
         persistCurrentPositionAsync()
@@ -605,6 +606,7 @@ class PlaybackController(
 
     fun release() {
         foregroundHandshakeJob?.cancel()
+        queueReorderSyncJob?.cancel()
         foregroundPlaybackGate.cancelPendingHandshake()
         sleepTimerController.release()
         playCountTracker.clearSession()?.let { persistPlayCountFlush(it) }
@@ -688,6 +690,8 @@ class PlaybackController(
     }
 
     private fun syncNextTrackToEngine() {
+        queueReorderSyncJob?.cancel()
+        queueReorderSyncJob = null
         // When End-of-Track sleep timer is armed, do NOT pre-load or gaplessly chain into the next track.
         if (sleepTimerController.state.value.isEndOfTrackArmed) {
             engine.setNextTrack(null)
@@ -705,6 +709,8 @@ class PlaybackController(
                 mimeType = nextTrack.mimeType,
                 startPositionMs = 0L,
                 autoPlay = true,
+                fingerprintPrefix = DiagnosticLogFormatter.shortFingerprintPrefix(nextTrack.contentFingerprint),
+                fileSizeBytes = nextTrack.fileSizeBytes,
             ),
         )
     }
@@ -764,6 +770,8 @@ class PlaybackController(
             mimeType = track.mimeType,
             startPositionMs = startPositionMs,
             autoPlay = autoPlay,
+            fingerprintPrefix = DiagnosticLogFormatter.shortFingerprintPrefix(track.contentFingerprint),
+            fileSizeBytes = track.fileSizeBytes,
         )
         if (!autoPlay) {
             foregroundPlaybackGate.cancelPendingHandshake()
@@ -786,7 +794,9 @@ class PlaybackController(
         val token = foregroundPlaybackGate.beginHandshake()
         PlaybackForegroundService.startService(appContext, foregroundPlaybackGate)
         foregroundHandshakeJob = scope.launch {
-            when (foregroundPlaybackGate.awaitServicePromotion(token = token)) {
+            val result = foregroundPlaybackGate.awaitServicePromotion(token = token)
+            logForegroundHandshakeOutcome(source = "loadActiveTrack", result = result)
+            when (result) {
                 ForegroundHandshakeResult.READY_IMMEDIATELY,
                 ForegroundHandshakeResult.PROMOTED,
                 -> {
@@ -807,6 +817,26 @@ class PlaybackController(
                 }
                 ForegroundHandshakeResult.CANCELLED -> Unit
             }
+        }
+    }
+
+    private fun logForegroundHandshakeOutcome(source: String, result: ForegroundHandshakeResult) {
+        when (result) {
+            ForegroundHandshakeResult.PROMOTED -> {
+                diagnosticLogger?.logAudio("FGS_HANDSHAKE") {
+                    linkedMapOf("source" to source, "outcome" to result.name)
+                }
+            }
+            ForegroundHandshakeResult.FAILED_START_NOT_ALLOWED,
+            ForegroundHandshakeResult.TIMED_OUT,
+            -> {
+                diagnosticLogger?.logError("FGS_HANDSHAKE") {
+                    linkedMapOf("source" to source, "outcome" to result.name)
+                }
+            }
+            ForegroundHandshakeResult.READY_IMMEDIATELY,
+            ForegroundHandshakeResult.CANCELLED,
+            -> Unit
         }
     }
 
@@ -940,5 +970,9 @@ class PlaybackController(
         ReplayGainMode.OFF -> ReplayGainModePreference.OFF
         ReplayGainMode.TRACK -> ReplayGainModePreference.TRACK
         ReplayGainMode.ALBUM -> ReplayGainModePreference.ALBUM
+    }
+
+    companion object {
+        private const val QUEUE_REORDER_PRELOAD_DEBOUNCE_MS = 250L
     }
 }

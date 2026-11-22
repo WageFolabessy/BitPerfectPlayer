@@ -145,36 +145,38 @@ fun AddToPlaylistDialog(
                             key = { "pick_pl_${it.id}" },
                             contentType = { "playlist_picker_row" },
                         ) { playlist ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .sizeIn(minHeight = 48.dp)
-                                    .clickable { onSelectPlaylist(playlist) }
-                                    .padding(horizontal = 4.dp, vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                            ) {
-                                Text(
-                                    text = playlist.name,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.weight(1f),
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = "${playlist.trackCount}",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = TextMuted,
-                                    maxLines = 1,
-                                    softWrap = false,
+                            Column(modifier = Modifier.fillMaxWidth()) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .sizeIn(minHeight = 48.dp)
+                                        .clickable { onSelectPlaylist(playlist) }
+                                        .padding(horizontal = 4.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                ) {
+                                    Text(
+                                        text = playlist.name,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "${playlist.trackCount}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = TextMuted,
+                                        maxLines = 1,
+                                        softWrap = false,
+                                    )
+                                }
+                                HorizontalDivider(
+                                    thickness = 0.5.dp,
+                                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f),
                                 )
                             }
-                            HorizontalDivider(
-                                thickness = 0.5.dp,
-                                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f),
-                            )
                         }
                     }
                     Spacer(modifier = Modifier.height(8.dp))

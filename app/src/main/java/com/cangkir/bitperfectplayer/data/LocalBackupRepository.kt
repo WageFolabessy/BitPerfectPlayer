@@ -16,12 +16,17 @@ data class LocalBackupExportSummary(val playlistsCount: Int, val lyricsCount: In
  * 100% offline SAF `.json` local backup exporter and non-destructive importer backed by
  * [LocalPersistenceRepository] and pure-Kotlin [LocalBackupCodec].
  */
-class LocalBackupRepository(context: Context, private val persistenceRepository: LocalPersistenceRepository) {
+class LocalBackupRepository(
+    context: Context,
+    private val persistenceRepository: LocalPersistenceRepository,
+    private val preferencesRepository: UserPreferencesRepository? = null,
+) {
     private val appContext = context.applicationContext
 
     suspend fun exportBackupToUri(destinationUri: Uri): Result<LocalBackupExportSummary> = withContext(Dispatchers.IO) {
         runCatching {
-            val payload = persistenceRepository.exportLocalBackupPayload()
+            val defaultHomepage = preferencesRepository?.getSnapshot()?.defaultHomepage ?: DefaultHomepage.ALL_SONGS
+            val payload = persistenceRepository.exportLocalBackupPayload(defaultHomepage = defaultHomepage)
             val json = LocalBackupCodec.encode(payload)
             val out = appContext.contentResolver.openOutputStream(destinationUri, "wt")
                 ?: throw IllegalStateException("Unable to open destination file for backup")
@@ -59,7 +64,9 @@ class LocalBackupRepository(context: Context, private val persistenceRepository:
             } ?: throw IllegalStateException("Unable to read selected backup file")
 
             val payload = LocalBackupCodec.decode(rawJson).getOrThrow()
-            persistenceRepository.importLocalBackupPayload(payload)
+            val summary = persistenceRepository.importLocalBackupPayload(payload)
+            preferencesRepository?.setDefaultHomepage(payload.defaultHomepage)
+            summary
         }
     }
 

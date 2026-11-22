@@ -5,6 +5,7 @@ import android.media.AudioFormat
 import android.media.AudioTrack
 import android.os.Build
 import android.util.Log
+import com.cangkir.bitperfectplayer.diagnostics.LocalDiagnosticLogger
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
@@ -23,6 +24,7 @@ internal class AudioTrackWriter(
     private val releasedFlag: AtomicBoolean,
     private val isPausedFlag: AtomicBoolean,
     private val pendingSeekMs: AtomicLong,
+    private val diagnosticLogger: LocalDiagnosticLogger? = null,
 ) {
     // Strictly read-only, lifecycle-gated PCM tap (~192 KB) for the radial FFT spectrum visualizer.
     // Allocated lazily ONLY when active; released immediately when disabled, backgrounded, or stopped.
@@ -157,13 +159,21 @@ internal class AudioTrackWriter(
             .build()
 
         // PERFORMANCE_MODE_NONE avoids forcing fast-mixer 48,000 Hz resampling on USB HAL paths.
-        val track = AudioTrack.Builder()
-            .setAudioAttributes(playbackAudioAttributes)
-            .setAudioFormat(audioFormat)
-            .setTransferMode(AudioTrack.MODE_STREAM)
-            .setBufferSizeInBytes(alignedBufSize)
-            .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_NONE)
-            .build()
+        var trackBuilt = false
+        val track = try {
+            AudioTrack.Builder()
+                .setAudioAttributes(playbackAudioAttributes)
+                .setAudioFormat(audioFormat)
+                .setTransferMode(AudioTrack.MODE_STREAM)
+                .setBufferSizeInBytes(alignedBufSize)
+                .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_NONE)
+                .build()
+                .also { trackBuilt = true }
+        } finally {
+            if (!trackBuilt) {
+                routeAndMixerManager.clearPreferredMixerAttributesOnApi34(usbDevice)
+            }
+        }
 
         if (usbDevice != null) {
             runCatching { track.preferredDevice = usbDevice }
@@ -181,12 +191,28 @@ internal class AudioTrackWriter(
                 "bytesPerFrame=$bytesPerFrame, bufferBytes=$alignedBufSize, " +
                 "mixer=${routeAndMixerManager.activeNegotiatedMixerBehavior}",
         )
+        diagnosticLogger?.logAudio("AUDIOTRACK_CONFIG") {
+            linkedMapOf(
+                "sr" to actualSampleRateHz,
+                "ch" to pcmFormat.channelCount,
+                "enc" to actualEncodingLabel,
+                "decodedEnc" to pcmFormat.encoding.name,
+                "bufBytes" to alignedBufSize,
+                "bufFrames" to track.bufferSizeInFrames,
+                "usb" to (usbDevice != null),
+                "mixer" to routeAndMixerManager.activeNegotiatedMixerBehavior.name,
+            )
+        }
         return ConfiguredAudioTrack(
             track = track,
             actualSampleRateHz = actualSampleRateHz,
             actualEncodingLabel = actualEncodingLabel,
         )
     }
+
+    fun readUnderrunCount(track: AudioTrack?): Int = runCatching {
+        if (track != null && track.state == AudioTrack.STATE_INITIALIZED) track.underrunCount else 0
+    }.getOrDefault(0)
 
     fun tryCreateConfiguredAudioTrackLocked(
         pcmFormat: DecodedPcmFormat,
@@ -226,6 +252,37 @@ internal class AudioTrackWriter(
                     track.pause()
                 }
                 track.flush()
+            }
+        }
+    }
+
+    /**
+     * Lowers `AudioTrack.startThresholdInFrames` on API 31+ right before live turntable scratch so
+     * AudioFlinger begins rendering audibly within `~65 ms` after `flush()`, and returns the
+     * actual active start threshold in frames (falling back to `bufferSizeInFrames` on API 26–30).
+     */
+    fun configureScratchStartThreshold(track: AudioTrack, desiredHeadroomFrames: Int): Int = runCatching {
+        if (track.state != AudioTrack.STATE_INITIALIZED) return@runCatching 0
+        val capacity = track.bufferCapacityInFrames.coerceAtLeast(1)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val target = desiredHeadroomFrames.coerceIn(256.coerceAtMost(capacity), capacity)
+            track.startThresholdInFrames = target
+            track.startThresholdInFrames
+        } else {
+            track.bufferSizeInFrames
+        }
+    }.getOrDefault(0)
+
+    /**
+     * Restores the default full-buffer `startThresholdInFrames` on API 31+ when exiting live
+     * turntable scratch back to normal streaming playback.
+     */
+    fun restoreDefaultStartThreshold(track: AudioTrack) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+        runCatching {
+            if (track.state == AudioTrack.STATE_INITIALIZED) {
+                val capacity = track.bufferCapacityInFrames.coerceAtLeast(1)
+                track.startThresholdInFrames = track.bufferSizeInFrames.coerceIn(1, capacity)
             }
         }
     }

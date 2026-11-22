@@ -45,6 +45,8 @@ class PersistenceAndPreferencesTest {
         assertTrue(snapshot.spectrumVisualizerEnabled)
         assertEquals(SpectrumColorStyle.PRISM, snapshot.spectrumColorStyle)
         assertTrue(snapshot.spectrumSparksEnabled)
+        assertEquals(DefaultHomepage.ALL_SONGS, snapshot.defaultHomepage)
+        assertFalse(snapshot.diagnosticLoggingEnabled)
         assertTrue(snapshot.persistedSafTreeUris.isEmpty())
         assertTrue(snapshot.persistedSafFileUris.isEmpty())
         assertNull(snapshot.lastPlaybackState.trackUri)
@@ -71,6 +73,8 @@ class PersistenceAndPreferencesTest {
         repo.setSpectrumVisualizerEnabled(false)
         repo.setSpectrumColorStyle(SpectrumColorStyle.ALBUM_ADAPTIVE)
         repo.setSpectrumSparksEnabled(false)
+        repo.setDefaultHomepage(DefaultHomepage.PLAYLISTS)
+        repo.setDiagnosticLoggingEnabled(true)
         repo.addPersistedSafTreeUri("  content://com.android.externalstorage.documents/tree/primary%3AMusic  ")
         repo.addPersistedSafTreeUri("   ") // Blank URI ignored
         repo.addPersistedSafFileUri("content://com.android.externalstorage.documents/document/primary%3Asong.flac")
@@ -109,6 +113,8 @@ class PersistenceAndPreferencesTest {
         assertFalse(snapshot.spectrumVisualizerEnabled)
         assertEquals(SpectrumColorStyle.ALBUM_ADAPTIVE, snapshot.spectrumColorStyle)
         assertFalse(snapshot.spectrumSparksEnabled)
+        assertEquals(DefaultHomepage.PLAYLISTS, snapshot.defaultHomepage)
+        assertTrue(snapshot.diagnosticLoggingEnabled)
         assertEquals(
             setOf("content://com.android.externalstorage.documents/tree/primary%3AMusic"),
             snapshot.persistedSafTreeUris,
@@ -145,6 +151,8 @@ class PersistenceAndPreferencesTest {
         repo.setSpectrumVisualizerEnabled(true)
         repo.setSpectrumColorStyle(SpectrumColorStyle.STUDIO)
         repo.setSpectrumSparksEnabled(true)
+        repo.setDefaultHomepage(DefaultHomepage.ALBUMS)
+        repo.setDiagnosticLoggingEnabled(false)
         repo.clearLastPlaybackState()
 
         val updated = repo.getSnapshot()
@@ -154,6 +162,8 @@ class PersistenceAndPreferencesTest {
         assertTrue(updated.spectrumVisualizerEnabled)
         assertEquals(SpectrumColorStyle.STUDIO, updated.spectrumColorStyle)
         assertTrue(updated.spectrumSparksEnabled)
+        assertEquals(DefaultHomepage.ALBUMS, updated.defaultHomepage)
+        assertFalse(updated.diagnosticLoggingEnabled)
         assertTrue(updated.persistedSafTreeUris.isEmpty())
         assertNull(updated.lastPlaybackState.trackUri)
         assertNull(updated.lastPlaybackState.contentFingerprint)
@@ -230,5 +240,16 @@ class PersistenceAndPreferencesTest {
         assertEquals(NowPlayingArtworkStyle.VINYL_DISC, NowPlayingArtworkStyle.fromStoredName(null))
         assertEquals(NowPlayingArtworkStyle.VINYL_DISC, NowPlayingArtworkStyle.fromStoredName("CORRUPTED"))
         assertEquals(NowPlayingArtworkStyle.SQUARE_COVER, NowPlayingArtworkStyle.fromStoredName("  square_cover "))
+
+        assertEquals(DefaultHomepage.ALL_SONGS, DefaultHomepage.fromStoredName(null))
+        assertEquals(DefaultHomepage.ALL_SONGS, DefaultHomepage.fromStoredName("   "))
+        assertEquals(DefaultHomepage.ALL_SONGS, DefaultHomepage.fromStoredName("UNKNOWN_HOME"))
+        assertEquals(DefaultHomepage.FAVORITES, DefaultHomepage.fromStoredName("  favorites "))
+        assertEquals(DefaultHomepage.PLAYLISTS, DefaultHomepage.fromStoredName("PLAYLISTS"))
+        assertTrue(DefaultHomepage.PLAYLISTS.isPlaylistsRoute)
+        assertFalse(DefaultHomepage.ALBUMS.isPlaylistsRoute)
+        DefaultHomepage.entries.forEach { option ->
+            assertEquals(option, DefaultHomepage.fromStoredName(option.name))
+        }
     }
 }

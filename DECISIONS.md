@@ -233,3 +233,152 @@ This file records autonomous architectural, dependency, and environment decision
   - Android 17 (`targetSdk = 37`) mandates adaptive layouts across large screens (`sw >= 600dp`), foldables, landscape rotation, and multi-window split-screen.
   - Using Compose's built-in `BoxWithConstraints` + Material 3 `NavigationRail` + pure-Kotlin `WindowLayoutMetrics` adds **0 external dependencies** (keeping the R8 Release APK lean at `2.62 MB` / `2,746,000 bytes`) and enables fast, deterministic JVM unit tests (`WindowLayoutMetricsTest`) plus Robolectric headless Compose UI tests (`BitPerfectUiBehaviorTest`).
 - **Rejected Alternatives:** Pulling in `androidx.compose.material3.adaptive:*` + `androidx.window:window` artifacts (adds extra AAR footprint and transitive complexity for simple `600.dp` / `840.dp` breakpoint rules that `BoxWithConstraints` + `WindowLayoutMetrics` handle in ~100 lines of pure Kotlin).
+
+---
+
+## D11.1 — Direct `MediaExtractor` PCM Reader (`RawExtractorPcmDecoder`) for `audio/raw` (`FLAC (PCM)`) Streams
+- **Decision:**
+  1. Added pure-Kotlin **`RawSourcePcmEncoding`** and helpers in `PcmStreamRules.kt` (`ANDROID_ENCODING_PCM_8BIT = 3`, `resolveRawExtractorSourceEncoding`, `selectRawOutputEncoding`, `requiresRawPcmConversion`, `buildRawExtractorDecoderLabel`, plus zero-allocation offset-aware `convertPcm24LeToFloat32Bytes`, `convertPcm32LeToFloat32Bytes`, and `convertPcm8UnsignedToPcm16LeBytes`).
+  2. Created **`RawExtractorPcmDecoder`** (`com.cangkir.bitperfectplayer.audio.RawExtractorPcmDecoder`) implementing `PcmAudioDecoder` directly on top of `MediaExtractor` whenever `MediaFormat.KEY_MIME == MediaFormat.MIMETYPE_AUDIO_RAW` (`audio/raw`), wired into `MediaCodecAudioDecoder.openMediaCodecDecoder(...)` **before** touching `KEY_PCM_ENCODING` or calling `MediaCodec.createDecoderByType(...)`.
+  3. On API 31+ (`Build.VERSION_CODES.S`), verified native integer support via `AudioTrack.getMinBufferSize(...) > 0` before enabling bit-identical `PCM_24BIT_PACKED` / `PCM_32BIT` passthrough; on API 26–30 (or whenever `getMinBufferSize <= 0`), losslessly converts 24-bit/32-bit signed little-endian integer PCM to `PCM_FLOAT` (or unsigned 8-bit to `PCM_16BIT`) using reusable zero-allocation buffers.
+  4. Resolved `sourceCodec` cleanly from verified FLAC headers (`"FLAC"` instead of redundant `"FLAC (PCM)"`) and reported exact Stage 2 decoder/encoding labels.
+- **Rationale:**
+  - On Android 16 (API 36) and several Custom ROMs, `MediaExtractor`'s `FlacExtractor` decodes 24-bit/96 kHz FLAC internally and exposes `audio/raw` integer PCM instead of compressed `audio/flac`. Previously, setting `KEY_PCM_ENCODING = ENCODING_PCM_FLOAT` and instantiating `c2.android.raw.decoder` caused the passthrough codec to emit unmodified integer PCM bytes tagged as IEEE-754 float32, producing full-scale white noise.
+  - Reading `audio/raw` directly from `MediaExtractor` eliminates `c2.android.raw.decoder` completely, preserves bit-for-bit integer PCM on API 31+ (making 24-bit/96 kHz FLAC eligible for native integer USB mixer profiles), and guarantees lossless playback across API 26–37.
+- **Rejected Alternatives:** Passing `audio/raw` through `c2.android.raw.decoder` without mutating `KEY_PCM_ENCODING` (adds unnecessary Codec2 IPC/copy overhead and still fails on API 26–30 when `FlacExtractor` emits 24-bit packed integer PCM that `AudioTrack` cannot play natively without float conversion).
+
+---
+
+## D11.2 — Live Turntable Post-Paused-Load Startup Ordering, Start-Threshold Headroom, & `TurntableFlushHeadTracker`
+- **Decision:**
+  1. Ordered cold worker startup in `AudioOutputEngine.play()` and `activateLoadedTrackLocked()` so `startPlaybackWorkerLocked(...)` (returning `Boolean`) requests focus, clears `stopWorkerFlag = false`, sets `isPausedFlag = false`, calls `safePlay(track)`, and spawns `BitPerfectAudioThread` **before** `_state` publishes `PlaybackStatus.PLAYING` (eliminating the race where `beginTurntableScratch()` observed `stopWorkerFlag == true` immediately after `loadTrack(autoPlay = false) -> play()`).
+  2. Added pure-Kotlin **`TurntableScratchPolicy.computeEffectiveScratchMaxAheadFrames(...)`** and **`TurntableFlushHeadTracker`** in `TurntableAudioDsp.kt`:
+     - On API 31+, `AudioTrackWriter.configureScratchStartThreshold(...)` lowers `AudioTrack.startThresholdInFrames` to `~65 ms` (`sampleRate / 15`) on scratch entry (and `restoreDefaultStartThreshold(...)` restores full-buffer threshold on exit), while `computeEffectiveScratchMaxAheadFrames` guarantees `maxAheadFrames > actualStartThreshold` across all API 26–37 devices so AudioFlinger never deadlocks waiting for `startThresholdInFrames` while the scratch loop waits for `playbackHeadPosition` to advance.
+     - `TurntableFlushHeadTracker` tracks a dynamic `headOrigin` + `framesWrittenSinceOrigin` and rebases cleanly whenever an asynchronous `AudioTrack.flush()` drops `playbackHeadPosition` back to `0` after `play()`, eliminating the stale pre-flush head fill-throttle deadlock (silence + frozen `+00:00` delta).
+  3. Added `PlaybackLoopState.ensureSafeModeScratchBuffers(...)` (strictly Safe-Mode-only), `reconcileAsyncFlushReset(...)` for seek flushes, and bounded transient 0-byte retry (`<= 3` reads) in `decodeAheadForForwardScratch(...)` for freshly seeked codecs.
+- **Rationale:**
+  - Directly resolves both hardware/HAL deadlock mechanisms behind post-`loadTrack(autoPlay = false) -> play()` turntable silence (stale pre-flush `playbackHeadPosition` + `startThresholdInFrames > maxAheadFrames`) while preserving strict zero-DSP isolation in `BIT_PERFECT_OPT_IN`.
+- **Rejected Alternatives:** Removing the scratch fill-throttle completely (causes AudioTrack's full 150–250 ms buffer to fill, adding sluggish tactile scratch lag); unconditionally forcing `AudioTrack.startThresholdInFrames = 1` during normal playback (risks startup underruns on Bluetooth/USB routes).
+
+---
+
+## D11.3 — Android 14+ (`API 34+`) USB `MIXER_BEHAVIOR_DEFAULT` Preferred Sample-Rate Negotiation (`UsbMixerProfileSelector`)
+- **Decision:**
+  1. Created pure-Kotlin **`UsbMixerProfileSelector`** (`com.cangkir.bitperfectplayer.audio.UsbMixerProfileSelector`, `0` `android.*` / `androidx.*` imports) computing an ordered `UsbMixerNegotiationPlan` (`BIT_PERFECT` -> `DEFAULT_NATIVE_RATE` -> `NONE`):
+     - In `BIT_PERFECT_OPT_IN`: selects exact `MIXER_BEHAVIOR_BIT_PERFECT` match first; if 0 matching bit-perfect profiles exist (or applying/confirming bit-perfect fails), falls back to `MIXER_BEHAVIOR_DEFAULT` matching the track's native sample rate and channel count (preferring exact encoding -> `PCM_FLOAT` -> `PCM_32BIT` -> `PCM_24BIT_PACKED` -> `PCM_16BIT`).
+     - In `SAFE_VOLUME_MODE`: **strictly never selects `MIXER_BEHAVIOR_BIT_PERFECT`**, negotiating `MIXER_BEHAVIOR_DEFAULT` solely to lock native USB sample rate while keeping Safe Mode system volume control 100% intact.
+  2. Extended `NegotiatedMixerBehavior` with `DEFAULT_NATIVE_RATE` and `AudioDiagnosticSnapshot` with `isNativeSampleRateMixerActive: Boolean = false` (keeping `isBitPerfectMixerActive == false` so neither Diagnostics, Settings, nor Media Notification ever falsely claims Bit-Perfect when `MIXER_BEHAVIOR_DEFAULT` is active).
+  3. Wired `AudioRouteAndMixerManager` to execute the API 34+ negotiation plan, verify via `getPreferredMixerAttributes(...)`, and unconditionally clear preferred attributes via `clearPreferredMixerAttributesOnApi34(...)` on stop, release, route change, mode switch, and track reload.
+- **Rationale:**
+  - On USB-C dongles/ROMs whose Android 14–16 HAL exposes 0 `MIXER_BEHAVIOR_BIT_PERFECT` profiles yet advertises `MIXER_BEHAVIOR_DEFAULT` at `44.1 / 48 / 96 / 192 kHz`, negotiating preferred `MIXER_BEHAVIOR_DEFAULT` at the track's native sample rate avoids unnecessary OS resampling to 48 kHz while preserving full volume safety and honest 6-stage diagnostics.
+- **Rejected Alternatives:** Leaving `SAFE_VOLUME_MODE` and 0-bit-perfect HALs locked to default 48 kHz mixing without requesting the USB HAL's native sample-rate default mixer profile; labeling `DEFAULT_NATIVE_RATE` as "Bit-Perfect" (strictly rejected per honesty invariants).
+
+---
+
+## D11.4 — Strictly Passive Read-Only Queue Top-Bar Navigation
+- **Decision:**
+  1. Made tapping the top-bar Queue icon (`Icons.AutoMirrored.Filled.QueueMusic`) 100% passive (read-only navigation to `QueueScreen`) across every screen and detail view (`All Songs`, `Folders`, `Artists`, `Albums`, `Recent`, `Favorites`, `Playlists`, Album/Artist/Folder/Playlist/Most Played details, and `Now Playing`).
+  2. Removed the obsolete auto-context-switching pathway (`BrowsingQueueContext`, `QueueContextResolver.shouldSwitchToBrowsingContext(...)`, `MainViewModel.prepareQueueScreenContext(...)`, and `PlaybackController.loadContextQueue(...)`) and unified `onOpenQueue: () -> Unit` across `BitPerfectAppNav.kt`, `LibraryScreen.kt`, and `PlaylistsScreen.kt`.
+- **Rationale:**
+  - Opening the playback queue to inspect upcoming tracks must never silently overwrite the active queue or interrupt/pause playback simply because the user is browsing another tab, album, artist, folder, or playlist.
+  - Queue replacement now happens exclusively when the user explicitly plays a track or invokes Play/Enqueue actions.
+- **Rejected Alternatives:** Showing a confirmation modal whenever opening the Queue icon from another view (adds friction to a read-only inspection gesture).
+
+---
+
+## D11.5 — Zero-Dependency Pure-Compose Drag-and-Drop Reordering in `QueueScreen`
+- **Decision:**
+  1. Replaced the Up/Down arrow reorder buttons (`ArrowUpward` / `ArrowDownward`) in `QueueScreen.kt` with a tactile leading `Icons.Rounded.DragHandle` inside a dedicated `48.dp x 48.dp` `Box` (`contentDescription = "Reorder track"`, isolated via `Modifier.semantics(mergeDescendants = true) {}` and decoupled from the middle track-selection `clickable` `Row` and far-right `Remove` `IconButton`).
+  2. Added `entryIds: List<Long>` to `QueueSnapshot<T>` in `PlaybackQueueManager.kt` (backed by monotonically unique internal `QueueEntry.id` values) so every `LazyColumn` row has a globally unique stable key even when duplicate track URIs exist in the queue.
+  3. Added pure-Kotlin `VisibleQueueItemMetric`, `DragSwapDecision`, and `QueueDragReorderMath` (`computeDragSwap` with `2 px` hysteresis + exact offset continuity adjustment, and `computeEdgeAutoScrollPx`) in `QueueContext.kt` (0 `android.*` / `androidx.*` imports).
+  4. Attached a stationary `pointerInput` gesture handler (`PointerEventPass.Initial`, RTL-aware leading `56.dp` handle column) on the `LazyColumn` itself so GPU-only `graphicsLayer { translationY; scaleX; scaleY; shadowElevation }` transforms on the dragged row never shift pointer coordinates mid-drag and normal vertical scrolling across the rest of each row stays untouched. Preserved `firstVisibleItemIndex` scroll anchoring via `requestScrollToItem`, prevented duplicate swaps via `pendingExpectedIndex`, added `withFrameNanos` edge auto-scrolling, and guaranteed drag reset via `DisposableEffect` and single/empty-queue guards.
+- **Rationale:**
+  - Delivers smooth 120 Hz drag-and-drop queue reordering with zero third-party libraries (keeping the R8 Release APK lean at `2.63 MB`), zero duplicate-key crashes, and active-track identity anchored accurately through `PlaybackQueueManager.moveItem(from, to)`.
+- **Rejected Alternatives:** Adding an external Compose reorderable library (unnecessary dependency weight and transitive API churn); placing `pointerInput` inside the translated `QueueTrackRow` (causes coordinate feedback oscillation when `graphicsLayer.translationY` shifts the pointer receiver every frame).
+
+---
+
+## D11.6 — Full-List `All Songs` Search Playback Selection (Option 1)
+- **Decision:**
+  1. Added pure-Kotlin `QueueContextResolver.resolveFullListPlaybackSelection(fullTrackList, tappedTrack, fallbackTracks, fallbackIndex)` in `QueueContext.kt` matching `tappedTrack` by stable `uriString` inside the full sorted `allSongs` list (with safe bounded fallback if absent).
+  2. Wired `LibraryScreen.kt`'s `All Songs` `TrackListView.onPlayTracks` so tapping a track while `searchQuery.isNotBlank()` queues the full sorted `libraryState.allSongs` list starting at that track's exact index under `QueueContext.allSongs()`.
+- **Rationale:**
+  - Previously, tapping a track from a 1-result search created a 1-track queue where Next/Previous/Shuffle could not move to other songs. Loading the full sorted `All Songs` queue at the tapped track's index keeps search fast while preserving full library playback continuity.
+- **Rejected Alternatives:** Queueing only the filtered search hits (breaks Next/Previous/Shuffle whenever a specific title query matches 1 track); appending search results after the current queue (violates direct tap-to-play expectation).
+
+---
+
+## D11.7 — Configurable Default Homepage (`DefaultHomepage`) with One-Shot Startup Latch & Backward-Compatible JSON Backup
+- **Decision:**
+  1. Added pure-Kotlin `DefaultHomepage` enum (`ALL_SONGS`, `FOLDERS`, `ARTISTS`, `ALBUMS`, `RECENT`, `FAVORITES`, `PLAYLISTS`, default `ALL_SONGS`, `0` `android.*` imports) in `PersistenceModels.kt`, persisted under DataStore key `default_homepage` in `UserPreferencesRepository.kt`.
+  2. Included optional top-level `"defaultHomepage"` in `LocalBackupPayload` / `LocalBackupCodec` (`schemaVersion = 1`) and wired `UserPreferencesRepository` into `LocalBackupRepository` so offline `.json` exports save `defaultHomepage` and restores apply it while legacy v1.0/v1.1 backups missing the field safely default to `DefaultHomepage.ALL_SONGS`.
+  3. Latched `MainViewModel.initialStartupHomepage` strictly once in `init` (`compareAndSet(null, loaded)`) and routed startup through `BitPerfectStartupNavHost` (`rememberSaveable` start destination + initial `LibraryTab`) so cold launch lands directly on `Playlists` or the chosen `Library` tab with zero screen flash and never hijacks navigation when the user switches tabs or edits the preference in Settings.
+  4. Added a matte-obsidian `"Default Homepage"` row and `DefaultHomepageBottomSheet` (`ModalBottomSheet` with `>= 48.dp` rows) in `SettingsDisplayAndLibrarySection.kt`.
+- **Rationale:**
+  - Lets users who organize around Albums, Folders, Favorites, or Playlists open directly into their preferred view without breaking navigation restoration, configuration changes, or legacy backup files.
+- **Rejected Alternatives:** Reactive `LaunchedEffect(defaultHomepage)` navigating whenever the preference changes (would kick the user out of Settings immediately upon selecting a new default homepage); bumping `LocalBackupCodec.CURRENT_SCHEMA_VERSION` to `2` (unnecessary breaking change when an optional field preserves 100% forward/backward schema compatibility).
+
+---
+
+## D11.8 — Full Uncropped Album Artwork (`ContentScale.Fit`) & Option B Circular Vinyl Disc + `v1.2` Version Bump
+- **Decision:**
+  1. Extracted pure-Kotlin `ArtworkDimensions` and `AlbumArtworkHelper.computeProportionalTargetDimensions(srcWidth, srcHeight, maxDimensionPx, toleranceScale)` (`Double` scale precision, `0` `android.*` imports) and delegated `AlbumArtworkLoader.constrainMaxDimension` to it so square, landscape (`16:9`, `4:3`), and portrait covers strictly preserve their original aspect ratio during decode and cache generation (never center-cropped).
+  2. Updated `TrackArtworkThumbnail` in `UiComponents.kt` (shared across `LibraryTrackList`, `LibraryGroupViews`, `PlaylistsOverview`, `PlaylistDetailView`, `QueueScreen`, `MiniPlayerBar`, and `SwipeableSquareArtwork`) to render `Image(..., contentScale = ContentScale.Fit)` on a matte-dark `MaterialTheme.colorScheme.surfaceVariant` container backdrop with rounded corners.
+  3. Preserved authentic **Option B** circular vinyl disc framing in `VinylDiscPlayer.kt` (`CircleShape` + uniform, distortion-free `ContentScale.Crop` over the aspect-preserved bitmap).
+  4. Bumped `app/build.gradle.kts` to **`versionName = "1.2"` (`versionCode = 3`)** (and updated `SettingsScreen.kt` fallback version string to `"1.2"`).
+- **Rationale:**
+  - Square `1:1` covers fill rectangular/square containers edge-to-edge seamlessly, while non-square covers (`16:9`, `4:3`, portrait) stay 100% uncropped across every browsing and playback surface without compromising the authentic circular vinyl label aesthetic.
+- **Rejected Alternatives:** Forcing a shrunken square inside the circular vinyl center label (Option A; degrades turntable visual fidelity); mutating container aspect ratios per row in `LazyColumn` (breaks vertical rhythm and hairline divider alignment across track lists).
+
+---
+
+## D11.9 — Opt-In Local Diagnostic Logging Subsystem, Bounded Rotation, Zero-PII Export/Share, & R8 Stacktrace Retention
+- **Decision:**
+  1. **Default OFF & Opt-In Only:** Added `diagnosticLoggingEnabled: Boolean = false` to `UserPreferences` (`UserPreferencesRepository`), intentionally excluded from `LocalBackupCodec` `.json` restore so importing a backup never silently enables diagnostic recording. When OFF, `LocalDiagnosticLogger` performs only a single `@Volatile Boolean` check in `inline` log helpers (zero lambda/map/string allocations), writes zero files, spawns no background writer thread, and captures zero crash traces.
+  2. **Pure-Kotlin Domain Core (`com.cangkir.bitperfectplayer.diagnostics`, `0` `android.*`/`androidx.*` imports):**
+     - `DiagnosticLogChannel`: separates output cleanly across 4 files inside app-private `filesDir/diagnostic_logs/` (`device_summary.txt`, `audio_pipeline.txt`, `performance.txt`, `errors_and_crashes.txt`) plus `.prev.txt` backups.
+     - `DiagnosticLogFormatter`: emits agent-readable single-line UTC ISO-8601 `YYYY-MM-DDTHH:mm:ss.SSSZ <LEVEL> <CHANNEL> <EVENT> key=value` records, `--- CRASH_START ---`/`--- CRASH_END ---` blocks, allowlisted audio extension extraction, 8-char lowercase SHA-256 prefixing, and defense-in-depth redaction of forbidden PII keys, `content://`/`file://` URIs, and `/storage/`/`/sdcard/` paths.
+     - `DiagnosticLogRotationPolicy`: caps each append channel at `256 KB` with max `1` `.prev.txt` backup (`< 2 MB` total local footprint) and writes `device_summary.txt` atomically.
+     - `DiagnosticLogBuffer`: bounded `512`-entry drop-oldest ring buffer so producers never block on disk I/O.
+  3. **Non-Blocking Android Runtime, Zero-Permission Export/Share, & R8 Keep Rules:**
+     - `LocalDiagnosticLogger` uses a lazily started low-priority daemon thread (`BitPerfectDiagWriter`, `ReentrantLock` + `Condition`, 3-second batch flush + flush on pause/stop/background/export).
+     - `DiagnosticCrashHandler` chains `Thread.setDefaultUncaughtExceptionHandler` strictly when enabled and always delegates to the previous handler.
+     - `DiagnosticLogExporter` uses standard JDK `ZipOutputStream` (zero external libraries) to bundle `README_LOGS.txt` + all non-empty log files via SAF `ActivityResultContracts.CreateDocument("application/zip")` (**Export Logs (.zip)**) and non-exported `androidx.core.content.FileProvider` scoped strictly to `cacheDir/diagnostic_exports/` via `res/xml/file_paths.xml` (**Share Logs**), adding **zero** Android permissions.
+     - Added `-keepattributes SourceFile,LineNumberTable` to `app/src/main/keepRules/rules.keep` (AGP `9.5.2`'s active R8 keep rules file; `app/proguard-rules.pro` does not exist in this baseline). Teams publishing signed Release APKs should archive `app/build/outputs/mapping/release/mapping.txt` alongside each build to deobfuscate Release crash blocks with `retrace`.
+  4. **Modular Settings UI (`SettingsDiagnosticLoggingSection.kt`):** Added a dedicated `DIAGNOSTIC LOGGING` matte-obsidian card in `SettingsScreen.kt` with opt-in toggle, live `Stored Logs` footprint (`3 files · 14.2 KB` / `No logs stored`), `>= 48.dp` **Export Logs (.zip)**, **Share Logs**, and **Clear Logs** actions.
+- **Rationale:**
+  - Gives non-root Release APK users a clean, privacy-preserving, one-tap way to collect structured audio HAL, `audio/raw`, USB mixer, turntable, FGS handshake, latency/underrun, and crash diagnostics on real devices without touching `adb`, degrading 120 Hz rendering, or risking audio glitches or library PII leakage.
+- **Rejected Alternatives:** Writing a single unbounded monolithic log file (unreadable by agents and risks unbounded disk growth); auto-enabling logging on fresh install (violates strict opt-in privacy posture); writing to public `Downloads/` with legacy storage permissions (unnecessary permissions); adding external logging or ZIP libraries such as Timber/Zip4j (unnecessary APK bloat when JDK `ZipOutputStream` + pure Kotlin keeps the R8 Release APK at `2.70 MB`).
+
+---
+
+## D11.10 — `v1.2` Adversarial 7-Domain Audit Hardening
+- **Decision:**
+  1. **Strict `trackFormat`-Only Raw PCM Framing (`RawExtractorPcmDecoder`):** Removed `?: flacInfo?.bitsPerSample` fallback from `reportedBitsPerSample` so direct `audio/raw` byte framing always matches the extractor's actual wire format (`KEY_PCM_ENCODING` -> `"bits-per-sample"` / `"bit-depth"` -> `PCM_16BIT`), while keeping `flacInfo?.bitsPerSample` exclusively for honest Stage 1 `sourceBitDepth` reporting.
+  2. **Allocation-Free Float32 PCM Conversion (`PcmStreamRules`):** Converted little-endian PCM bytes to `FloatArray` using direct bit shifts + `Float.fromBits(...)` instead of allocating a temporary `HeapByteBuffer` on every write buffer.
+  3. **Exception-Safe USB Mixer Cleanup (`AudioTrackWriter`):** Added `try { ...; trackBuilt = true } finally { if (!trackBuilt) clearPreferredMixerAttributesOnApi34(usbDevice) }` around `AudioTrack.Builder().build()` so preferred mixer attributes can never leak on construction failure.
+  4. **Debounced Mid-Drag Gapless Sync (`PlaybackController`):** Debounced `syncNextTrackToEngine()` by `250 ms` during `moveQueueItem` (canceled on direct sync/`stop`/`release`) so dragging across `currentIndex + 1` in the last 8 seconds of playback never thrashes `GaplessPreloadController`.
+  5. **Bounded Crash Lock, Zero-CPU Disabled Park, Lazy Cold-Start Summary, & Expanded PII Redaction (`LocalDiagnosticLogger`, `DiagnosticLogFormatter`, `BitPerfectApplication`):** Guarded `writeCrashSync` with `fileWriteLock.tryLock(500L, TimeUnit.MILLISECONDS)`, parked `BitPerfectDiagWriter` indefinitely via `signalCondition.await()` when disabled, gated `buildDeviceSummaryFields` behind `prefs.diagnosticLoggingEnabled` + `playbackControllerLazy.isInitialized()`, and added `redactFilenameAndPaths(...)` covering bare filenames, `/data/user/...`, `/data/data/...`, and SAF volume-colon document IDs.
+- **Rationale:**
+  - Eliminates real-world failure modes (16-bit vs 24-bit raw framing mismatch, per-buffer GC churn, USB mixer attribute leaks, mid-drag decoder thrashing, crash-handler disk deadlocks, eager cold-start controller initialization on IO, and accidental filename leaks in exception messages) with minimal, localized, zero-regression changes.
+- **Rejected Alternatives:** Swallowing `RuntimeException` in `AudioTrackWriter` (breaks detekt `TooGenericExceptionCaught` and obscures real builder errors); terminating and recreating `BitPerfectDiagWriter` thread on every toggle (unnecessary thread lifecycle churn compared to an indefinite `Condition.await()` park).
+
+---
+
+## D11.11 — `v1.2` Real-Device POCO F4 Logcat & Video Polish (Queue Transition, Deferred Paused Route Reconfigure, & Settings JIT Split)
+- **Decision:**
+  1. **Zero-Overlap `QueueScreen` Navigation & Lean Row Composition (`BitPerfectAppNav.kt`, `QueueScreen.kt`, `UiComponents.kt`):**
+     - Replaced Navigation Compose's default 700 ms crossfade on `NavHost` with crisp `120 ms` / `90 ms` fades and set `EnterTransition.None` / `ExitTransition.None` on `Routes.QUEUE` so `LibraryScreen`'s lower-positioned track rows never bleed through `QueueScreen` during `bottomBar` hide/show and both full `LazyColumn` screens never lay out simultaneously on open/close.
+     - Initialized `rememberLazyListState(initialFirstVisibleItemIndex = ...)` directly (`0` when `currentIndex <= 3`, or `(currentIndex - 1)` when deeper in the queue), eliminated the `O(N)` `.map { it as Any }` copy for `entryIds`, passed stable primitives/shared callbacks to `QueueTrackRow`, skipped `graphicsLayer` RenderNodes on stationary rows, and memoized `RoundedCornerShape(cornerRadius)` in `TrackArtworkThumbnail`.
+  2. **Deferred Paused Route-Change Reconfigure (`RouteChangeReconfigurePolicy.kt`, `AudioOutputEngine.kt`):**
+     - Extracted pure-Kotlin `RouteChangeReconfigurePolicy` (`0` `android.*` imports) so when an `AUTO_PAUSE` route/device/noisy event (such as virtual screen-recording audio sinks) arrives while playback is already paused, `AudioOutputEngine` still clears stale USB preferred mixer attributes, updates 6-stage diagnostics, preserves Safe Mode auto-pause notices, and sets `pendingRouteReconfigureOnPlay = true` — avoiding redundant `MediaCodec` + `AudioTrack` teardown/re-creation cycles (`mId: 0 -> 1 -> 2`) while paused, then cleanly reloading once on the next `play()` (keeping paused `seekTo()` and post-paused Live Turntable scrubbing 100% functional). Explicit Safe Mode / Bit-Perfect toggles and active-playback auto-pauses continue to reconfigure immediately.
+  3. **ART-JIT-Lean `SettingsAudioEngineSection` (`SettingsAudioSection.kt`, `SettingsScreen.kt`):**
+     - Grouped parameters into `SettingsAudioEngineUiState` and memoized `SettingsAudioEngineCallbacks`, and decomposed the 255-line inner lambda into 6 compact `private @Composable` helpers (`SettingsGaplessPlaybackRow`, `SettingsReplayGainSection`, `SettingsReplayGainModeSelector`, `SettingsReplayGainActiveControls`, `SettingsSleepTimerRow`, `SettingsDiagnosticsShortcutRow`) to eliminate the ~6.8 MB ART JIT spike observed in device logcat while preserving exact UI layout and behavior.
+- **Rationale:**
+  - Directly resolves all three real-device POCO F4 video and logcat observations with surgical, testable, zero-regression changes prior to merging `v1.2` into `main`.
+- **Rejected Alternatives:** Filtering out `TYPE_REMOTE_SUBMIX` in `AudioDeviceCallback` (risks ignoring genuine OEM/HAL route transitions on Android 14–16 instead of cleanly deferring paused reloads for *all* routes); adding a post-composition `LaunchedEffect { listState.scrollToItem(...) }` in `QueueScreen` (causes visible post-first-frame scroll jumps).
+
+
+
+
+

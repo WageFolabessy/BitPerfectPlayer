@@ -107,14 +107,24 @@ fun TrackArtworkThumbnail(
         }
     }
 
-    val shape = RoundedCornerShape(cornerRadius)
+    val shape = remember(cornerRadius) { RoundedCornerShape(cornerRadius) }
     val iconSize = (size * 0.42f).coerceIn(18.dp, 52.dp)
+    val currentBitmap = bitmap
+    val imageBitmap = remember(currentBitmap) {
+        if (currentBitmap != null && !currentBitmap.isRecycled) currentBitmap.asImageBitmap() else null
+    }
 
     Box(
         modifier = modifier
             .size(size)
             .clip(shape)
-            .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+            .background(
+                if (imageBitmap != null) {
+                    MaterialTheme.colorScheme.surfaceVariant
+                } else {
+                    MaterialTheme.colorScheme.surfaceContainerHighest
+                },
+            )
             .border(
                 width = 0.5.dp,
                 color = MaterialTheme.colorScheme.outline.copy(alpha = 0.55f),
@@ -122,15 +132,11 @@ fun TrackArtworkThumbnail(
             ),
         contentAlignment = Alignment.Center,
     ) {
-        val currentBitmap = bitmap
-        val imageBitmap = remember(currentBitmap) {
-            if (currentBitmap != null && !currentBitmap.isRecycled) currentBitmap.asImageBitmap() else null
-        }
         if (imageBitmap != null) {
             Image(
                 bitmap = imageBitmap,
                 contentDescription = contentDescriptionText ?: track?.let { "Album art for ${it.title}" },
-                contentScale = ContentScale.Crop,
+                contentScale = ContentScale.Fit,
                 modifier = Modifier.fillMaxSize(),
             )
         } else {

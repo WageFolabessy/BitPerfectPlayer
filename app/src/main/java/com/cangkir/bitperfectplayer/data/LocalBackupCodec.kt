@@ -18,6 +18,7 @@ data class LocalBackupPayload(
     val schemaVersion: Int = LocalBackupCodec.CURRENT_SCHEMA_VERSION,
     val appId: String = LocalBackupCodec.APP_ID,
     val exportedAtEpochMs: Long = 0L,
+    val defaultHomepage: DefaultHomepage = DefaultHomepage.ALL_SONGS,
     val playlists: List<BackupPlaylist> = emptyList(),
     val lyrics: List<LyricsRecord> = emptyList(),
     val favorites: List<FavoriteTrackRecord> = emptyList(),
@@ -48,6 +49,9 @@ object LocalBackupCodec {
         appendJsonString(sb, payload.appId)
         sb.append(",\n")
         sb.append("  \"exportedAtEpochMs\": ").append(payload.exportedAtEpochMs.coerceAtLeast(0L)).append(",\n")
+        sb.append("  \"defaultHomepage\": ")
+        appendJsonString(sb, payload.defaultHomepage.name)
+        sb.append(",\n")
 
         appendPlaylistsJson(sb, payload.playlists)
         appendLyricsJson(sb, payload.lyrics)
@@ -194,11 +198,13 @@ object LocalBackupCodec {
 
         val appId = root.optionalString("appId") ?: APP_ID
         val exportedAt = root.optionalLong("exportedAtEpochMs")?.coerceAtLeast(0L) ?: 0L
+        val defaultHomepage = DefaultHomepage.fromStoredName(root.optionalString("defaultHomepage"))
 
         LocalBackupPayload(
             schemaVersion = schemaVersion,
             appId = appId,
             exportedAtEpochMs = exportedAt,
+            defaultHomepage = defaultHomepage,
             playlists = decodePlaylists(root.requireArray("playlists")),
             lyrics = decodeLyrics(root.requireArray("lyrics")),
             favorites = decodeFavorites(root.requireArray("favorites")),

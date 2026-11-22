@@ -1,20 +1,21 @@
 package com.cangkir.bitperfectplayer.ui
 
+import android.content.Intent
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.cangkir.bitperfectplayer.AppContainer
-import com.cangkir.bitperfectplayer.audio.BrowsingQueueContext
 import com.cangkir.bitperfectplayer.audio.PlaybackControllerState
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
 import com.cangkir.bitperfectplayer.audio.QueueContext
-import com.cangkir.bitperfectplayer.audio.QueueContextResolver
 import com.cangkir.bitperfectplayer.audio.ReplayGainMode
 import com.cangkir.bitperfectplayer.audio.SleepTimerPreset
 import com.cangkir.bitperfectplayer.audio.SleepTimerState
+import com.cangkir.bitperfectplayer.data.DefaultHomepage
 import com.cangkir.bitperfectplayer.data.NowPlayingArtworkStyle
 import com.cangkir.bitperfectplayer.data.SpectrumColorStyle
+import com.cangkir.bitperfectplayer.diagnostics.DiagnosticLogStats
 import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
 import com.cangkir.bitperfectplayer.library.GroupSortScope
 import com.cangkir.bitperfectplayer.library.GroupSortSpec
@@ -25,6 +26,7 @@ import com.cangkir.bitperfectplayer.library.TrackSortScope
 import com.cangkir.bitperfectplayer.library.TrackSortSpec
 import com.cangkir.bitperfectplayer.library.TrackTechnicalInfo
 import com.cangkir.bitperfectplayer.lyrics.TrackLyricsState
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -37,6 +39,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 data class LyricsUiState(
     val trackUri: String? = null,
@@ -57,6 +60,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     val playbackPositionMs: StateFlow<Long> = container.playbackController.playbackPositionMs
     val sleepTimerState: StateFlow<SleepTimerState> = container.playbackController.sleepTimerState
     val albumArtworkLoader: AlbumArtworkLoader = container.albumArtworkLoader
+    val diagnosticLogStats: StateFlow<DiagnosticLogStats> = container.diagnosticLogger.storageStats
 
     /**
      * Single reactive source of truth for favorited track URIs (Room Flow + instant optimistic
@@ -116,6 +120,34 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
             initialValue = true,
         )
 
+    /** Persisted startup homepage preference shown and updated in Settings. */
+    val defaultHomepage: StateFlow<DefaultHomepage> = container.preferencesRepository.preferencesFlow
+        .map { it.defaultHomepage }
+        .distinctUntilChanged()
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.Eagerly,
+            initialValue = DefaultHomepage.ALL_SONGS,
+        )
+
+    /** Persisted opt-in local diagnostic logging flag (`false` by default). */
+    val diagnosticLoggingEnabled: StateFlow<Boolean> = container.preferencesRepository.preferencesFlow
+        .map { it.diagnosticLoggingEnabled }
+        .distinctUntilChanged()
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.Eagerly,
+            initialValue = false,
+        )
+
+    /**
+     * Latched strictly ONCE per ViewModel lifetime when DataStore emits its initial snapshot so
+     * cold startup opens the configured homepage cleanly without ever hijacking subsequent user
+     * tab switches or Settings changes.
+     */
+    private val _initialStartupHomepage = MutableStateFlow<DefaultHomepage?>(null)
+    val initialStartupHomepage: StateFlow<DefaultHomepage?> = _initialStartupHomepage.asStateFlow()
+
     private val _lyricsUiState = MutableStateFlow(LyricsUiState())
     val lyricsUiState: StateFlow<LyricsUiState> = _lyricsUiState.asStateFlow()
 
@@ -127,6 +159,11 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     val uiMessage: StateFlow<String?> = _uiMessage.asStateFlow()
 
     init {
+        viewModelScope.launch {
+            val loadedHomepage = container.preferencesRepository.getSnapshot().defaultHomepage
+            _initialStartupHomepage.compareAndSet(null, loadedHomepage)
+        }
+
         // Trigger incremental background sync while cached tracks from Room render immediately.
         refreshLibrary()
 
@@ -202,32 +239,6 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
             autoPlay = true,
             context = context,
         )
-    }
-
-    /**
-     * Synchronizes the active playback queue in real time with the Album/Artist/Folder/Playlist/
-     * Recent/Favorites/Most Played view currently open when navigating to `QueueScreen`:
-     * - When viewing a different non-empty scoped context (never `All Songs`), immediately replaces
-     *   the active queue paused (`autoPlay = false`, safely halting prior audio without auto-blast).
-     * - When opened from `NowPlayingScreen`, `All Songs`, or the same already-active context,
-     *   preserves the active queue and active playback untouched.
-     */
-    fun prepareQueueScreenContext(browsingContext: BrowsingQueueContext?) {
-        val currentState = playbackState.value
-        if (
-            browsingContext != null &&
-            QueueContextResolver.shouldSwitchToBrowsingContext(
-                activeContext = currentState.queueContext,
-                isActiveQueueEmpty = currentState.queue.isEmpty,
-                browsingContext = browsingContext,
-            )
-        ) {
-            container.playbackController.loadContextQueue(
-                tracks = browsingContext.tracks,
-                context = browsingContext.context,
-                autoPlay = false,
-            )
-        }
     }
 
     fun playTrackAtQueueIndex(index: Int) {
@@ -323,6 +334,78 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
 
+    fun setDefaultHomepage(homepage: DefaultHomepage) {
+        viewModelScope.launch {
+            container.preferencesRepository.setDefaultHomepage(homepage)
+        }
+    }
+
+    fun setDiagnosticLoggingEnabled(enabled: Boolean) {
+        container.diagnosticLogger.setEnabled(enabled)
+        viewModelScope.launch {
+            container.preferencesRepository.setDiagnosticLoggingEnabled(enabled)
+            if (enabled) {
+                val prefs = container.preferencesRepository.getSnapshot()
+                container.diagnosticLogger.writeDeviceSummary(container.buildDeviceSummaryFields(prefs))
+            }
+            _uiMessage.value = if (enabled) {
+                "Local diagnostic logging enabled (stored privately on-device)"
+            } else {
+                "Local diagnostic logging paused"
+            }
+        }
+    }
+
+    fun refreshDiagnosticLogStats() {
+        viewModelScope.launch(Dispatchers.IO) {
+            container.diagnosticLogger.refreshStorageStatsSync()
+        }
+    }
+
+    fun exportDiagnosticLogs(destinationUri: Uri) {
+        viewModelScope.launch {
+            val summaryFields = if (container.diagnosticLogger.isEnabled) {
+                container.buildDeviceSummaryFields(container.preferencesRepository.getSnapshot())
+            } else {
+                null
+            }
+            container.diagnosticLogExporter.exportToUri(destinationUri, summaryFields)
+                .onSuccess { res ->
+                    val label = if (res.fileCount == 1) "file" else "files"
+                    _uiMessage.value = "Exported ${res.fileCount} diagnostic log $label (.zip)"
+                }
+                .onFailure { err ->
+                    _uiMessage.value = err.message ?: "Unable to export diagnostic logs"
+                }
+        }
+    }
+
+    fun shareDiagnosticLogs(onShareReady: (Intent) -> Unit) {
+        viewModelScope.launch {
+            val summaryFields = if (container.diagnosticLogger.isEnabled) {
+                container.buildDeviceSummaryFields(container.preferencesRepository.getSnapshot())
+            } else {
+                null
+            }
+            container.diagnosticLogExporter.prepareShareIntent(summaryFields)
+                .onSuccess { res ->
+                    onShareReady(res.shareIntent)
+                }
+                .onFailure { err ->
+                    _uiMessage.value = err.message ?: "Unable to prepare diagnostic logs for sharing"
+                }
+        }
+    }
+
+    fun clearDiagnosticLogs() {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                container.diagnosticLogger.clearAllLogs()
+            }
+            _uiMessage.value = "Cleared local diagnostic logs"
+        }
+    }
+
     fun setSpectrumVisualizerActive(active: Boolean) {
         container.playbackController.setSpectrumTapActive(active)
     }
@@ -395,6 +478,12 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
 
     fun confirmBitPerfectWarning() {
         container.playbackController.confirmBitPerfectWarning()
+        if (container.diagnosticLogger.isEnabled) {
+            viewModelScope.launch {
+                val prefs = container.preferencesRepository.getSnapshot()
+                container.diagnosticLogger.writeDeviceSummary(container.buildDeviceSummaryFields(prefs))
+            }
+        }
     }
 
     fun dismissSafetyWarning() {
@@ -403,6 +492,12 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
 
     fun switchToSafeMode() {
         container.playbackController.switchToSafeMode()
+        if (container.diagnosticLogger.isEnabled) {
+            viewModelScope.launch {
+                val prefs = container.preferencesRepository.getSnapshot()
+                container.diagnosticLogger.writeDeviceSummary(container.buildDeviceSummaryFields(prefs))
+            }
+        }
         _uiMessage.value = "Switched to Safe Mode (System Volume Active)"
     }
 

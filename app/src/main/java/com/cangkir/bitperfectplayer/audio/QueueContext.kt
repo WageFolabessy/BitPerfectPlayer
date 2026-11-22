@@ -141,41 +141,43 @@ data class QueueContext(
 }
 
 /**
- * Snapshot of the Album, Artist, Folder, Playlist, Recent, Favorites, or Most Played view currently
- * open when the user navigates to `QueueScreen`, allowing real-time context-aware queue switching
- * (loaded paused for hearing safety).
- */
-data class BrowsingQueueContext(val context: QueueContext, val tracks: List<PlaybackTrack>)
-
-/**
  * Resolved queue track list, starting index, and effective context for cold-start session restoration.
  */
 data class RestoredQueueSelection(val tracks: List<PlaybackTrack>, val startIndex: Int, val context: QueueContext)
 
 /**
- * Pure-Kotlin queue context policy & session restoration resolver ensuring:
- * 1. Opening `QueueScreen` from a scoped view (Album, Artist, Folder, Playlist, Recent, Favorites,
- *    or Most Played) immediately aligns the active queue with that view (loaded paused) whenever
- *    it differs from the active queue context, while preserving active playback when opened from
- *    `NowPlayingScreen`, `All Songs`, or the same already-active view.
- * 2. App relaunch restores ONLY the exact saved Album, Artist, Folder, Playlist, Recent, or
+ * Pure-Kotlin queue context & session restoration resolver (zero `android.*` imports):
+ * 1. Opening `QueueScreen` is strictly passive (read-only) and never replaces the active queue or
+ *    interrupts playback.
+ * 2. Tapping a searched track in `All Songs` resolves its exact index inside the full sorted
+ *    `allSongs` list via [resolveFullListPlaybackSelection] so Next/Previous/Shuffle operate across
+ *    the entire library.
+ * 3. App relaunch restores ONLY the exact saved Album, Artist, Folder, Playlist, Recent, or
  *    Favorites track list (in its proper sorted order), falling back cleanly to `All Songs` only
  *    if the saved context was deleted or no longer holds the last active track.
  */
 object QueueContextResolver {
 
     /**
-     * Returns `true` when opening `QueueScreen` from [browsingContext] should immediately replace
-     * the active queue (loaded paused, never auto-playing) with [browsingContext]'s ordered tracks.
+     * Resolves the playback track list and starting index when tapping [tappedTrack] from a
+     * filtered view over [fullTrackList] (e.g., searching inside the `All Songs` tab).
+     *
+     * Matches by stable `uriString` inside [fullTrackList] so Next, Previous, and Shuffle operate
+     * across the full sorted list. Falls back safely to [fallbackTracks] at [fallbackIndex] only
+     * when [tappedTrack] is absent from [fullTrackList].
      */
-    fun shouldSwitchToBrowsingContext(
-        activeContext: QueueContext,
-        isActiveQueueEmpty: Boolean,
-        browsingContext: BrowsingQueueContext?,
-    ): Boolean {
-        if (browsingContext == null || browsingContext.tracks.isEmpty()) return false
-        if (browsingContext.context.sourceType == QueueSourceType.ALL_SONGS) return false
-        return isActiveQueueEmpty || !activeContext.matches(browsingContext.context)
+    fun resolveFullListPlaybackSelection(
+        fullTrackList: List<PlaybackTrack>,
+        tappedTrack: PlaybackTrack,
+        fallbackTracks: List<PlaybackTrack>,
+        fallbackIndex: Int,
+    ): Pair<List<PlaybackTrack>, Int> {
+        val fullIndex = fullTrackList.indexOfFirst { it.uriString == tappedTrack.uriString }
+        return if (fullIndex >= 0) {
+            fullTrackList to fullIndex
+        } else {
+            fallbackTracks to fallbackIndex.coerceIn(0, fallbackTracks.lastIndex.coerceAtLeast(0))
+        }
     }
 
     fun resolveSessionRestore(
@@ -231,5 +233,82 @@ object QueueContextResolver {
             startIndex = fallbackIndex,
             context = QueueContext.allSongs(),
         )
+    }
+}
+
+/**
+ * Pure-Kotlin layout snapshot of a single visible queue row for drag-and-drop midpoint math.
+ */
+data class VisibleQueueItemMetric(val index: Int, val offsetPx: Int, val sizePx: Int)
+
+/**
+ * Pure-Kotlin swap decision emitted when a dragged queue row crosses a neighbor's midpoint.
+ */
+data class DragSwapDecision(val fromIndex: Int, val toIndex: Int, val offsetAdjustmentPx: Float)
+
+/**
+ * Pure-Kotlin drag-and-drop swap hysteresis and edge auto-scroll math for `QueueScreen`
+ * (zero `android.*` / `androidx.*` imports).
+ */
+object QueueDragReorderMath {
+    private const val SWAP_HYSTERESIS_PX = 2f
+
+    fun computeDragSwap(
+        draggedItem: VisibleQueueItemMetric,
+        draggedDistanceY: Float,
+        visibleItems: List<VisibleQueueItemMetric>,
+    ): DragSwapDecision? {
+        if (draggedItem.sizePx <= 0 || !draggedDistanceY.isFinite() || draggedDistanceY == 0f) return null
+        val draggedTop = draggedItem.offsetPx + draggedDistanceY
+        val draggedBottom = draggedTop + draggedItem.sizePx
+
+        return if (draggedDistanceY > 0f) {
+            val next = visibleItems.firstOrNull { it.index == draggedItem.index + 1 } ?: return null
+            val targetMidY = next.offsetPx + next.sizePx / 2f
+            if (draggedBottom > targetMidY + SWAP_HYSTERESIS_PX) {
+                DragSwapDecision(
+                    fromIndex = draggedItem.index,
+                    toIndex = next.index,
+                    offsetAdjustmentPx = -(next.offsetPx - draggedItem.offsetPx).toFloat(),
+                )
+            } else {
+                null
+            }
+        } else {
+            val prev = visibleItems.firstOrNull { it.index == draggedItem.index - 1 } ?: return null
+            val targetMidY = prev.offsetPx + prev.sizePx / 2f
+            if (draggedTop < targetMidY - SWAP_HYSTERESIS_PX) {
+                DragSwapDecision(
+                    fromIndex = draggedItem.index,
+                    toIndex = prev.index,
+                    offsetAdjustmentPx = -(prev.offsetPx - draggedItem.offsetPx).toFloat(),
+                )
+            } else {
+                null
+            }
+        }
+    }
+
+    fun computeEdgeAutoScrollPx(
+        draggedTop: Float,
+        draggedBottom: Float,
+        viewportStart: Int,
+        viewportEnd: Int,
+        edgeZonePx: Float,
+        maxSpeedPx: Float,
+        canScrollBackward: Boolean,
+        canScrollForward: Boolean,
+    ): Float {
+        val viewportHeight = (viewportEnd - viewportStart).coerceAtLeast(1)
+        val effectiveZone = minOf(edgeZonePx, viewportHeight * 0.25f).coerceAtLeast(1f)
+        val topOverlap = (viewportStart + effectiveZone) - draggedTop
+        val bottomOverlap = draggedBottom - (viewportEnd - effectiveZone)
+        return when {
+            topOverlap > 0f && canScrollBackward ->
+                -((topOverlap / effectiveZone).coerceIn(0f, 1f) * maxSpeedPx)
+            bottomOverlap > 0f && canScrollForward ->
+                ((bottomOverlap / effectiveZone).coerceIn(0f, 1f) * maxSpeedPx)
+            else -> 0f
+        }
     }
 }
