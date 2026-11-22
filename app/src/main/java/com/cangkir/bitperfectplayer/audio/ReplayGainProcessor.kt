@@ -82,6 +82,7 @@ data class ReplayGainResolution(
  * ReplayGain is unconditionally bypassed (`linearGain = 1.0f`, zero sample modification).
  */
 object ReplayGainProcessor {
+    const val BYPASSED_BIT_PERFECT_OPT_IN_LABEL = "ReplayGain: Bypassed (Bit-Perfect Opt-In)"
     private const val UNITY_EPSILON = 1e-5f
     private const val INT24_MIN = -8_388_608
     private const val INT24_MAX = 8_388_607
@@ -104,7 +105,7 @@ object ReplayGainProcessor {
                 appliedGainDb = null,
                 peakClamped = false,
                 diagnosticState = ReplayGainDiagnosticState.BYPASSED_BIT_PERFECT,
-                diagnosticLabel = "ReplayGain: Bypassed (Bit-Perfect Active)",
+                diagnosticLabel = BYPASSED_BIT_PERFECT_OPT_IN_LABEL,
             )
         }
 

@@ -422,8 +422,11 @@ class PlaybackForegroundService : Service() {
 
     private fun resolveNotificationSubtitle(state: PlaybackControllerState): String {
         val track = state.activeTrack
-        val diagnosticsMatchTrack = track != null &&
-            state.engineState.activeTrackUri?.toString() == track.uriString
+        val diagnosticsMatchTrack = TrackTransitionStatePolicy.isEngineSyncedToActiveTrack(
+            activeTrack = track,
+            engineTrackUri = state.engineState.activeTrackUri?.toString(),
+            engineStatus = state.engineState.status,
+        )
         val diag = state.engineState.diagnostics
         return NotificationSubtitleFormatter.format(
             track = track,

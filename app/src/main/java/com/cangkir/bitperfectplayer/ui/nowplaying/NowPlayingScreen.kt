@@ -298,12 +298,7 @@ fun NowPlayingScreen(
             isSafe -> "Safe Mode"
             else -> "Clean Native"
         }
-        val formatSpecText = remember(diagnostics.sourceFormatSummary, track.formatBadge) {
-            diagnostics.sourceFormatSummary
-                .takeIf { it != "No active track loaded" }
-                ?.replace(" • ", " · ")
-                ?: track.formatBadge
-        }
+        val formatSpecText = playbackState.displayFormatSpec
 
         // Decoupled scrub preview state holder: NEVER read `.value` inside NowPlayingScreen root
         // so rotational vinyl scrubbing/coasting updates ONLY the pill leaf and NowPlayingSeekSection.

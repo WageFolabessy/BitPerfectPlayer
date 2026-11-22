@@ -45,7 +45,20 @@ data class PlaybackControllerState(
         get() = engineState.isPlaying
 
     val durationMs: Long
-        get() = engineState.durationMs.takeIf { it > 0L } ?: activeTrack?.durationMs ?: 0L
+        get() = TrackTransitionStatePolicy.resolveDisplayDurationMs(
+            activeTrack = activeTrack,
+            engineTrackUri = engineState.activeTrackUri?.toString(),
+            engineStatus = engineState.status,
+            engineDurationMs = engineState.durationMs,
+        )
+
+    val displayFormatSpec: String
+        get() = TrackTransitionStatePolicy.resolveDisplayFormatSpec(
+            activeTrack = activeTrack,
+            engineTrackUri = engineState.activeTrackUri?.toString(),
+            engineStatus = engineState.status,
+            diagnosticsSourceFormatSummary = engineState.diagnostics.sourceFormatSummary,
+        )
 }
 
 /**
@@ -134,10 +147,25 @@ class PlaybackController(
         // Mirror engine state updates and persist playback position periodically while playing.
         scope.launch {
             engine.state.collect { engineState ->
-                if (engineState.durationMs > 0L) {
+                val engineUri = engineState.activeTrackUri?.toString()
+                val activeUri = _state.value.activeTrack?.uriString
+                if (engineState.durationMs > 0L && (activeUri == null || engineUri == activeUri)) {
                     playCountTracker.updateDuration(engineState.durationMs)
                 }
-                _state.update { it.copy(engineState = engineState) }
+                _state.update { current ->
+                    val currentActive = current.activeTrack
+                    val matchesCurrentActive = currentActive == null || engineUri == null || engineUri == currentActive.uriString
+                    if (matchesCurrentActive) {
+                        current.copy(engineState = engineState)
+                    } else {
+                        current.copy(
+                            engineState = current.engineState.copy(
+                                safetyState = engineState.safetyState,
+                                lastAutoPauseNotice = engineState.lastAutoPauseNotice,
+                            ),
+                        )
+                    }
+                }
                 if (engineState.isPlaying) {
                     ensurePositionPersistenceRunning()
                 } else {
@@ -158,13 +186,12 @@ class PlaybackController(
         if (tracks.isEmpty()) return
         val snapshot = queueManager.setQueue(tracks, startIndex)
         val active = snapshot.currentItem ?: return
-        _state.update {
-            it.copy(
-                queue = snapshot,
-                queueContext = context,
-                activeTrack = active,
-            )
-        }
+        seedStateForTrackSelection(
+            track = active,
+            queueSnapshot = snapshot,
+            startPositionMs = startPositionMs,
+            queueContext = context,
+        )
         loadActiveTrack(active, startPositionMs = startPositionMs, autoPlay = autoPlay)
     }
 
@@ -174,13 +201,12 @@ class PlaybackController(
         queueManager.setQueue(tracks, randomStartIndex)
         val shuffledSnapshot = queueManager.setShuffle(true)
         val active = shuffledSnapshot.currentItem ?: return
-        _state.update {
-            it.copy(
-                queue = shuffledSnapshot,
-                queueContext = context,
-                activeTrack = active,
-            )
-        }
+        seedStateForTrackSelection(
+            track = active,
+            queueSnapshot = shuffledSnapshot,
+            startPositionMs = 0L,
+            queueContext = context,
+        )
         scope.launch(Dispatchers.IO) {
             runCatching { preferencesRepository.setShuffleEnabled(true) }
         }
@@ -189,23 +215,34 @@ class PlaybackController(
 
     fun playTrackAt(queueIndex: Int) {
         val selected = queueManager.selectIndex(queueIndex) ?: return
-        _state.update { it.copy(queue = queueManager.snapshot(), activeTrack = selected) }
+        seedStateForTrackSelection(
+            track = selected,
+            queueSnapshot = queueManager.snapshot(),
+            startPositionMs = 0L,
+        )
         loadActiveTrack(selected, startPositionMs = 0L, autoPlay = true)
     }
 
     fun enqueue(track: PlaybackTrack) {
         val wasEmpty = queueManager.isEmpty()
         val snapshot = queueManager.enqueue(track)
-        _state.update {
-            it.copy(
-                queue = snapshot,
-                queueContext = if (wasEmpty) QueueContext.custom("Queue") else it.queueContext,
-                activeTrack = snapshot.currentItem,
+        val active = snapshot.currentItem
+        if (wasEmpty && active != null) {
+            seedStateForTrackSelection(
+                track = active,
+                queueSnapshot = snapshot,
+                startPositionMs = 0L,
+                queueContext = QueueContext.custom("Queue"),
             )
-        }
-        if (wasEmpty && snapshot.currentItem != null) {
-            loadActiveTrack(snapshot.currentItem!!, startPositionMs = 0L, autoPlay = false)
+            loadActiveTrack(active, startPositionMs = 0L, autoPlay = false)
         } else {
+            _state.update {
+                it.copy(
+                    queue = snapshot,
+                    queueContext = if (wasEmpty) QueueContext.custom("Queue") else it.queueContext,
+                    activeTrack = active,
+                )
+            }
             syncNextTrackToEngine()
         }
     }
@@ -213,16 +250,23 @@ class PlaybackController(
     fun enqueueNext(track: PlaybackTrack) {
         val wasEmpty = queueManager.isEmpty()
         val snapshot = queueManager.enqueueNext(track)
-        _state.update {
-            it.copy(
-                queue = snapshot,
-                queueContext = if (wasEmpty) QueueContext.custom("Queue") else it.queueContext,
-                activeTrack = snapshot.currentItem,
+        val active = snapshot.currentItem
+        if (wasEmpty && active != null) {
+            seedStateForTrackSelection(
+                track = active,
+                queueSnapshot = snapshot,
+                startPositionMs = 0L,
+                queueContext = QueueContext.custom("Queue"),
             )
-        }
-        if (wasEmpty && snapshot.currentItem != null) {
-            loadActiveTrack(snapshot.currentItem!!, startPositionMs = 0L, autoPlay = false)
+            loadActiveTrack(active, startPositionMs = 0L, autoPlay = false)
         } else {
+            _state.update {
+                it.copy(
+                    queue = snapshot,
+                    queueContext = if (wasEmpty) QueueContext.custom("Queue") else it.queueContext,
+                    activeTrack = active,
+                )
+            }
             syncNextTrackToEngine()
         }
     }
@@ -231,16 +275,23 @@ class PlaybackController(
         if (tracks.isEmpty()) return
         val wasEmpty = queueManager.isEmpty()
         val snapshot = queueManager.enqueueAll(tracks)
-        _state.update {
-            it.copy(
-                queue = snapshot,
-                queueContext = if (wasEmpty) (fallbackContext ?: QueueContext.custom("Queue")) else it.queueContext,
-                activeTrack = snapshot.currentItem,
+        val active = snapshot.currentItem
+        if (wasEmpty && active != null) {
+            seedStateForTrackSelection(
+                track = active,
+                queueSnapshot = snapshot,
+                startPositionMs = 0L,
+                queueContext = fallbackContext ?: QueueContext.custom("Queue"),
             )
-        }
-        if (wasEmpty && snapshot.currentItem != null) {
-            loadActiveTrack(snapshot.currentItem!!, startPositionMs = 0L, autoPlay = false)
+            loadActiveTrack(active, startPositionMs = 0L, autoPlay = false)
         } else {
+            _state.update {
+                it.copy(
+                    queue = snapshot,
+                    queueContext = if (wasEmpty) (fallbackContext ?: QueueContext.custom("Queue")) else it.queueContext,
+                    activeTrack = active,
+                )
+            }
             syncNextTrackToEngine()
         }
     }
@@ -249,16 +300,23 @@ class PlaybackController(
         if (tracks.isEmpty()) return
         val wasEmpty = queueManager.isEmpty()
         val snapshot = queueManager.enqueueAllNext(tracks)
-        _state.update {
-            it.copy(
-                queue = snapshot,
-                queueContext = if (wasEmpty) (fallbackContext ?: QueueContext.custom("Queue")) else it.queueContext,
-                activeTrack = snapshot.currentItem,
+        val active = snapshot.currentItem
+        if (wasEmpty && active != null) {
+            seedStateForTrackSelection(
+                track = active,
+                queueSnapshot = snapshot,
+                startPositionMs = 0L,
+                queueContext = fallbackContext ?: QueueContext.custom("Queue"),
             )
-        }
-        if (wasEmpty && snapshot.currentItem != null) {
-            loadActiveTrack(snapshot.currentItem!!, startPositionMs = 0L, autoPlay = false)
+            loadActiveTrack(active, startPositionMs = 0L, autoPlay = false)
         } else {
+            _state.update {
+                it.copy(
+                    queue = snapshot,
+                    queueContext = if (wasEmpty) (fallbackContext ?: QueueContext.custom("Queue")) else it.queueContext,
+                    activeTrack = active,
+                )
+            }
             syncNextTrackToEngine()
         }
     }
@@ -268,9 +326,9 @@ class PlaybackController(
         queueManager.removeAt(activeIndex) ?: return
         val snapshot = queueManager.snapshot()
         val newActive = snapshot.currentItem
-        _state.update { it.copy(queue = snapshot, activeTrack = newActive) }
 
         if (snapshot.isEmpty) {
+            _state.update { it.copy(queue = snapshot, activeTrack = newActive) }
             foregroundHandshakeJob?.cancel()
             foregroundPlaybackGate.cancelPendingHandshake()
             hasRecordedHistoryForActiveTrack = false
@@ -280,8 +338,15 @@ class PlaybackController(
             _state.update { it.copy(activeFingerprint = null) }
             PlaybackForegroundService.stopService(appContext)
         } else if (activeIndex == previousActiveIndex && newActive != null) {
-            loadActiveTrack(newActive, startPositionMs = 0L, autoPlay = engine.state.value.isPlaying)
+            val wasPlaying = engine.state.value.isPlaying
+            seedStateForTrackSelection(
+                track = newActive,
+                queueSnapshot = snapshot,
+                startPositionMs = 0L,
+            )
+            loadActiveTrack(newActive, startPositionMs = 0L, autoPlay = wasPlaying)
         } else {
+            _state.update { it.copy(queue = snapshot, activeTrack = newActive) }
             syncNextTrackToEngine()
         }
     }
@@ -368,7 +433,11 @@ class PlaybackController(
         val nextTrack = queueManager.next(userInitiated = userInitiated)
         val snapshot = queueManager.snapshot()
         if (nextTrack != null) {
-            _state.update { it.copy(queue = snapshot, activeTrack = nextTrack) }
+            seedStateForTrackSelection(
+                track = nextTrack,
+                queueSnapshot = snapshot,
+                startPositionMs = 0L,
+            )
             loadActiveTrack(nextTrack, startPositionMs = 0L, autoPlay = true)
         } else {
             _state.update { it.copy(queue = snapshot) }
@@ -389,7 +458,11 @@ class PlaybackController(
         val prevTrack = queueManager.previous()
         val snapshot = queueManager.snapshot()
         if (prevTrack != null) {
-            _state.update { it.copy(queue = snapshot, activeTrack = prevTrack) }
+            seedStateForTrackSelection(
+                track = prevTrack,
+                queueSnapshot = snapshot,
+                startPositionMs = 0L,
+            )
             loadActiveTrack(prevTrack, startPositionMs = 0L, autoPlay = true)
         } else {
             seekTo(0L)
@@ -602,14 +675,13 @@ class PlaybackController(
                 } else {
                     rawLastPos.coerceAtLeast(0L)
                 }
-                _state.update {
-                    it.copy(
-                        queue = snapshot,
-                        queueContext = selection.context,
-                        activeTrack = active,
-                        activeFingerprint = prefs.lastPlaybackState.contentFingerprint ?: active.contentFingerprint,
-                    )
-                }
+                seedStateForTrackSelection(
+                    track = active,
+                    queueSnapshot = snapshot,
+                    startPositionMs = restoredPos,
+                    queueContext = selection.context,
+                    activeFingerprint = prefs.lastPlaybackState.contentFingerprint ?: active.contentFingerprint,
+                )
                 // Prepare paused at restored position (never blast audio automatically on app relaunch).
                 loadActiveTrack(active, startPositionMs = restoredPos, autoPlay = false)
             } finally {
@@ -670,7 +742,11 @@ class PlaybackController(
             }
             PostGaplessTransitionDirective.RESYNC_VIA_RELOAD -> {
                 val target = nextTrack ?: return
-                _state.update { it.copy(queue = snapshot, activeTrack = target) }
+                seedStateForTrackSelection(
+                    track = target,
+                    queueSnapshot = snapshot,
+                    startPositionMs = 0L,
+                )
                 loadActiveTrack(target, startPositionMs = 0L, autoPlay = !pauseAfterTransition)
             }
             PostGaplessTransitionDirective.PAUSE_AND_PERSIST -> {
@@ -730,6 +806,11 @@ class PlaybackController(
                 autoPlay = true,
                 fingerprintPrefix = DiagnosticLogFormatter.shortFingerprintPrefix(nextTrack.contentFingerprint),
                 fileSizeBytes = nextTrack.fileSizeBytes,
+                expectedDurationMs = nextTrack.durationMs,
+                expectedContainer = nextTrack.container,
+                expectedCodec = nextTrack.codec,
+                expectedSampleRateHz = nextTrack.sampleRateHz,
+                expectedBitDepth = nextTrack.bitDepth,
             ),
         )
     }
@@ -779,6 +860,33 @@ class PlaybackController(
         }
     }
 
+    private fun seedStateForTrackSelection(
+        track: PlaybackTrack,
+        queueSnapshot: QueueSnapshot<PlaybackTrack>,
+        startPositionMs: Long,
+        queueContext: QueueContext? = null,
+        activeFingerprint: String? = track.contentFingerprint,
+    ) {
+        engine.preparePendingTrackPosition(startPositionMs)
+        val pendingDiagnostics = engine.buildPendingDiagnosticsForTrack(track)
+        _state.update { current ->
+            current.copy(
+                queue = queueSnapshot,
+                queueContext = queueContext ?: current.queueContext,
+                activeTrack = track,
+                activeFingerprint = activeFingerprint,
+                engineState = current.engineState.copy(
+                    status = PlaybackStatus.PREPARING,
+                    activeTrackUri = track.uriString.toUri(),
+                    durationMs = track.durationMs.coerceAtLeast(0L),
+                    diagnostics = pendingDiagnostics,
+                    errorMessage = null,
+                    lastAutoPauseNotice = null,
+                ),
+            )
+        }
+    }
+
     private fun loadActiveTrack(track: PlaybackTrack, startPositionMs: Long, autoPlay: Boolean) {
         foregroundHandshakeJob?.cancel()
         trackedTracksByUri[track.uriString] = track
@@ -791,6 +899,11 @@ class PlaybackController(
             autoPlay = autoPlay,
             fingerprintPrefix = DiagnosticLogFormatter.shortFingerprintPrefix(track.contentFingerprint),
             fileSizeBytes = track.fileSizeBytes,
+            expectedDurationMs = track.durationMs,
+            expectedContainer = track.container,
+            expectedCodec = track.codec,
+            expectedSampleRateHz = track.sampleRateHz,
+            expectedBitDepth = track.bitDepth,
         )
         if (!autoPlay) {
             foregroundPlaybackGate.cancelPendingHandshake()

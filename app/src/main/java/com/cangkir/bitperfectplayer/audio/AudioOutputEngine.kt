@@ -33,6 +33,11 @@ data class EngineTrackRequest(
     val autoPlay: Boolean = true,
     val fingerprintPrefix: String = "none",
     val fileSizeBytes: Long = 0L,
+    val expectedDurationMs: Long = 0L,
+    val expectedContainer: String = "AUDIO",
+    val expectedCodec: String = "Unknown",
+    val expectedSampleRateHz: Int = 0,
+    val expectedBitDepth: Int? = null,
 )
 
 /**
@@ -158,6 +163,20 @@ class AudioOutputEngine(
         preloadController.setNextTrack(request, currentState.isPlaying, _playbackPositionMs.value, currentState.durationMs)
     }
 
+    fun preparePendingTrackPosition(startPositionMs: Long) {
+        _playbackPositionMs.value = startPositionMs.coerceAtLeast(0L)
+    }
+
+    fun buildPendingDiagnosticsForTrack(track: PlaybackTrack): AudioDiagnosticSnapshot =
+        routeAndMixerManager.buildPendingTrackDiagnosticsSnapshot(
+            safety = safetyController.state(),
+            container = track.container,
+            codec = track.codec,
+            sampleRateHz = track.sampleRateHz,
+            bitDepth = track.bitDepth,
+            replayGainResolution = recomputeReplayGain(),
+        )
+
     fun loadTrack(request: EngineTrackRequest) {
         if (releasedFlag.get()) return
         val generation = loadGeneration.incrementAndGet()
@@ -167,9 +186,25 @@ class AudioOutputEngine(
         stopWorkerFlag.set(true)
         isPausedFlag.set(true)
         currentRequest = request
+        activeTrackReplayGainMetadata = null
         _playbackPositionMs.value = request.startPositionMs.coerceAtLeast(0L)
+        val pendingDiag = routeAndMixerManager.buildPendingTrackDiagnosticsSnapshot(
+            safety = safetyController.state(),
+            container = request.expectedContainer,
+            codec = request.expectedCodec,
+            sampleRateHz = request.expectedSampleRateHz,
+            bitDepth = request.expectedBitDepth,
+            replayGainResolution = recomputeReplayGain(),
+        )
         _state.update {
-            it.copy(status = PlaybackStatus.PREPARING, activeTrackUri = request.uri, errorMessage = null, lastAutoPauseNotice = null)
+            it.copy(
+                status = PlaybackStatus.PREPARING,
+                activeTrackUri = request.uri,
+                durationMs = request.expectedDurationMs.coerceAtLeast(0L),
+                diagnostics = pendingDiag,
+                errorMessage = null,
+                lastAutoPauseNotice = null,
+            )
         }
         enqueueControlTask {
             if (!isLoadStale(generation)) {
@@ -378,7 +413,7 @@ class AudioOutputEngine(
         pendingRouteReconfigureOnPlay.set(false)
         val loadStartMs = SystemClock.elapsedRealtime()
         preloadController.clearPreloadedNextLocked()
-        stopWorkerAndReleaseTrackLocked(clearMixer = true)
+        stopWorkerAndReleaseTrackLocked(clearMixer = false)
         currentRequest = request
         activeTrackReplayGainMetadata = null
         recomputeReplayGain()
@@ -394,9 +429,14 @@ class AudioOutputEngine(
         }
 
         // Open and prime decoder BEFORE creating AudioTrack so codec.outputFormat is confirmed.
-        val decoder = openDecoderForTrackLocked(request, generation) ?: return
+        val decoder = openDecoderForTrackLocked(request, generation)
+        if (decoder == null) {
+            routeAndMixerManager.clearPreferredMixerAttributesOnApi34(null)
+            return
+        }
         if (isLoadStale(generation)) {
             runCatching { decoder.close() }
+            routeAndMixerManager.clearPreferredMixerAttributesOnApi34(null)
             return
         }
 
@@ -488,7 +528,7 @@ class AudioOutputEngine(
             current.copy(
                 status = if (startedPlaying) PlaybackStatus.PLAYING else PlaybackStatus.PAUSED,
                 activeTrackUri = request.uri,
-                durationMs = decoder.format.durationMs,
+                durationMs = decoder.format.durationMs.takeIf { it > 0L } ?: request.expectedDurationMs.coerceAtLeast(0L),
                 errorMessage = if (request.autoPlay && !startedPlaying) "Audio focus denied" else null,
                 lastAutoPauseNotice = if (preserveAutoPauseNotice) current.lastAutoPauseNotice else null,
             )
@@ -880,13 +920,26 @@ class AudioOutputEngine(
 
     private fun publishDiagnostics() {
         val safety = safetyController.state()
-        val snapshot = routeAndMixerManager.buildDiagnosticSnapshot(
-            safety,
-            activeDecoder?.format,
-            audioTrackActualSampleRateHz,
-            audioTrackActualEncodingLabel,
-            recomputeReplayGain(),
-        )
+        val format = activeDecoder?.format
+        val pendingReq = currentRequest
+        val snapshot = if (format == null && _state.value.status == PlaybackStatus.PREPARING && pendingReq != null) {
+            routeAndMixerManager.buildPendingTrackDiagnosticsSnapshot(
+                safety = safety,
+                container = pendingReq.expectedContainer,
+                codec = pendingReq.expectedCodec,
+                sampleRateHz = pendingReq.expectedSampleRateHz,
+                bitDepth = pendingReq.expectedBitDepth,
+                replayGainResolution = recomputeReplayGain(),
+            )
+        } else {
+            routeAndMixerManager.buildDiagnosticSnapshot(
+                safety,
+                format,
+                audioTrackActualSampleRateHz,
+                audioTrackActualEncodingLabel,
+                recomputeReplayGain(),
+            )
+        }
         _state.update { it.copy(safetyState = safety, diagnostics = snapshot) }
     }
 

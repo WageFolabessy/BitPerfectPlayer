@@ -59,6 +59,7 @@ import com.cangkir.bitperfectplayer.audio.AudioOutputMode
 import com.cangkir.bitperfectplayer.audio.NotificationSubtitleFormatter
 import com.cangkir.bitperfectplayer.audio.PlaybackControllerState
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
+import com.cangkir.bitperfectplayer.audio.TrackTransitionStatePolicy
 import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
 import com.cangkir.bitperfectplayer.ui.theme.AmberIndicatedContainer
 import com.cangkir.bitperfectplayer.ui.theme.EmeraldSafeContainer
@@ -296,7 +297,11 @@ fun MiniPlayerBar(
     modifier: Modifier = Modifier,
 ) {
     val track = playbackState.activeTrack ?: return
-    val diagnosticsMatchTrack = playbackState.engineState.activeTrackUri?.toString() == track.uriString
+    val diagnosticsMatchTrack = TrackTransitionStatePolicy.isEngineSyncedToActiveTrack(
+        activeTrack = track,
+        engineTrackUri = playbackState.engineState.activeTrackUri?.toString(),
+        engineStatus = playbackState.engineState.status,
+    )
     val runtimeSourceSampleRateHz = if (diagnosticsMatchTrack) playbackState.engineState.diagnostics.sourceSampleRateHz else 0
     val runtimeSourceBitDepth = if (diagnosticsMatchTrack) playbackState.engineState.diagnostics.sourceBitDepth else null
     val compactSpec = remember(

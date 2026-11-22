@@ -2,8 +2,8 @@
 
 - **Project:** `com.cangkir.bitperfectplayer` (Kotlin + Jetpack Compose, 100% Offline Android Music Player)
 - **Active Branch:** `feat/v1.3` *(branched from `main`; `versionName = "1.3"`, `versionCode = 4`, ready for final `v1.3` audit & POCO F4 testing)*
-- **Overall Status:** **`v1.3` Feature-Complete + Selective Top-Bar Queue & Pinned `kHz` `MiniPlayerBar` Audio Spec — Software-Verified (`versionName = "1.3"`, `versionCode = 4`)** *(318 / 318 automated tests passing across 50 suites with `ktlintCheck`, `detekt`, Android Lint `0` `app/src/` warnings, Debug APK, and R8 Release APK clean)*
-- **Tasks Completed:** **17 / 17** (`T0.1` through `T5.4` in `docs/TASKS.md`) + `v1.1` + `v1.2` + `v1.3` Prompts 1–5 verification
+- **Overall Status:** **`v1.3` Feature-Complete + Pre-Release POCO F4 Polish Fixes — Software-Verified (`versionName = "1.3"`, `versionCode = 4`)** *(327 / 327 automated tests passing across 52 suites with `ktlintCheck`, `detekt`, Android Lint `0` `app/src/` warnings, Debug APK, and R8 Release APK clean)*
+- **Tasks Completed:** **17 / 17** (`T0.1` through `T5.4` in `docs/TASKS.md`) + `v1.1` + `v1.2` + `v1.3` Prompts 1–6 verification
 - **Active Blockers:** None (`BLOCKED.md` not required)
 
 ---
@@ -1282,6 +1282,44 @@ Addressed the 3 minor findings observed in real-device POCO F4 video testing and
 ### Additional Physical Hardware Verification Pending (Not Executed in Software-Only Environment)
 - [ ] **Selective Top-Bar Queue & `Artist Detail` Clarity:** Confirm the passive Queue icon renders crisply on `Library`, `Playlists`, `Playlist Detail`, `Album Detail`, and `Folder Detail` top bars while staying absent from `Artist Detail`'s Hero Banner overlay and `MiniPlayerBar`.
 - [ ] **Non-Truncating `MiniPlayerBar` Audio Spec:** Play hi-res `24-bit/96 kHz` FLAC tracks by long-named artists on POCO F4 and confirm only the artist name ellipsizes while `FLAC 24-bit · 96 kHz` stays pinned and readable under both Monochrome Studio and Dynamic Cover Theme.
+
+---
+
+## 39. `v1.3` Pre-Release POCO F4 Polish Fixes (`D12.12`)
+
+### Delivered Refinements
+1. **Immediate Track-Switch State Seeding & Stale-Emission Guard ([`TrackTransitionStatePolicy.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/TrackTransitionStatePolicy.kt), [`PlaybackController.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/PlaybackController.kt), [`AudioOutputEngine.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/AudioOutputEngine.kt), [`NowPlayingScreen.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/nowplaying/NowPlayingScreen.kt), [`UiComponents.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/UiComponents.kt), [`PlaybackForegroundService.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/PlaybackForegroundService.kt)):**
+   - Added pure-Kotlin `TrackTransitionStatePolicy` (`0` `android.*` / `androidx.*` imports) and updated `PlaybackControllerState.durationMs` / `displayFormatSpec`, `PlaybackController.seedStateForTrackSelection(...)`, and `AudioOutputEngine.loadTrack(...)` so switching tracks immediately seeds/resets displayed position (`0`), `durationMs`, audio spec badge metadata, and pending Stage 1 diagnostics from the newly active `PlaybackTrack` while gating stale previous-track `engineState` emissions during asynchronous `MediaCodec` priming (~300–500 ms).
+2. **Non-Truncating Settings Library Action Buttons ([`SettingsDisplayAndLibrarySection.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/settings/SettingsDisplayAndLibrarySection.kt)):**
+   - Shortened side-by-side labels in `Settings -> Library & Storage` from `"Add Folder (SAF)"` / `"Refresh Library"` to **`"Add Folder"`** / **`"Refresh"`** (`maxLines = 1`, balanced `Modifier.weight(1f)` sizing, `PaddingValues(horizontal = 12.dp, vertical = 8.dp)`, `>= 48.dp` height) so neither button ellipsizes on standard or narrow (`360dp`) screens.
+3. **Session-Tracked API 34+ Preferred USB Mixer Cleanup & Reuse ([`PreferredMixerSessionTracker.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/PreferredMixerSessionTracker.kt), [`AudioRouteAndMixerManager.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/AudioRouteAndMixerManager.kt), [`AudioOutputEngine.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/AudioOutputEngine.kt)):**
+   - Added pure-Kotlin, thread-safe `PreferredMixerSessionTracker` tracking active API 34+ `AppliedUsbMixerProfile` state (`deviceId`, `behavior`, `sampleRateHz`, `androidEncoding`, `channelCount`), eliminating redundant `clearPreferredMixerAttributes()` Binder IPC calls across consecutive `SAFE_VOLUME_MODE` track starts and identical consecutive USB HAL profiles while preserving full cleanup on Bit-Perfect Exit/Safety Revert, USB disconnect, format switches, stop, and release.
+4. **Canonical `DEFAULT_NATIVE_RATE` Diagnostics Accuracy & Non-Contradictory ReplayGain Label ([`ReplayGainProcessor.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/ReplayGainProcessor.kt), [`AudioDiagnosticMapper.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/AudioDiagnosticMapper.kt), [`AudioRouteAndMixerManager.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/AudioRouteAndMixerManager.kt)):**
+   - Replaced `"ReplayGain: Bypassed (Bit-Perfect Active)"` with **`ReplayGainProcessor.BYPASSED_BIT_PERFECT_OPT_IN_LABEL`** (`"ReplayGain: Bypassed (Bit-Perfect Opt-In)"`) across Stage 3 and `DSP / EQ / Volume` so it remains accurate even when Bit-Perfect Opt-In falls back to the OS default mixer.
+   - Updated `AudioDiagnosticMapper` and `AudioRouteAndMixerManager` so `NegotiatedMixerBehavior.DEFAULT_NATIVE_RATE` consistently reports a confirmed native sample-rate `MIXER_BEHAVIOR_DEFAULT` profile in Signal Summary and `"OS/USB HAL accepted native sample-rate default mixer profile (system volume active)."` in Stage 4, never displaying `"0 matching bit-perfect or native-rate profiles"` when native-rate default mixer is active.
+
+### Final Clean `v1.3` Software Verification Evidence (`/home/endricho/.local/bin/gradlew-wsl clean ktlintCheck detekt testDebugUnitTest lintDebug assembleDebug assembleRelease --no-daemon`)
+- **Kotlin Formatting (`ktlintCheck`):** **PASS — 0 violations**.
+- **Static Analysis (`detekt`):** **PASS — 0 issues** (0 baseline suppressions).
+- **Automated JVM Unit + Room v5 Migration + Robolectric Native-Skia + Compose UI Tests (`testDebugUnitTest`):** **327 / 327 passed** across **52 test suites** (`0` failed, `0` errors, `0` skipped, `0` `@Ignore`, `0` `TODO()`), including:
+  - [`TrackTransitionStatePolicyTest.kt`](../app/src/test/java/com/cangkir/bitperfectplayer/audio/TrackTransitionStatePolicyTest.kt): `3 / 3` (URI sync guard, immediate next-track duration/format seeding vs live-engine update, pending Stage 1 diagnostic construction)
+  - [`PreferredMixerSessionTrackerTest.kt`](../app/src/test/java/com/cangkir/bitperfectplayer/audio/PreferredMixerSessionTrackerTest.kt): `3 / 3` (no clear needed when idle in Safe Mode, reuse on identical consecutive profile vs single consume/clear on change/teardown, Safe Mode fallback clearance tracking)
+  - [`ReplayGainProcessorTest.kt`](../app/src/test/java/com/cangkir/bitperfectplayer/audio/ReplayGainProcessorTest.kt): `6 / 6` (verifying `"ReplayGain: Bypassed (Bit-Perfect Opt-In)"`)
+  - [`AudioDiagnosticMapperTest.kt`](../app/src/test/java/com/cangkir/bitperfectplayer/audio/AudioDiagnosticMapperTest.kt): `7 / 7` (verifying `"ReplayGain: Bypassed (Bit-Perfect Opt-In)"` across both `BIT_PERFECT` and `DEFAULT_MIXER_FALLBACK`, plus canonical `DEFAULT_NATIVE_RATE` summary & Stage 4 confirmation with zero `"0 matching..."` text)
+  - [`BitPerfectUiBehaviorTest.kt`](../app/src/test/java/com/cangkir/bitperfectplayer/ui/BitPerfectUiBehaviorTest.kt): `45 / 45` (+3 verifying `NowPlayingScreen` immediate new-track duration/spec without stale previous-track flash, `DiagnosticsScreen` distinct `DEFAULT_NATIVE_RATE` vs `DEFAULT_MIXER_FALLBACK` + `"ReplayGain: Bypassed (Bit-Perfect Opt-In)"`, and `@GraphicsMode(GraphicsMode.Mode.NATIVE) @Config(qualifiers = "w360dp-h740dp")` Settings `Add Folder` / `Refresh` glyph bounds with zero truncation)
+- **Compiler, KSP, & R8 Warnings:** **0** Kotlin warnings, **0** KSP warnings, **0** R8 warnings.
+- **Android Lint (`lintDebug` & `lintVitalRelease`):** **0 errors**, **0 warnings across all `app/src/` files** (10 remaining advisories are upstream dependency version notices outside `app/src/`).
+- **Pure-Kotlin Domain Boundary:** **PASS — 0 `android.*` / `androidx.*` imports** in `TrackTransitionStatePolicy.kt`, `PreferredMixerSessionTracker.kt`, `AudioDiagnosticMapper.kt`, and `ReplayGainProcessor.kt`.
+- **Merged Manifest & Offline Privacy Audit (XML-parsed Source + All 8 Generated Debug/Release/UnitTest Manifests — 9 manifests total):** **PASS — 0 `INTERNET`, 0 `RECORD_AUDIO`, 0 `MANAGE_EXTERNAL_STORAGE`, 0 `WRITE_EXTERNAL_STORAGE`, 0 `READ_MEDIA_IMAGES`**; Release merged manifest verified `android:versionCode="4"` and `android:versionName="1.3"`.
+- **Debug APK (`assembleDebug`):** `app/build/outputs/apk/debug/app-debug.apk` (`21,541,166 bytes` / `20.54 MB`).
+- **Unsigned Release APK (`assembleRelease` with R8):** `app/build/outputs/apk/release/app-release-unsigned.apk` (`2,980,668 bytes` / `2.84 MB`).
+- **R8 Mapping Artifact (`retrace` support):** `app/build/outputs/mapping/release/mapping.txt` (`38,029,303 bytes` / `36.27 MB`).
+
+### Additional Physical Hardware Verification Pending (Not Executed in Software-Only Environment)
+- [ ] **Rapid Track Skipping (`NowPlayingScreen`):** Skip rapidly across mixed sample-rate/bit-depth tracks (`Next` / `Previous` / Queue tap) on POCO F4 and confirm zero transient previous-track duration or format-badge flash.
+- [ ] **`Settings -> Library & Storage` Button Clarity:** Confirm `"Add Folder"` and `"Refresh"` render in full on a single line with zero ellipsis on POCO F4.
+- [ ] **Safe Mode Binder Logcat & Bit-Perfect Cleanup:** Capture Logcat during consecutive track switches in Safe Mode on POCO F4 and confirm elimination of redundant `IAudioPolicyService` code 102 Binder warnings, while verifying USB unplug and Safe Mode revert still clear active preferred mixer attributes after Bit-Perfect Opt-In.
+- [ ] **`Audio Diagnostics` Status Accuracy (KZ EDX Pro 2 USB-C):** Confirm `"ReplayGain: Bypassed (Bit-Perfect Opt-In)"` when ReplayGain + Bit-Perfect Opt-In are enabled, and verify `DEFAULT_NATIVE_RATE` vs fallback mixer status wording reflects real HAL behavior accurately.
 
 
 

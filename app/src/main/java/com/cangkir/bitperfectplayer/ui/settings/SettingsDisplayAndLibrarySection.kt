@@ -364,23 +364,25 @@ internal fun SettingsLibraryStorageSection(
             ) {
                 OutlinedButton(
                     onClick = onAddFolderClick,
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                     modifier = Modifier
                         .weight(1f)
                         .sizeIn(minHeight = 48.dp),
                 ) {
                     Icon(Icons.Filled.CreateNewFolder, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("Add Folder (SAF)", maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
+                    Text("Add Folder", maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                 }
                 OutlinedButton(
                     onClick = onRefreshLibrary,
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                     modifier = Modifier
-                        .weight(0.95f)
+                        .weight(1f)
                         .sizeIn(minHeight = 48.dp),
                 ) {
                     Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("Refresh Library", maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
+                    Text("Refresh", maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                 }
             }
 

@@ -2,6 +2,7 @@ package com.cangkir.bitperfectplayer.ui
 
 import android.Manifest
 import android.app.Application
+import android.net.Uri
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.collectAsState
@@ -32,15 +33,20 @@ import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.test.core.app.ApplicationProvider
+import com.cangkir.bitperfectplayer.audio.AudioDiagnosticInput
+import com.cangkir.bitperfectplayer.audio.AudioDiagnosticMapper
 import com.cangkir.bitperfectplayer.audio.AudioOutputMode
 import com.cangkir.bitperfectplayer.audio.AudioSafetyState
 import com.cangkir.bitperfectplayer.audio.EnginePlaybackState
+import com.cangkir.bitperfectplayer.audio.NegotiatedMixerBehavior
+import com.cangkir.bitperfectplayer.audio.OutputConnectionType
 import com.cangkir.bitperfectplayer.audio.PlaybackControllerState
 import com.cangkir.bitperfectplayer.audio.PlaybackStatus
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
 import com.cangkir.bitperfectplayer.audio.QueueContext
 import com.cangkir.bitperfectplayer.audio.QueueSnapshot
 import com.cangkir.bitperfectplayer.audio.ReplayGainMetadata
+import com.cangkir.bitperfectplayer.audio.ReplayGainProcessor
 import com.cangkir.bitperfectplayer.audio.SleepTimerPreset
 import com.cangkir.bitperfectplayer.audio.SleepTimerState
 import com.cangkir.bitperfectplayer.data.DefaultHomepage
@@ -2818,5 +2824,281 @@ class BitPerfectUiBehaviorTest {
         composeRule.waitForIdle()
         composeRule.onNodeWithContentDescription("Back to Folders").assertIsDisplayed()
         composeRule.onNodeWithText("So What").assertIsDisplayed()
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h915dp")
+    fun nowPlayingScreen_trackSwitchImmediatelyDisplaysNewTrackDurationAndSpecWithoutStaleFlash() {
+        composeRule.mainClock.autoAdvance = false
+        val trackA = PlaybackTrack(
+            uriString = "content://test/audio/track_a.flac",
+            title = "Old 44k Track",
+            artist = "Artist One",
+            album = "First LP",
+            fileName = "01_old.flac",
+            durationMs = 180_000L, // 03:00
+            sampleRateHz = 44_100,
+            bitDepth = 16,
+            container = "FLAC",
+            codec = "FLAC",
+        )
+        val trackB = PlaybackTrack(
+            uriString = "content://test/audio/track_b.flac",
+            title = "New HiRes Track",
+            artist = "Artist Two",
+            album = "Second LP",
+            fileName = "02_new.flac",
+            durationMs = 300_000L, // 05:00
+            sampleRateHz = 96_000,
+            bitDepth = 24,
+            container = "FLAC",
+            codec = "FLAC",
+        )
+        val diagA = AudioDiagnosticMapper.map(
+            AudioDiagnosticInput(
+                isTrackLoaded = true,
+                sourceContainer = "FLAC",
+                sourceCodec = "FLAC",
+                sourceSampleRateHz = 44_100,
+                sourceBitDepth = 16,
+                sourceHeaderVerified = true,
+                decodedSampleRateHz = 44_100,
+                decodedEffectiveBitDepth = 16,
+                decodedChannelCount = 2,
+                audioTrackSampleRateHz = 44_100,
+            ),
+        )
+        var playbackState by mutableStateOf(
+            PlaybackControllerState(
+                queue = QueueSnapshot(items = listOf(trackA, trackB), currentIndex = 0),
+                activeTrack = trackA,
+                engineState = EnginePlaybackState(
+                    status = PlaybackStatus.PLAYING,
+                    activeTrackUri = Uri.parse(trackA.uriString),
+                    durationMs = 180_000L,
+                    diagnostics = diagA,
+                ),
+            ),
+        )
+        val posFlow = MutableStateFlow(42_000L)
+
+        composeRule.setContent {
+            BitPerfectPlayerTheme {
+                NowPlayingScreen(
+                    playbackState = playbackState,
+                    playbackPositionMsFlow = posFlow,
+                    sleepTimerStateFlow = MutableStateFlow(SleepTimerState()),
+                    albumArtworkLoader = artworkLoader,
+                    isFavorite = false,
+                    spectrumVisualizerEnabled = false,
+                    onBack = {},
+                    onToggleFavorite = {},
+                    onAddToPlaylist = {},
+                    onShowTrackInfo = {},
+                    onSelectSleepTimerPreset = {},
+                    onTogglePlayPause = {},
+                    onPrevious = {},
+                    onNext = {},
+                    onSeekTo = {},
+                    onToggleShuffle = {},
+                    onCycleRepeatMode = {},
+                    onRequestBitPerfectMode = {},
+                    onConfirmBitPerfectWarning = {},
+                    onDismissSafetyWarning = {},
+                    onSwitchToSafeMode = {},
+                    onClearAutoPauseNotice = {},
+                    onOpenQueue = {},
+                    onOpenLyrics = {},
+                    onOpenDiagnostics = {},
+                )
+            }
+        }
+        composeRule.mainClock.advanceTimeBy(32L)
+
+        composeRule.onNodeWithText("Old 44k Track").assertIsDisplayed()
+        composeRule.onNodeWithText("03:00").assertIsDisplayed()
+        composeRule.onNodeWithText("FLAC · 16-bit · 44,100 Hz").assertIsDisplayed()
+
+        // Immediately upon track switch — BEFORE MediaCodec primes — new duration & spec must appear with zero stale flash
+        composeRule.runOnIdle {
+            posFlow.value = 0L
+            playbackState = playbackState.copy(
+                queue = QueueSnapshot(items = listOf(trackA, trackB), currentIndex = 1),
+                activeTrack = trackB,
+                engineState = playbackState.engineState.copy(status = PlaybackStatus.PREPARING),
+            )
+        }
+        composeRule.mainClock.advanceTimeBy(32L)
+
+        composeRule.onNodeWithText("New HiRes Track").assertIsDisplayed()
+        composeRule.onNodeWithText("05:00").assertIsDisplayed()
+        composeRule.onNodeWithText("FLAC · 24-bit · 96,000 Hz").assertIsDisplayed()
+        assertEquals(0, composeRule.onAllNodesWithText("03:00").fetchSemanticsNodes().size)
+        assertEquals(0, composeRule.onAllNodesWithText("44,100 Hz", substring = true).fetchSemanticsNodes().size)
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h915dp")
+    fun diagnosticsScreen_rendersDistinctDefaultNativeRateVsFallbackAndBitPerfectOptInReplayGain() {
+        val nativeRateDiag = AudioDiagnosticMapper.map(
+            AudioDiagnosticInput(
+                isTrackLoaded = true,
+                sourceContainer = "FLAC",
+                sourceCodec = "FLAC",
+                sourceSampleRateHz = 96_000,
+                sourceBitDepth = 24,
+                sourceHeaderVerified = true,
+                decodedPcmEncodingLabel = "PCM_24BIT_PACKED",
+                decodedEffectiveBitDepth = 24,
+                decodedSampleRateHz = 96_000,
+                decodedChannelCount = 2,
+                decoderName = "MediaExtractor Direct PCM",
+                audioTrackSampleRateHz = 96_000,
+                audioTrackEncodingLabel = "PCM_24BIT_PACKED",
+                safetyMode = AudioOutputMode.BIT_PERFECT_OPT_IN,
+                apiLevel = 36,
+                outputDeviceName = "KZ EDX Pro 2 USB-C",
+                outputConnectionType = OutputConnectionType.USB_HEADSET,
+                negotiatedMixerBehavior = NegotiatedMixerBehavior.DEFAULT_NATIVE_RATE,
+                negotiatedMixerSummary =
+                "MIXER_BEHAVIOR_DEFAULT (96,000 Hz, PCM_FLOAT — Native Rate, Bit-Perfect Unavailable, Volume Active)",
+                replayGainSummary = ReplayGainProcessor.BYPASSED_BIT_PERFECT_OPT_IN_LABEL,
+            ),
+        )
+        val fallbackDiag = AudioDiagnosticMapper.map(
+            AudioDiagnosticInput(
+                isTrackLoaded = true,
+                sourceContainer = "FLAC",
+                sourceCodec = "FLAC",
+                sourceSampleRateHz = 96_000,
+                sourceBitDepth = 24,
+                sourceHeaderVerified = true,
+                decodedPcmEncodingLabel = "PCM_24BIT_PACKED",
+                decodedEffectiveBitDepth = 24,
+                decodedSampleRateHz = 96_000,
+                decodedChannelCount = 2,
+                decoderName = "MediaExtractor Direct PCM",
+                audioTrackSampleRateHz = 96_000,
+                audioTrackEncodingLabel = "PCM_24BIT_PACKED",
+                safetyMode = AudioOutputMode.BIT_PERFECT_OPT_IN,
+                apiLevel = 36,
+                outputDeviceName = "KZ EDX Pro 2 USB-C",
+                outputConnectionType = OutputConnectionType.USB_HEADSET,
+                negotiatedMixerBehavior = NegotiatedMixerBehavior.DEFAULT_MIXER_FALLBACK,
+                negotiatedMixerSummary = "Default System Mixer (USB HAL reported 0 matching bit-perfect or native-rate profiles)",
+                replayGainSummary = ReplayGainProcessor.BYPASSED_BIT_PERFECT_OPT_IN_LABEL,
+            ),
+        )
+
+        var currentDiag by mutableStateOf(nativeRateDiag)
+
+        composeRule.setContent {
+            BitPerfectPlayerTheme {
+                DiagnosticsScreen(
+                    playbackState = PlaybackControllerState(
+                        activeTrack = hiResFlacTrack,
+                        engineState = EnginePlaybackState(
+                            status = PlaybackStatus.PLAYING,
+                            safetyState = AudioSafetyState(
+                                mode = AudioOutputMode.BIT_PERFECT_OPT_IN,
+                                isUsbAudioConnected = true,
+                                activeDeviceName = "KZ EDX Pro 2 USB-C",
+                            ),
+                            diagnostics = currentDiag,
+                        ),
+                    ),
+                    onBack = {},
+                    onSwitchToSafeMode = {},
+                    onRequestBitPerfectMode = {},
+                    onConfirmBitPerfectWarning = {},
+                    onDismissSafetyWarning = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("NATIVE RATE USB MIXER").assertIsDisplayed()
+        composeRule.onNode(hasScrollToIndexAction()).performScrollToIndex(1)
+        composeRule.onNodeWithText("ReplayGain: Bypassed (Bit-Perfect Opt-In)", substring = true).assertIsDisplayed()
+        assertEquals(
+            0,
+            composeRule.onAllNodesWithText("ReplayGain: Bypassed (Bit-Perfect Active)", substring = true).fetchSemanticsNodes().size,
+        )
+        composeRule.onNode(hasScrollToIndexAction()).performScrollToIndex(6)
+        composeRule.onNodeWithText("OS/USB HAL accepted native sample-rate default mixer profile", substring = true)
+            .assertIsDisplayed()
+        assertEquals(
+            0,
+            composeRule.onAllNodesWithText("0 matching bit-perfect or native-rate profiles", substring = true)
+                .fetchSemanticsNodes()
+                .size,
+        )
+
+        // Switch to DEFAULT_MIXER_FALLBACK -> distinctly shows fallback text + consistent Bit-Perfect Opt-In bypass label
+        composeRule.runOnIdle { currentDiag = fallbackDiag }
+        composeRule.waitForIdle()
+        composeRule.onNode(hasScrollToIndexAction()).performScrollToIndex(0)
+        composeRule.onNodeWithText("CLEAN NATIVE FALLBACK").assertIsDisplayed()
+        composeRule.onNode(hasScrollToIndexAction()).performScrollToIndex(1)
+        composeRule.onNodeWithText("ReplayGain: Bypassed (Bit-Perfect Opt-In)", substring = true).assertIsDisplayed()
+        composeRule.onNode(hasScrollToIndexAction()).performScrollToIndex(6)
+        composeRule.onNodeWithText("0 matching bit-perfect or native-rate profiles", substring = true).assertIsDisplayed()
+    }
+
+    @Test
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    @Config(qualifiers = "w360dp-h740dp")
+    fun settingsScreen_libraryStorageButtonsDisplayAddFolderAndRefreshWithoutTruncation() {
+        var refreshClicks = 0
+
+        composeRule.setContent {
+            BitPerfectPlayerTheme {
+                SettingsScreen(
+                    libraryState = LibrarySnapshot(),
+                    playbackState = PlaybackControllerState(),
+                    sleepTimerStateFlow = MutableStateFlow(SleepTimerState()),
+                    onImportFolder = {},
+                    onRemoveSafFolder = {},
+                    onRefreshLibrary = { refreshClicks++ },
+                    onSetGaplessEnabled = {},
+                    onSetReplayGainMode = {},
+                    onSetReplayGainPreampDb = {},
+                    onSetReplayGainPreventClipping = {},
+                    onSelectSleepTimerPreset = {},
+                    onExportLocalBackup = {},
+                    onImportLocalBackup = {},
+                    onOpenDiagnostics = {},
+                )
+            }
+        }
+
+        composeRule.onNode(hasScrollToIndexAction()).performScrollToIndex(2)
+        composeRule.waitForIdle()
+
+        assertEquals(0, composeRule.onAllNodesWithText("Add Folder (SAF)").fetchSemanticsNodes().size)
+        assertEquals(0, composeRule.onAllNodesWithText("Refresh Library").fetchSemanticsNodes().size)
+
+        val addFolderNode = composeRule.onNodeWithText("Add Folder", useUnmergedTree = true)
+            .assertIsDisplayed()
+            .fetchSemanticsNode()
+        val refreshNode = composeRule.onNodeWithText("Refresh", useUnmergedTree = true)
+            .assertIsDisplayed()
+            .fetchSemanticsNode()
+
+        val addLayoutResults = mutableListOf<TextLayoutResult>()
+        val refreshLayoutResults = mutableListOf<TextLayoutResult>()
+        addFolderNode.config[SemanticsActions.GetTextLayoutResult].action?.invoke(addLayoutResults)
+        refreshNode.config[SemanticsActions.GetTextLayoutResult].action?.invoke(refreshLayoutResults)
+        assertEquals(1, addLayoutResults.size)
+        assertEquals(1, refreshLayoutResults.size)
+
+        val addLayout = addLayoutResults.single()
+        val refreshLayout = refreshLayoutResults.single()
+        assertFalse("Add Folder must not ellipsize on 360dp width", addLayout.isLineEllipsized(0))
+        assertFalse("Refresh must not ellipsize on 360dp width", refreshLayout.isLineEllipsized(0))
+        assertTrue(addLayout.getLineRight(0) <= addLayout.size.width + 1f)
+        assertTrue(refreshLayout.getLineRight(0) <= refreshLayout.size.width + 1f)
+
+        composeRule.onNodeWithText("Refresh").performClick()
+        assertEquals(1, refreshClicks)
     }
 }

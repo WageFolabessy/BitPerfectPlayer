@@ -160,10 +160,11 @@ object AudioDiagnosticMapper {
         val sourceSummary = buildSourceSummary(input, sourceLabel)
         val decodedSummary = buildDecodedSummary(input, isDownConverted)
         val deviceSummary = "${input.outputDeviceName} (${input.outputConnectionType.displayName})"
+        val canonicalMixerSummary = resolveCanonicalMixerSummary(input, isBitPerfectNegotiated, isNativeRateMixerNegotiated)
         val engineSummary = if (isBitPerfectNegotiated || isNativeRateMixerNegotiated) {
-            "Native AudioTrack · API 34+ ${input.negotiatedMixerSummary}"
+            "Native AudioTrack · API 34+ $canonicalMixerSummary"
         } else {
-            "Clean Native AudioTrack · ${input.negotiatedMixerSummary}"
+            "Clean Native AudioTrack · $canonicalMixerSummary"
         }
 
         val volumeModeLabel = resolveVolumeModeLabel(input, isBitPerfectNegotiated, isNativeRateMixerNegotiated)
@@ -182,7 +183,7 @@ object AudioDiagnosticMapper {
                 effectiveReplayGainSummary = effectiveReplayGainSummary,
                 dspEqVolumeSummary = dspEqVolumeSummary,
             ),
-            buildStage4OsMixer(input, isBitPerfectNegotiated, isNativeRateMixerNegotiated, headline),
+            buildStage4OsMixer(input, isBitPerfectNegotiated, isNativeRateMixerNegotiated, headline, canonicalMixerSummary),
             buildStage5UsbPath(input, deviceSummary),
             buildStage6DacAnalog(),
         )
@@ -268,9 +269,49 @@ object AudioDiagnosticMapper {
         input.safetyMode == AudioOutputMode.BIT_PERFECT_OPT_IN &&
         input.replayGainSummary != "ReplayGain: OFF"
     ) {
-        "ReplayGain: Bypassed (Bit-Perfect Active)"
+        ReplayGainProcessor.BYPASSED_BIT_PERFECT_OPT_IN_LABEL
     } else {
         input.replayGainSummary.ifBlank { "ReplayGain: OFF" }
+    }
+
+    private fun resolveCanonicalMixerSummary(
+        input: AudioDiagnosticInput,
+        isBitPerfectNegotiated: Boolean,
+        isNativeRateMixerNegotiated: Boolean,
+    ): String {
+        val raw = input.negotiatedMixerSummary.trim()
+        val rateText = AudioFormatFormatter.formatSampleRateHz(
+            input.audioTrackSampleRateHz.takeIf { it > 0 }
+                ?: input.decodedSampleRateHz.takeIf { it > 0 }
+                ?: input.sourceSampleRateHz,
+        )
+        return when {
+            isNativeRateMixerNegotiated -> {
+                val hasZeroProfileStaleNote = raw.contains("0 matching", ignoreCase = true)
+                if (raw.startsWith("MIXER_BEHAVIOR_DEFAULT") && !hasZeroProfileStaleNote) {
+                    raw
+                } else {
+                    val modeNote = if (input.safetyMode == AudioOutputMode.SAFE_VOLUME_MODE) {
+                        "Native Rate, Safe Mode Volume Active"
+                    } else {
+                        "Native Rate, Bit-Perfect Unavailable, Volume Active"
+                    }
+                    "MIXER_BEHAVIOR_DEFAULT ($rateText — Native Sample-Rate USB HAL Profile Confirmed, $modeNote)"
+                }
+            }
+            isBitPerfectNegotiated -> {
+                if (raw.startsWith("MIXER_BEHAVIOR_BIT_PERFECT")) {
+                    raw
+                } else {
+                    "MIXER_BEHAVIOR_BIT_PERFECT ($rateText)"
+                }
+            }
+            input.negotiatedMixerBehavior == NegotiatedMixerBehavior.DEFAULT_MIXER_FALLBACK -> {
+                raw.takeIf { it.isNotEmpty() && it != "Default System Mixer (Safe Mode)" }
+                    ?: "Default System Mixer (USB HAL reported 0 matching bit-perfect or native-rate profiles)"
+            }
+            else -> raw.ifBlank { "Default System Mixer (Safe Mode)" }
+        }
     }
 
     private fun buildStage1Source(input: AudioDiagnosticInput, sourceLabel: String, sourceSummary: String): DiagnosticStageEntry =
@@ -347,6 +388,7 @@ object AudioDiagnosticMapper {
         isBitPerfectNegotiated: Boolean,
         isNativeRateMixerNegotiated: Boolean,
         headline: String,
+        canonicalMixerSummary: String,
     ): DiagnosticStageEntry {
         val stage4Level = when {
             isBitPerfectNegotiated -> VerificationLevel.VERIFIED
@@ -355,10 +397,19 @@ object AudioDiagnosticMapper {
                 VerificationLevel.VERIFIED
             else -> VerificationLevel.INDICATED
         }
+        val detailText = when {
+            isNativeRateMixerNegotiated ->
+                "API ${input.apiLevel} · Mixer=$canonicalMixerSummary · " +
+                    "OS/USB HAL accepted native sample-rate default mixer profile (system volume active)."
+            isBitPerfectNegotiated ->
+                "API ${input.apiLevel} · Mixer=$canonicalMixerSummary · OS/USB HAL confirmed bit-perfect mixer profile."
+            else ->
+                "API ${input.apiLevel} · Mixer=$canonicalMixerSummary"
+        }
         return DiagnosticStageEntry(
             stage = AudioPathStage.OS_POLICY_MIXER_RESAMPLER,
             summary = headline,
-            detail = "API ${input.apiLevel} · Mixer=${input.negotiatedMixerSummary}",
+            detail = detailText,
             verificationLevel = stage4Level,
         )
     }

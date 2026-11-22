@@ -513,5 +513,25 @@ This file records autonomous architectural, dependency, and environment decision
   - Restores one-tap passive Queue inspection while browsing Library, Albums, Folders, or Playlists without sacrificing `MiniPlayerBar` title/artist legibility or cluttering the full-bleed `Artist Detail` Hero header.
 - **Rejected Alternatives:** Wrapping `MiniPlayerBar` metadata to 3 lines (increases vertical footprint over browsing lists); concatenating artist and spec into a single ellipsized `Text` string (hides container/bit-depth/sample-rate whenever an artist name is long); duplicating formatter logic separately from `NotificationSubtitleFormatter`.
 
+---
+
+## D12.12 — `v1.3` Pre-Release POCO F4 Polish Fixes (Stale Track-Switch Spec/Duration, Safe Mode Mixer IPC Tracking, Diagnostics Clarity, & Settings Labels)
+- **Decision:**
+  1. **Immediate Track-Switch Metadata & Duration Seeding (`TrackTransitionStatePolicy.kt`, `PlaybackController.kt`, `AudioOutputEngine.kt`, `NowPlayingScreen.kt`, `UiComponents.kt`, `PlaybackForegroundService.kt`):**
+     - Added pure-Kotlin `TrackTransitionStatePolicy` (`0` `android.*` imports) plus `seedStateForTrackSelection(...)` in `PlaybackController` and `expectedDurationMs` / `expectedContainer` / `expectedCodec` / `expectedSampleRateHz` / `expectedBitDepth` fields on `EngineTrackRequest`.
+     - Whenever switching tracks (`playQueue`, `playQueueShuffled`, `playTrackAt`, `next`, `previous`, `removeQueueItem`, `restoreLastSessionIfNeeded`, empty-queue enqueue, or `RESYNC_VIA_RELOAD`), `PlaybackController` immediately resets `playbackPositionMs` and seeds `durationMs`, `displayFormatSpec`, and pending Stage 1 diagnostics from the newly selected `PlaybackTrack` with `PlaybackStatus.PREPARING`, and guards `PlaybackControllerState` and `engine.state.collect` against lingering previous-track emissions until `MediaCodec` primes the new stream (while leaving seamless `SEAMLESS_REUSE` gapless transitions untouched).
+  2. **Session-Tracked API 34+ `clearPreferredMixerAttributes()` Cleanup (`PreferredMixerSessionTracker.kt`, `AudioRouteAndMixerManager.kt`, `AudioOutputEngine.kt`):**
+     - Added pure-Kotlin `PreferredMixerSessionTracker` (`0` `android.*` imports) tracking the currently applied `(deviceId, behavior, sampleRateHz, androidEncoding, channelCount)` profile via `setPreferredMixerAttributes()`.
+     - Removed unconditional `clearPreferredMixerAttributes()` calls from every track load (`AudioOutputEngine.loadTrackLocked` / `AudioRouteAndMixerManager.prepareOutputDeviceAndNegotiateMixerLocked`): when no preferred mixer attribute is active (the common Safe Mode case), `clearPreferredMixerAttributesOnApi34(...)` emits `0` Binder IPC calls (eliminating the `~65–106 ms` `IAudioPolicyService` transaction code 102 overhead seen in POCO F4 Logcat); when an identical USB HAL profile is already confirmed active on consecutive tracks, it is reused directly with zero clear/set churn; and when leaving Bit-Perfect Opt-In, changing sample rate/encoding, stopping/releasing, disconnecting the active USB DAC, or failing `AudioTrack` creation, cleanup still fires deterministically once.
+  3. **Diagnostics Wording & `DEFAULT_NATIVE_RATE` Accuracy (`ReplayGainProcessor.kt`, `AudioDiagnosticMapper.kt`, `AudioRouteAndMixerManager.kt`):**
+     - Updated ReplayGain bypass label from `"ReplayGain: Bypassed (Bit-Perfect Active)"` to **`ReplayGain: Bypassed (Bit-Perfect Opt-In)`** (`ReplayGainProcessor.BYPASSED_BIT_PERFECT_OPT_IN_LABEL`) so fallback and native-rate states never read contradictorily.
+     - Updated `AudioDiagnosticMapper.resolveCanonicalMixerSummary(...)` and Stage 4 detail so `NegotiatedMixerBehavior.DEFAULT_NATIVE_RATE` consistently reports `OS/USB HAL accepted native sample-rate default mixer profile (system volume active)` and can never emit `"USB HAL reported 0 matching bit-perfect or native-rate profiles"`, and added `nativeRateProfileRejected` distinction in `AudioRouteAndMixerManager.buildFallbackWhenNoProfileConfirmed`.
+  4. **Settings -> Library & Storage Action Labels (`SettingsDisplayAndLibrarySection.kt`):**
+     - Shortened side-by-side button labels from `"Add Folder (SAF)"` / `"Refresh Library"` to **`"Add Folder"`** / **`"Refresh"`** with balanced `weight(1f)`, `12.dp` horizontal content padding, `maxLines = 1`, `softWrap = false`, and `>= 48.dp` height so neither button truncates on `360 dp` phone widths.
+- **Rationale:**
+  - Directly resolves all 4 real-device POCO F4 screen-recording and Logcat polish issues while preserving bit-perfect PCM purity, `SEAMLESS_REUSE` gapless playback, Hearing Safety defaults, and zero-permission offline architecture.
+- **Rejected Alternatives:** Suppressing `Duration` / format badge with blank loading placeholders on track switch (causes UI layout pop on rapid Next/Previous clicks when scanned `PlaybackTrack` metadata is already known); disabling Safe Mode `DEFAULT_NATIVE_RATE` USB negotiation altogether (would needlessly force 48 kHz resampling on USB DACs that support native `MIXER_BEHAVIOR_DEFAULT` rates).
+
+
 
 

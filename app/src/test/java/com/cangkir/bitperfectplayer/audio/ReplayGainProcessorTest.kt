@@ -45,7 +45,7 @@ class ReplayGainProcessorTest {
             assertFalse(res.peakClamped)
             assertFalse(res.isModifyingSamples)
             assertEquals(ReplayGainDiagnosticState.BYPASSED_BIT_PERFECT, res.diagnosticState)
-            assertEquals("ReplayGain: Bypassed (Bit-Perfect Active)", res.diagnosticLabel)
+            assertEquals("ReplayGain: Bypassed (Bit-Perfect Opt-In)", res.diagnosticLabel)
         }
     }
 
