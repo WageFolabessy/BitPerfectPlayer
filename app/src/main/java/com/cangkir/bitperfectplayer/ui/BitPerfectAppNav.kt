@@ -1,5 +1,10 @@
 package com.cangkir.bitperfectplayer.ui
 
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -54,6 +59,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
+import com.cangkir.bitperfectplayer.audio.QueueContext
 import com.cangkir.bitperfectplayer.audio.QueueSourceType
 import com.cangkir.bitperfectplayer.data.DefaultHomepage
 import com.cangkir.bitperfectplayer.ui.library.LibraryScreen
@@ -145,6 +151,12 @@ private fun BitPerfectAppRootContent(viewModel: MainViewModel, startupHomepage: 
     }
     val openDiagnostics = remember(navController) {
         { navController.navigate(Routes.DIAGNOSTICS) { launchSingleTop = true } }
+    }
+    val popBack = remember(navController) {
+        {
+            navController.popBackStack()
+            Unit
+        }
     }
 
     trackPendingAddToPlaylist?.let { targetTrack ->
@@ -314,7 +326,7 @@ private fun BitPerfectAppRootContent(viewModel: MainViewModel, startupHomepage: 
                 onSetSpectrumSparksEnabled = viewModel::setSpectrumSparksEnabled,
                 onSetSpectrumVisualizerActive = viewModel::setSpectrumVisualizerActive,
                 onSampleSpectrumWindow = viewModel::sampleCurrentSpectrumWindow,
-                onBack = { navController.popBackStack() },
+                onBack = popBack,
                 onToggleFavorite = viewModel::toggleFavorite,
                 onAddToPlaylist = openAddToPlaylist,
                 onShowTrackInfo = viewModel::openTrackInfo,
@@ -341,18 +353,33 @@ private fun BitPerfectAppRootContent(viewModel: MainViewModel, startupHomepage: 
             )
         }
 
-        composable(Routes.QUEUE) {
-            val activeContextTracks = remember(playbackState.queueContext, libraryState, playlistsState) {
-                val ctx = playbackState.queueContext
-                val key = ctx.sourceKey ?: ctx.sourceLabel
-                when (ctx.sourceType) {
+        composable(
+            route = Routes.QUEUE,
+            enterTransition = { EnterTransition.None },
+            exitTransition = { ExitTransition.None },
+            popEnterTransition = { EnterTransition.None },
+            popExitTransition = { ExitTransition.None },
+        ) {
+            val queueContext = playbackState.queueContext
+            val activeContextTracks = remember(
+                queueContext,
+                libraryState.albums,
+                libraryState.artists,
+                libraryState.folders,
+                libraryState.recentlyPlayed,
+                libraryState.favorites,
+                playlistsState.playlists,
+                playlistsState.mostPlayed,
+            ) {
+                val key = queueContext.sourceKey ?: queueContext.sourceLabel
+                when (queueContext.sourceType) {
                     QueueSourceType.ALBUM -> libraryState.albums.firstOrNull { it.name == key }?.tracks.orEmpty()
                     QueueSourceType.ARTIST -> libraryState.artists.firstOrNull { it.name == key }?.tracks.orEmpty()
                     QueueSourceType.FOLDER -> libraryState.folders.firstOrNull { it.name == key }?.tracks.orEmpty()
                     QueueSourceType.PLAYLIST -> playlistsState.playlists.firstOrNull { it.id.toString() == key }?.tracks.orEmpty()
                     QueueSourceType.RECENT -> libraryState.recentlyPlayed
                     QueueSourceType.FAVORITES -> libraryState.favorites
-                    QueueSourceType.CUSTOM -> if (ctx.sourceKey == com.cangkir.bitperfectplayer.audio.QueueContext.MOST_PLAYED_KEY) {
+                    QueueSourceType.CUSTOM -> if (queueContext.sourceKey == QueueContext.MOST_PLAYED_KEY) {
                         playlistsState.mostPlayed.map { it.track }
                     } else {
                         emptyList()
@@ -365,7 +392,7 @@ private fun BitPerfectAppRootContent(viewModel: MainViewModel, startupHomepage: 
                 libraryTracks = libraryState.allSongs,
                 activeContextTracks = activeContextTracks,
                 albumArtworkLoader = viewModel.albumArtworkLoader,
-                onBack = { navController.popBackStack() },
+                onBack = popBack,
                 onSelectQueueIndex = viewModel::playTrackAtQueueIndex,
                 onAddTrackToQueue = viewModel::enqueueTrack,
                 onRemoveQueueItem = viewModel::removeQueueItem,
@@ -380,7 +407,7 @@ private fun BitPerfectAppRootContent(viewModel: MainViewModel, startupHomepage: 
                 playbackState = playbackState,
                 playbackPositionMsFlow = viewModel.playbackPositionMs,
                 lyricsUiState = lyricsUiState,
-                onBack = { navController.popBackStack() },
+                onBack = popBack,
                 onImportLrcUri = viewModel::importLrcForActiveTrack,
                 onSaveManualLyrics = viewModel::saveManualLyricsForActiveTrack,
                 onDeleteLyrics = viewModel::deleteLyricsForActiveTrack,
@@ -392,7 +419,7 @@ private fun BitPerfectAppRootContent(viewModel: MainViewModel, startupHomepage: 
         composable(Routes.DIAGNOSTICS) {
             DiagnosticsScreen(
                 playbackState = playbackState,
-                onBack = { navController.popBackStack() },
+                onBack = popBack,
                 onSwitchToSafeMode = viewModel::switchToSafeMode,
                 onRequestBitPerfectMode = viewModel::requestBitPerfectMode,
                 onConfirmBitPerfectWarning = viewModel::confirmBitPerfectWarning,
@@ -445,6 +472,10 @@ internal fun BitPerfectStartupNavHost(
             navController = navController,
             startDestination = startDestination,
             modifier = contentModifier,
+            enterTransition = { fadeIn(animationSpec = tween(durationMillis = 120)) },
+            exitTransition = { fadeOut(animationSpec = tween(durationMillis = 90)) },
+            popEnterTransition = { fadeIn(animationSpec = tween(durationMillis = 120)) },
+            popExitTransition = { fadeOut(animationSpec = tween(durationMillis = 90)) },
         ) {
             composable(Routes.LIBRARY) {
                 libraryContent(initialLibraryTab)

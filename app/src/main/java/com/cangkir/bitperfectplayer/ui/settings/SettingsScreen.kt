@@ -223,7 +223,7 @@ fun SettingsScreen(
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
                 item(key = "section_audio_engine", contentType = "settings_group") {
-                    SettingsAudioEngineSection(
+                    val audioEngineUiState = SettingsAudioEngineUiState(
                         gaplessEnabled = playbackState.gaplessEnabled,
                         isBitPerfectOptIn = isBitPerfectOptIn,
                         isBitPerfectMixerActive = diagnostics.isBitPerfectMixerActive,
@@ -231,13 +231,27 @@ fun SettingsScreen(
                         modeLabel = modeLabel,
                         modeDotColor = modeDotColor,
                         activeDeviceName = safetyState.activeDeviceName,
+                    )
+                    val audioEngineCallbacks = remember(
+                        onSetGaplessEnabled,
+                        onSetReplayGainMode,
+                        onSetReplayGainPreampDb,
+                        onSetReplayGainPreventClipping,
+                        onOpenDiagnostics,
+                    ) {
+                        SettingsAudioEngineCallbacks(
+                            onSetGaplessEnabled = onSetGaplessEnabled,
+                            onSetReplayGainMode = onSetReplayGainMode,
+                            onSetReplayGainPreampDb = onSetReplayGainPreampDb,
+                            onSetReplayGainPreventClipping = onSetReplayGainPreventClipping,
+                            onOpenSleepTimer = { showSleepTimerSheet = true },
+                            onOpenDiagnostics = onOpenDiagnostics,
+                        )
+                    }
+                    SettingsAudioEngineSection(
+                        uiState = audioEngineUiState,
                         sleepTimerStateFlow = sleepTimerStateFlow,
-                        onSetGaplessEnabled = onSetGaplessEnabled,
-                        onSetReplayGainMode = onSetReplayGainMode,
-                        onSetReplayGainPreampDb = onSetReplayGainPreampDb,
-                        onSetReplayGainPreventClipping = onSetReplayGainPreventClipping,
-                        onOpenSleepTimer = { showSleepTimerSheet = true },
-                        onOpenDiagnostics = onOpenDiagnostics,
+                        callbacks = audioEngineCallbacks,
                     )
                 }
 

@@ -85,6 +85,7 @@ class AudioOutputEngine(
     private val isPausedFlag = AtomicBoolean(true)
     private val stopWorkerFlag = AtomicBoolean(false)
     private val releasedFlag = AtomicBoolean(false)
+    private val pendingRouteReconfigureOnPlay = AtomicBoolean(false)
     private val pendingSeekMs = AtomicLong(-1L)
 
     @Volatile private var replayGainConfig: ReplayGainConfig = ReplayGainConfig()
@@ -160,6 +161,7 @@ class AudioOutputEngine(
     fun loadTrack(request: EngineTrackRequest) {
         if (releasedFlag.get()) return
         val generation = loadGeneration.incrementAndGet()
+        pendingRouteReconfigureOnPlay.set(false)
         scratchRunner.abortScratch()
         preloadController.clearPreloadedNextAsync()
         stopWorkerFlag.set(true)
@@ -181,7 +183,14 @@ class AudioOutputEngine(
         enqueueControlTask {
             if (releasedFlag.get()) return@enqueueControlTask
             engineLock.withLock {
-                if (activeDecoder == null || activeAudioTrack == null || _state.value.status == PlaybackStatus.COMPLETED) {
+                val shouldReload = RouteChangeReconfigurePolicy.shouldReloadOnPlay(
+                    hasPendingRouteReconfigure = pendingRouteReconfigureOnPlay.get(),
+                    hasActiveDecoder = activeDecoder != null,
+                    hasActiveAudioTrack = activeAudioTrack != null,
+                    isCompleted = _state.value.status == PlaybackStatus.COMPLETED,
+                )
+                if (shouldReload) {
+                    pendingRouteReconfigureOnPlay.set(false)
                     val req = currentRequest ?: return@withLock
                     val resumePos = if (_state.value.status == PlaybackStatus.COMPLETED) 0L else _playbackPositionMs.value
                     val generation = loadGeneration.incrementAndGet()
@@ -354,6 +363,7 @@ class AudioOutputEngine(
     }
 
     private fun teardownFullEngineResourcesLocked() {
+        pendingRouteReconfigureOnPlay.set(false)
         preloadController.clearPreloadedNextLocked()
         stopWorkerAndReleaseTrackLocked(clearMixer = true)
         scratchRunner.releaseRingBuffer()
@@ -365,6 +375,7 @@ class AudioOutputEngine(
 
     private fun loadTrackLocked(request: EngineTrackRequest, generation: Long, preserveAutoPauseNotice: Boolean) {
         if (isLoadStale(generation)) return
+        pendingRouteReconfigureOnPlay.set(false)
         val loadStartMs = SystemClock.elapsedRealtime()
         preloadController.clearPreloadedNextLocked()
         stopWorkerAndReleaseTrackLocked(clearMixer = true)
@@ -498,6 +509,16 @@ class AudioOutputEngine(
 
     private fun handleSafetyCommand(command: SafetyCommand) {
         recomputeReplayGain()
+        val statusBeforeCommand = _state.value.status
+        val isActivelyPlayingOrPreparing =
+            statusBeforeCommand == PlaybackStatus.PLAYING || statusBeforeCommand == PlaybackStatus.PREPARING
+        val hasLoadedTrack =
+            currentRequest != null && (activeDecoder != null || statusBeforeCommand == PlaybackStatus.PREPARING)
+        val reconfigureAction = RouteChangeReconfigurePolicy.decideAction(
+            commandType = command.type,
+            isActivelyPlayingOrPreparing = isActivelyPlayingOrPreparing,
+            hasLoadedTrack = hasLoadedTrack,
+        )
         when (command.type) {
             SafetyEventType.AUTO_PAUSE -> {
                 diagnosticLogger?.logAudio("AUTO_PAUSE") {
@@ -505,12 +526,19 @@ class AudioOutputEngine(
                         "reason" to (command.autoPauseReason?.name ?: "UNKNOWN"),
                         "clearMixer" to command.requiresClearPreferredMixerAttributes,
                         "mode" to safetyController.state().mode.name,
+                        "deferred" to (reconfigureAction == SafetyReconfigureAction.DEFER_RECONFIGURE_UNTIL_PLAY),
                     )
                 }
                 scratchRunner.abortScratch()
                 routeAndMixerManager.resumeAfterTransientFocusLoss = false
                 pauseInternal(clearFocus = true, notice = AudioSafetyController.formatAutoPauseNotice(command.autoPauseReason))
-                enqueueSafetyReconfigure(command.requiresClearPreferredMixerAttributes, releaseRing = false, autoResume = false, true)
+                enqueueSafetyReconfigure(
+                    action = reconfigureAction,
+                    clearPreferredMixer = command.requiresClearPreferredMixerAttributes,
+                    releaseRing = false,
+                    autoResume = false,
+                    preserveAutoPauseNotice = true,
+                )
             }
             SafetyEventType.MODE_CHANGED_TO_SAFE -> {
                 diagnosticLogger?.logAudio("AUDIO_MODE_CHANGED") {
@@ -519,7 +547,13 @@ class AudioOutputEngine(
                         "clearMixer" to command.requiresClearPreferredMixerAttributes,
                     )
                 }
-                enqueueSafetyReconfigure(command.requiresClearPreferredMixerAttributes, false, _state.value.isPlaying, false)
+                enqueueSafetyReconfigure(
+                    action = reconfigureAction,
+                    clearPreferredMixer = command.requiresClearPreferredMixerAttributes,
+                    releaseRing = false,
+                    autoResume = statusBeforeCommand == PlaybackStatus.PLAYING,
+                    preserveAutoPauseNotice = false,
+                )
             }
             SafetyEventType.MODE_CHANGED_TO_BIT_PERFECT -> {
                 diagnosticLogger?.logAudio("AUDIO_MODE_CHANGED") {
@@ -529,7 +563,13 @@ class AudioOutputEngine(
                     )
                 }
                 scratchRunner.abortScratch()
-                enqueueSafetyReconfigure(false, releaseRing = true, autoResume = _state.value.isPlaying, preserveAutoPauseNotice = false)
+                enqueueSafetyReconfigure(
+                    action = reconfigureAction,
+                    clearPreferredMixer = false,
+                    releaseRing = true,
+                    autoResume = statusBeforeCommand == PlaybackStatus.PLAYING,
+                    preserveAutoPauseNotice = false,
+                )
             }
             SafetyEventType.REQUIRES_SAFETY_WARNING, SafetyEventType.NONE -> {
                 _state.update { it.copy(safetyState = safetyController.state()) }
@@ -539,6 +579,7 @@ class AudioOutputEngine(
     }
 
     private fun enqueueSafetyReconfigure(
+        action: SafetyReconfigureAction,
         clearPreferredMixer: Boolean,
         releaseRing: Boolean,
         autoResume: Boolean,
@@ -549,9 +590,38 @@ class AudioOutputEngine(
             engineLock.withLock {
                 if (clearPreferredMixer) routeAndMixerManager.clearPreferredMixerAttributesOnApi34(null)
                 if (releaseRing) scratchRunner.releaseRingBuffer()
-                reconfigureTrackIfLoadedLocked(autoResume, preserveAutoPauseNotice)
+                when (action) {
+                    SafetyReconfigureAction.RECONFIGURE_NOW ->
+                        reconfigureTrackIfLoadedLocked(autoResume, preserveAutoPauseNotice)
+                    SafetyReconfigureAction.DEFER_RECONFIGURE_UNTIL_PLAY ->
+                        deferRouteReconfigureWhilePausedLocked()
+                    SafetyReconfigureAction.DIAGNOSTICS_ONLY -> {
+                        preloadController.clearPreloadedNextLocked()
+                        _state.update { it.copy(safetyState = safetyController.state()) }
+                        publishDiagnostics()
+                    }
+                }
             }
         }
+    }
+
+    private fun deferRouteReconfigureWhilePausedLocked() {
+        preloadController.clearPreloadedNextLocked()
+        // Guard against a narrow race where an earlier queued play() started right before this task ran.
+        isPausedFlag.set(true)
+        activeAudioTrack?.let { trackWriter.safePause(it) }
+        if (currentRequest != null && activeDecoder != null) {
+            pendingRouteReconfigureOnPlay.set(true)
+        }
+        _state.update { current ->
+            val safeStatus = if (current.status == PlaybackStatus.PLAYING || current.status == PlaybackStatus.PREPARING) {
+                PlaybackStatus.PAUSED
+            } else {
+                current.status
+            }
+            current.copy(status = safeStatus, safetyState = safetyController.state())
+        }
+        publishDiagnostics()
     }
 
     private fun reconfigureTrackIfLoadedLocked(autoResume: Boolean, preserveAutoPauseNotice: Boolean) {

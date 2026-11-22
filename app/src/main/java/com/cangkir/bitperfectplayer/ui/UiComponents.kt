@@ -107,7 +107,7 @@ fun TrackArtworkThumbnail(
         }
     }
 
-    val shape = RoundedCornerShape(cornerRadius)
+    val shape = remember(cornerRadius) { RoundedCornerShape(cornerRadius) }
     val iconSize = (size * 0.42f).coerceIn(18.dp, 52.dp)
     val currentBitmap = bitmap
     val imageBitmap = remember(currentBitmap) {

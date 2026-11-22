@@ -65,6 +65,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -90,6 +91,8 @@ import com.cangkir.bitperfectplayer.ui.theme.IcePrimary
 import com.cangkir.bitperfectplayer.ui.theme.IcePrimaryContainer
 import com.cangkir.bitperfectplayer.ui.theme.TextMuted
 import kotlin.math.abs
+
+private val QueueDraggedRowShape = RoundedCornerShape(10.dp)
 
 private class QueueDragDropState(val listState: LazyListState) {
     var onMove: (Int, Int) -> Unit = { _, _ -> }
@@ -220,17 +223,27 @@ fun QueueScreen(
         )
     }
 
-    val listState = rememberLazyListState()
+    // Initialize directly at the top when the active track is near the start (avoiding any
+    // post-first-frame scroll jump), or directly near currentIndex when deep in a long queue.
+    val initialScrollIndex = remember {
+        if (queue.currentIndex > 3 && queue.currentIndex < queue.items.size) {
+            (queue.currentIndex - 1).coerceAtLeast(0)
+        } else {
+            0
+        }
+    }
+    val listState = rememberLazyListState(initialFirstVisibleItemIndex = initialScrollIndex)
     val dragState = remember(listState) { QueueDragDropState(listState) }
+    val dragDistanceProvider = remember(dragState) { { dragState.draggedDistanceY } }
     val haptic = LocalHapticFeedback.current
     val isRtl = LocalLayoutDirection.current == LayoutDirection.Rtl
     SideEffect {
         dragState.onMove = onMoveQueueItem
     }
 
-    val rowKeys = remember(queue.items, queue.entryIds) {
+    val rowKeys: List<Any> = remember(queue.items, queue.entryIds) {
         if (queue.entryIds.size == queue.items.size) {
-            queue.entryIds.map { it as Any }
+            queue.entryIds
         } else {
             val seen = HashMap<String, Int>(queue.items.size)
             queue.items.map { track ->
@@ -434,14 +447,17 @@ fun QueueScreen(
                         val rowKey = rowKeys[index]
                         val isCurrent = index == queue.currentIndex
                         val isDragged = dragState.draggedItemKey == rowKey
+                        val isAnyRowDragging = dragState.isDragging
                         QueueTrackRow(
+                            index = index,
                             track = track,
                             isCurrent = isCurrent,
                             isDragged = isDragged,
-                            dragState = dragState,
+                            isAnyRowDragging = isAnyRowDragging,
+                            dragDistanceProvider = dragDistanceProvider,
                             albumArtworkLoader = albumArtworkLoader,
-                            onSelect = { onSelectQueueIndex(index) },
-                            onRemove = { onRemoveQueueItem(index) },
+                            onSelectIndex = onSelectQueueIndex,
+                            onRemoveIndex = onRemoveQueueItem,
                         )
                     }
                 }
@@ -452,45 +468,52 @@ fun QueueScreen(
 
 @Composable
 private fun QueueTrackRow(
+    index: Int,
     track: PlaybackTrack,
     isCurrent: Boolean,
     isDragged: Boolean,
-    dragState: QueueDragDropState,
+    isAnyRowDragging: Boolean,
+    dragDistanceProvider: () -> Float,
     albumArtworkLoader: AlbumArtworkLoader,
-    onSelect: () -> Unit,
-    onRemove: () -> Unit,
+    onSelectIndex: (Int) -> Unit,
+    onRemoveIndex: (Int) -> Unit,
 ) {
     val rowBg = when {
         isDragged -> MaterialTheme.colorScheme.surfaceContainerHighest
         isCurrent -> MaterialTheme.colorScheme.surfaceVariant
         else -> Color.Transparent
     }
+    val subtitle = remember(track.artist, track.formatBadge) { "${track.artist} · ${track.formatBadge}" }
+    val removeContentDescription = remember(track.title) { "Remove ${track.title} from queue" }
+    val rowRootModifier = if (isDragged) {
+        Modifier
+            .fillMaxWidth()
+            .zIndex(1f)
+            .graphicsLayer {
+                translationY = dragDistanceProvider()
+                scaleX = 1.01f
+                scaleY = 1.01f
+                shadowElevation = 10f
+            }
+    } else {
+        Modifier.fillMaxWidth()
+    }
     val dragBorderModifier = if (isDragged) {
         Modifier.border(
             width = 0.75.dp,
             color = IcePrimary.copy(alpha = 0.55f),
-            shape = RoundedCornerShape(10.dp),
+            shape = QueueDraggedRowShape,
         )
     } else {
         Modifier
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .zIndex(if (isDragged) 1f else 0f)
-            .graphicsLayer {
-                translationY = if (isDragged) dragState.draggedDistanceY else 0f
-                scaleX = if (isDragged) 1.01f else 1f
-                scaleY = if (isDragged) 1.01f else 1f
-                shadowElevation = if (isDragged) 10f else 0f
-            },
-    ) {
+    Column(modifier = rowRootModifier) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = if (isDragged) 6.dp else 0.dp)
-                .clip(if (isDragged) RoundedCornerShape(10.dp) else RoundedCornerShape(0.dp))
+                .clip(if (isDragged) QueueDraggedRowShape else RectangleShape)
                 .background(rowBg)
                 .then(dragBorderModifier)
                 .padding(start = 4.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
@@ -513,7 +536,7 @@ private fun QueueTrackRow(
             Row(
                 modifier = Modifier
                     .weight(1f)
-                    .clickable(enabled = !dragState.isDragging, onClick = onSelect)
+                    .clickable(enabled = !isAnyRowDragging) { onSelectIndex(index) }
                     .padding(vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -534,7 +557,7 @@ private fun QueueTrackRow(
                         overflow = TextOverflow.Ellipsis,
                     )
                     Text(
-                        text = "${track.artist} · ${track.formatBadge}",
+                        text = subtitle,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
@@ -544,13 +567,13 @@ private fun QueueTrackRow(
             }
 
             IconButton(
-                onClick = onRemove,
-                enabled = !dragState.isDragging,
+                onClick = { onRemoveIndex(index) },
+                enabled = !isAnyRowDragging,
                 modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
             ) {
                 Icon(
                     imageVector = Icons.Filled.Close,
-                    contentDescription = "Remove ${track.title} from queue",
+                    contentDescription = removeContentDescription,
                 )
             }
         }
