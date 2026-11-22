@@ -94,6 +94,8 @@ data class AudioDiagnosticSnapshot(
     val stages: List<DiagnosticStageEntry>,
     val maximumClaimNotice: String = MAXIMUM_VERIFICATION_CLAIM_NOTICE,
     val isNativeSampleRateMixerActive: Boolean = false,
+    val sourceSampleRateHz: Int = 0,
+    val sourceBitDepth: Int? = null,
 ) {
     companion object {
         const val MAXIMUM_VERIFICATION_CLAIM_NOTICE: String =
@@ -197,6 +199,8 @@ object AudioDiagnosticMapper {
             stages = stages,
             maximumClaimNotice = AudioDiagnosticSnapshot.MAXIMUM_VERIFICATION_CLAIM_NOTICE,
             isNativeSampleRateMixerActive = isNativeRateMixerNegotiated,
+            sourceSampleRateHz = if (input.isTrackLoaded) input.sourceSampleRateHz else 0,
+            sourceBitDepth = if (input.isTrackLoaded) input.sourceBitDepth else null,
         )
     }
 

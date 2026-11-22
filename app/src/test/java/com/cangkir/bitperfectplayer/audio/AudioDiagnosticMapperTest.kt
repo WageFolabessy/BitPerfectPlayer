@@ -2,6 +2,7 @@ package com.cangkir.bitperfectplayer.audio
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -269,5 +270,47 @@ class AudioDiagnosticMapperTest {
         assertEquals(AudioDiagnosticMapper.SAFE_MODE_NATIVE_RATE_LABEL, safeModeNativeRate.pathStatusHeadline)
         assertEquals(VerificationLevel.VERIFIED, safeModeNativeRate.stages[3].verificationLevel)
         assertTrue(safeModeNativeRate.dspEqVolumeStatusSummary.contains("Safe Mode (System Volume Active)"))
+    }
+
+    @Test
+    fun sourceRateAndBitDepth_propagatesOnlySourceValuesAndClearsWhenIdle() {
+        val flac = AudioDiagnosticMapper.map(
+            AudioDiagnosticInput(
+                isTrackLoaded = true,
+                sourceContainer = "FLAC",
+                sourceCodec = "FLAC",
+                sourceSampleRateHz = 96_000,
+                sourceBitDepth = 24,
+                decodedEffectiveBitDepth = 24,
+                decodedSampleRateHz = 96_000,
+            ),
+        )
+        assertEquals(96_000, flac.sourceSampleRateHz)
+        assertEquals(24, flac.sourceBitDepth)
+
+        // Lossy MP3 decodes to 16-bit PCM, but sourceBitDepth must remain null (never claiming "MP3 16-bit")
+        val mp3 = AudioDiagnosticMapper.map(
+            AudioDiagnosticInput(
+                isTrackLoaded = true,
+                sourceContainer = "MP3",
+                sourceCodec = "MP3",
+                sourceSampleRateHz = 44_100,
+                sourceBitDepth = null,
+                decodedEffectiveBitDepth = 16,
+                decodedSampleRateHz = 44_100,
+            ),
+        )
+        assertEquals(44_100, mp3.sourceSampleRateHz)
+        assertNull(mp3.sourceBitDepth)
+
+        val idle = AudioDiagnosticMapper.map(
+            AudioDiagnosticInput(
+                isTrackLoaded = false,
+                sourceSampleRateHz = 96_000,
+                sourceBitDepth = 24,
+            ),
+        )
+        assertEquals(0, idle.sourceSampleRateHz)
+        assertNull(idle.sourceBitDepth)
     }
 }

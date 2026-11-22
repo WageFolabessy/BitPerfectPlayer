@@ -213,4 +213,110 @@ class MediaSessionUpdatePolicyTest {
             MediaSessionUpdatePolicy.resolveNotificationAction(false, false, null, pausedSafe),
         )
     }
+
+    @Test
+    fun metadataPlaybackStateAndNotification_triggerImmediatelyOnSubtitleFavoriteOrShuffleChanges() {
+        val baseMeta = MediaMetadataKey(
+            trackUri = "content://a",
+            durationMs = 200_000L,
+            artworkToken = 7,
+            subtitle = "The Beatles · FLAC",
+        )
+        assertTrue(
+            MediaSessionUpdatePolicy.shouldUpdateMetadata(
+                baseMeta,
+                baseMeta.copy(subtitle = "The Beatles · FLAC 24-bit · 96 kHz"),
+            ),
+        )
+
+        val lastPublished = PublishedPlaybackState(
+            status = PlaybackStatus.PLAYING,
+            trackUri = "content://a",
+            errorMessage = null,
+            positionMs = 15_000L,
+            playbackSpeed = 1.0f,
+            publishedAtElapsedMs = 50_000L,
+            isFavorite = false,
+            shuffleEnabled = false,
+        )
+        // Steady 50 ms tick with unchanged favorite/shuffle stays silent
+        assertFalse(
+            MediaSessionUpdatePolicy.shouldUpdatePlaybackState(
+                last = lastPublished,
+                status = PlaybackStatus.PLAYING,
+                trackUri = "content://a",
+                errorMessage = null,
+                positionMs = 15_050L,
+                playbackSpeed = 1.0f,
+                nowElapsedMs = 50_050L,
+                isFavorite = false,
+                shuffleEnabled = false,
+            ),
+        )
+        // Favorite toggle triggers immediate PlaybackState publish
+        assertTrue(
+            MediaSessionUpdatePolicy.shouldUpdatePlaybackState(
+                last = lastPublished,
+                status = PlaybackStatus.PLAYING,
+                trackUri = "content://a",
+                errorMessage = null,
+                positionMs = 15_050L,
+                playbackSpeed = 1.0f,
+                nowElapsedMs = 50_050L,
+                isFavorite = true,
+                shuffleEnabled = false,
+            ),
+        )
+        // Shuffle toggle triggers immediate PlaybackState publish
+        assertTrue(
+            MediaSessionUpdatePolicy.shouldUpdatePlaybackState(
+                last = lastPublished,
+                status = PlaybackStatus.PLAYING,
+                trackUri = "content://a",
+                errorMessage = null,
+                positionMs = 15_050L,
+                playbackSpeed = 1.0f,
+                nowElapsedMs = 50_050L,
+                isFavorite = false,
+                shuffleEnabled = true,
+            ),
+        )
+
+        val notifBase = NotificationContentKey(
+            trackUri = "content://a",
+            isPlaying = true,
+            isBitPerfectMixerActive = false,
+            artworkToken = 7,
+            subtitle = "The Beatles · FLAC 24-bit · 96 kHz",
+            isFavorite = false,
+            shuffleEnabled = false,
+        )
+        assertEquals(
+            NotificationDispatchAction.PROMOTE_FOREGROUND,
+            MediaSessionUpdatePolicy.resolveNotificationAction(
+                isForegroundActive = true,
+                isPlaying = true,
+                lastKey = notifBase,
+                currentKey = notifBase.copy(isFavorite = true),
+            ),
+        )
+        assertEquals(
+            NotificationDispatchAction.UPDATE_NOTIFICATION,
+            MediaSessionUpdatePolicy.resolveNotificationAction(
+                isForegroundActive = true,
+                isPlaying = false,
+                lastKey = notifBase.copy(isPlaying = false),
+                currentKey = notifBase.copy(isPlaying = false, shuffleEnabled = true),
+            ),
+        )
+        assertEquals(
+            NotificationDispatchAction.PROMOTE_FOREGROUND,
+            MediaSessionUpdatePolicy.resolveNotificationAction(
+                isForegroundActive = true,
+                isPlaying = true,
+                lastKey = notifBase,
+                currentKey = notifBase.copy(subtitle = "The Beatles · FLAC 16-bit · 44.1 kHz"),
+            ),
+        )
+    }
 }

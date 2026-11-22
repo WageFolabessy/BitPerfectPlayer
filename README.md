@@ -6,10 +6,10 @@ A 100% offline, local-first native Android music player (`com.cangkir.bitperfect
 
 ## Core Design Principles
 
-1. **100% Offline and Local-First:** Zero `INTERNET`, `RECORD_AUDIO`, `MANAGE_EXTERNAL_STORAGE`, or `WRITE_EXTERNAL_STORAGE` permissions. No networking libraries, telemetry, analytics, ads, cloud sync, or automatic online lookups for metadata, artwork, or lyrics.
+1. **100% Offline and Local-First:** Zero `INTERNET`, `RECORD_AUDIO`, `MANAGE_EXTERNAL_STORAGE`, `WRITE_EXTERNAL_STORAGE`, or `READ_MEDIA_IMAGES` permissions. No networking libraries, telemetry, analytics, ads, cloud sync, or automatic online lookups for metadata, artwork, or lyrics.
 2. **Hearing Safety First:** Defaults to **Safe Mode (`SAFE_VOLUME_MODE`)** on fresh installation and whenever any USB audio device connects. **Bit-Perfect Opt-In (`BIT_PERFECT_OPT_IN`)** never auto-activates and requires explicit confirmation through a mandatory `HearingSafetyWarningDialog` whenever hardware volume control is unverified.
 3. **Honest Audio Diagnostics:** Explicitly distinguishes verified runtime state from OS-indicated metadata and unverifiable DAC hardware stages. Never equates lossless file decoding with verified bit-perfect output.
-4. **Pure-Kotlin Domain Separation:** Core domain logic (SHA-256 content fingerprinting, `.lrc` parsing, WAV RIFF/PCM decoding, playback queue, safety state machine, route-change reconfigure policy, ReplayGain tagging/scaling, FFT spectrum DSP, turntable scratch DSP, diagnostic log formatting/rotation/buffering, JSON backup codec, and `.m3u8` codec) lives in `android.*`-free Kotlin modules for deterministic JVM unit testing.
+4. **Pure-Kotlin Domain Separation:** Core domain logic (SHA-256 content fingerprinting, `.lrc` parsing, WAV RIFF/PCM decoding, playback queue, safety state machine, route-change reconfigure policy, ReplayGain tagging/scaling, FFT spectrum DSP, turntable scratch DSP, WCAG cover-palette extraction, FLAC/MP3 multi-artwork header parsing, artist detail projection, notification subtitle/letterbox/custom-action logic, diagnostic log formatting/rotation/buffering, JSON backup codec, and `.m3u8` codec) lives in `android.*`-free Kotlin modules for deterministic JVM unit testing.
 
 ---
 
@@ -60,18 +60,24 @@ Every diagnostic item is tagged `VERIFIED`, `INDICATED`, or `UNVERIFIABLE`, acco
 
 - **Opt-In Local Diagnostic Logging (`Settings -> DIAGNOSTIC LOGGING`):** Strictly **OFF by default** with zero extra permissions, zero disk I/O when disabled, and zero hot-path audio/UI thread blocking. When enabled, writes compact, single-line UTC `key=value` records across four bounded/rotated private `.txt` files (`device_summary.txt`, `audio_pipeline.txt`, `performance.txt`, `errors_and_crashes.txt`; `256 KB` cap + 1 `.prev.txt` backup per append channel, `< 2 MB` total) with defense-in-depth PII/URI/path redaction (never logs song titles, artists, albums, filenames, folder names, or raw URIs — uses 8-character SHA-256 prefixes and technical audio metadata only). Includes **Export Logs (.zip)** via SAF, **Share Logs** via scoped `FileProvider`, **Clear Logs**, and `-keepattributes SourceFile,LineNumberTable` in `app/src/main/keepRules/rules.keep` for `retrace`-ready Release APK crash stacks (retain `app/build/outputs/mapping/release/mapping.txt` per release build).
 
-### Library, Context-Aware Queue, Playlists, and Local Backup
+### Library, Artist Detail, Multi-Artwork, Queue, Playlists, and Local Backup
 
 - **Scoped Storage Library (`LocalLibraryRepository.kt`, `MediaScanFilter.kt`):** Queries `MediaStore` while filtering out messaging voice notes (such as WhatsApp `PTT-` / `AUD-` clips), call/voice recordings, ringtones, alarms, notifications, and short sound effects (< 15 seconds). Supports manual Storage Access Framework (SAF) folder/file selection with persistable URI permissions.
 - **Navigation, Configurable Default Homepage, and Views (`DefaultHomepage`, `BitPerfectAppNav.kt`):** Bottom navigation (or adaptive side `NavigationRail` on `>= 600.dp`) for **Library** (`All Songs`, `Folders`, `Artists`, `Albums`, `Recent`, `Favorites`), **Playlists** (including smart `Most Played`), and **Settings**, plus **Now Playing**, **Queue**, **Lyrics**, **Diagnostics**, and a **Track Info** technical details sheet. Users can select any Library tab or `Playlists` as their **Default Homepage** in Settings (applied once on cold launch without hijacking subsequent navigation).
+- **Studio Artist Detail Redesign & Zero-Permission Custom Artist Photo (`ArtistDetailView.kt`, `ArtistDetailHelper.kt`, `ArtistPhotoStore.kt`):** Unified scrollable Hero Banner layout displaying offline custom artist photos (selected via Android's zero-permission Photo Picker with pure-Kotlin JPEG EXIF orientation correction and **0** `READ_MEDIA_IMAGES` permissions) -> embedded `ARTIST` artwork -> newest album cover (`ContentScale.Fit`) -> crisp monochrome monogram, paired with album/track/duration stats, `Play All` & `Shuffle`, a newest-release-year-first horizontal `Albums` carousel (`cached_tracks.year`), a ruled `TRACKS` section, isolated Contextual Local Artist Dynamic Theme, and full parent backstack (`Artists -> Artist Detail -> Album Detail -> Back -> Artist Detail`).
 - **Full-List `All Songs` Search Playback:** Tapping a filtered search result in `All Songs` queues the full sorted `All Songs` library starting at that track's index so Next, Previous, and Shuffle continue seamlessly.
-- **Metadata Ordering and Sorting (`TrackNumberParser.kt`, `LibrarySortPolicy.kt`):** Extracts disc and track numbers from MediaStore tags, FLAC `VORBIS_COMMENT`, and safe filename patterns without extra Binder overhead during initial scans. Persists independent per-scope sort preferences (`Track #`, `Album`, `Title`, `Sample Rate`, etc.) computed off the main thread.
-- **Context-Aware Passive Queue & Pure-Compose Drag-and-Drop Reorder (`QueueContext.kt`, `PlaybackQueueManager.kt`, `QueueScreen.kt`):** Tapping the top-bar Queue icon is strictly passive (read-only inspection—never pauses playback or overwrites the active queue). Preserves queue source scope (`ALL_SONGS`, `ALBUM`, `ARTIST`, `FOLDER`, `PLAYLIST`, `RECENT`, `FAVORITES`, `CUSTOM`), restores the exact scoped queue on cold relaunch (paused), supports Shuffle and Repeat (`OFF` / `ALL` / `ONE`), and offers zero-dependency pure-Compose drag-and-drop track reordering via a dedicated `48.dp` drag handle with live midpoint swapping and edge auto-scrolling.
+- **Metadata Ordering and Sorting (`TrackNumberParser.kt`, `LibrarySortPolicy.kt`):** Extracts disc numbers, track numbers, and release years from MediaStore tags, FLAC `VORBIS_COMMENT`, and safe filename patterns without extra Binder overhead during initial scans. Persists independent per-scope sort preferences (`Track #`, `Album`, `Title`, `Sample Rate`, etc.) computed off the main thread.
+- **Passive `MiniPlayerBar` Queue & Pure-Compose Drag-and-Drop Reorder (`QueueContext.kt`, `PlaybackQueueManager.kt`, `QueueScreen.kt`, `UiComponents.kt`):** The strictly passive (read-only) Queue icon lives directly on `MiniPlayerBar` beside Play/Pause and Next (and on `NowPlayingScreen`), decluttering top app bars and never pausing playback or overwriting the active queue. Preserves queue source scope (`ALL_SONGS`, `ALBUM`, `ARTIST`, `FOLDER`, `PLAYLIST`, `RECENT`, `FAVORITES`, `CUSTOM`), restores the exact scoped queue on cold relaunch (paused), supports Shuffle and Repeat (`OFF` / `ALL` / `ONE`), and offers zero-dependency pure-Compose drag-and-drop track reordering via a dedicated `48.dp` drag handle with live midpoint swapping and edge auto-scrolling.
 - **Anti-Skip Play Count (`PlayCountTracker.kt`):** Tracks real active `AudioTrack` playback time (ignoring pauses, seek jumps, and `< 5 s` skips; requiring `30 s` or `50%` listen threshold) bound to SHA-256 content fingerprints.
 - **Playlists and `.m3u8` Import/Export (`M3u8PlaylistCodec.kt`, `PlaylistRepository.kt`):** Local playlist CRUD with `.m3u8` SAF export and import resolving tracks by SHA-256 fingerprint, URI, relative path, or filename.
-- **100% Offline Local Backup and Restore (`LocalBackupCodec.kt`, `LocalBackupRepository.kt`):** Custom dependency-free RFC 8259 JSON encoder and strict parser (`schemaVersion = 1`) exporting and non-destructively merging playlists, fingerprint-bound lyrics, favorites, listening stats, and `defaultHomepage` (with full backward compatibility for v1.0/v1.1 backups) via SAF `.json` files.
-- **Full Uncropped Local Album Artwork (`AlbumArtworkLoader.kt`, `AlbumArtworkHelper.kt`, `UiComponents.kt`):** Extracts embedded cover art, MediaStore thumbnails, and SAF sibling cover images (`cover.jpg`, `folder.jpg`, `front.jpg`, `album.jpg`, `.png`) with strictly aspect-ratio-preserving proportional scaling and bounded memory/disk caching. Displays full uncropped artwork (`ContentScale.Fit` on a matte-obsidian backdrop) across all track lists, group lists, playlists, Queue, MiniPlayer, and Square Cover mode, while preserving the natural circular Vinyl Disc center label (`CircleShape`).
-- **Background Playback & Android 17 (`targetSdk = 37`) Hardening (`PlaybackForegroundService.kt`, `ForegroundPlaybackGate.kt`):** `PlaybackForegroundService` (`foregroundServiceType="mediaPlayback"`) using `ServiceCompat.startForeground(...)`, platform `android.media.session.MediaSession`, and `Notification.MediaStyle`. When playback is started or resumed from the background (such as via lock-screen or headset `MediaSession.Callback` after the foreground service was stopped), pure-Kotlin `ForegroundPlaybackGate` awaits active `mediaPlayback` Foreground Service While-In-Use (WIU) promotion before `AudioOutputEngine` calls `AudioManager.requestAudioFocus(...)` or `AudioTrack.play()`/`write()` (with **0 ms added latency** during in-app playback or when the service is already promoted), and guards `startForegroundService()` / `startForeground()` against `ForegroundServiceStartNotAllowedException` and `SecurityException`.
+- **100% Offline Local Backup and Restore (`LocalBackupCodec.kt`, `LocalBackupRepository.kt`):** Custom dependency-free RFC 8259 JSON encoder and strict parser (`schemaVersion = 1`) exporting and non-destructively merging playlists, fingerprint-bound lyrics, favorites, listening stats, `defaultHomepage`, and `dynamicCoverThemeEnabled` (with full backward compatibility for v1.0–v1.2 backups) via SAF `.json` files.
+- **Full Uncropped Local Artwork & On-Demand FLAC/MP3 Multi-Artwork (`AlbumArtworkLoader.kt`, `AlbumArtworkHelper.kt`, `EmbeddedArtworkParser.kt`):** Extracts embedded cover art, MediaStore thumbnails, and SAF sibling cover images (`cover.jpg`, `folder.jpg`, `front.jpg`, `album.jpg`, `.png`) with aspect-ratio-preserving scaling and bounded caching, plus pure-Kotlin on-demand FLAC `METADATA_BLOCK_PICTURE` and MP3 `ID3v2.3`/`v2.4` `APIC` header parsing (never run during bulk scans) for `ARTIST` (`8/7/10/19`), `DISC` (`6`), and `BACK_COVER` (`4`) slots. Renders full uncropped artwork (`ContentScale.Fit` on a matte-obsidian backdrop) across all lists, playlists, Queue, MiniPlayer, Album Detail, and Square Cover (with an unobtrusive Front/Back flip toggle shown only when a Back Cover is present), while displaying embedded `DISC` art (falling back to Front Cover) inside the circular Vinyl Disc center label (`CircleShape`).
+- **Polished `MediaSession` Controls & Android 17 (`targetSdk = 37`) Hardening (`PlaybackForegroundService.kt`, `ForegroundPlaybackGate.kt`, `NotificationSubtitleFormatter.kt`, `NotificationArtworkFramer.kt`, `MediaSessionCustomActions.kt`):**
+  - `PlaybackForegroundService` (`foregroundServiceType="mediaPlayback"`) using `ServiceCompat.startForeground(...)`, custom pure-monochrome status icon (`ic_stat_bitperfect.xml`), platform `android.media.session.MediaSession`, and `Notification.MediaStyle`.
+  - Automatically centers non-square (`width != height`) album covers onto a matte-obsidian (`#111114`) square canvas (`<= 512x512`, off-main) so lock-screen and shade cards never crop landscape/portrait artwork, while square `1:1` covers pass through borderless.
+  - Displays a concise, locale-independent audiophile subtitle (`Artist · Codec Bit-Depth · Sample Rate`, e.g., `The Beatles · FLAC 24-bit · 96 kHz`, `Artist Name · MP3 · 44.1 kHz`) synced across `MediaMetadata` and notification text.
+  - Exposes `Favorite` (`ACTION_TOGGLE_FAVORITE`) and `Shuffle` (`ACTION_TOGGLE_SHUFFLE`) `MediaSession` custom actions and notification controls with live bidirectional state sync even when backgrounded. *(Note: Android SystemUI governs final media card layout — AOSP, Pixel, and Custom ROMs render custom actions alongside transport buttons, while some OEM skins such as certain HyperOS versions may cap visible notification controls to the 3 primary transport buttons.)*
+  - Pure-Kotlin `ForegroundPlaybackGate` awaits active `mediaPlayback` Foreground Service While-In-Use (WIU) promotion on background resume before `AudioManager.requestAudioFocus(...)` or `AudioTrack.play()`/`write()` (with **0 ms added latency** when already in-app or promoted), guarding against `ForegroundServiceStartNotAllowedException` and `SecurityException`.
 
 ### Offline Lyrics System
 
@@ -82,9 +88,10 @@ Every diagnostic item is tagged `VERIFIED`, `INDICATED`, or `UNVERIFIABLE`, acco
 - **Fault-Tolerant `.lrc` Parser (`LrcParser.kt`):** Supports `[mm:ss.xx]`, `[mm:ss.xxx]`, multi-timestamp lines, metadata tags (`[ti:]`, `[ar:]`, `[al:]`, `[offset:]`), `UTF-8`, `UTF-8 BOM`, `UTF-16LE`, `UTF-16BE`, and `ISO-8859-1` fallback, plus static display for plain untimestamped text.
 - **Sync and Editing:** Auto-detects sibling `.lrc` files, imports `.lrc` files via SAF, includes a local manual lyrics editor, and derives active line highlighting directly from `AudioOutputEngine` playback position.
 
-### Now Playing UI, Vinyl Turntable, Spectrum Visualizer, and Adaptive Large-Screen Layout
+### Monochrome Studio Theme, Dynamic Cover Theme, Vinyl Turntable, Spectrum Visualizer, and Adaptive Layout
 
-- **Matte Obsidian Dark Theme (`ui/theme/`):** High-contrast neutral dark palette (`#0E0E10` background, `#141417` surface cards, `0.5.dp` hairline dividers, `#7BA7D9` slate-ice accent, minimum `48.dp` touch targets).
+- **Monochrome Studio Default Theme & Launcher Icon (`ui/theme/`, `res/drawable/ic_launcher_*.xml`):** Matte-obsidian dark surfaces (`#0E0E10` background, `#161619` / `#1E1E22` surface cards, `0.5.dp` hairline dividers), warm ivory primary accent (`#F2F2F0` with `#111113` high-contrast active foreground ink), brushed silver secondary (`#B8B8BE`), preserved semantic safety/diagnostic colors (`EmeraldSafe`, `AmberIndicated`, `CoralWarning`), minimum `48.dp` touch targets, and a matching Monochrome Studio adaptive & legacy launcher icon.
+- **Opt-In WCAG-Clamped Dynamic Cover Theme (`CoverThemePaletteGenerator.kt`, `CoverThemeColorCache.kt`):** Off by default (`Settings -> Display -> Dynamic Cover Theme`). Quantizes downsampled cover art (`<= 32x32`, off-main on `Dispatchers.Default`), falls back gracefully to Monochrome Studio on B&W/grayscale covers, and programmatically clamps WCAG 2.1 contrast (`>= 4.5:1` accents, `>= 7.0:1` primary text, dark obsidian background) across three smoothly animated (`300 ms`) layers: **Global playing track**, **Isolated Local Album Detail** (plus cover-tinted album cards), and **Isolated Local Artist Detail** (leaving `MiniPlayerBar` on the Global playing-track theme).
 - **Adaptive Phones, Foldables, Tablets, & Multi-Window Layout (`WindowLayoutMetrics.kt`, `BitPerfectAppNav.kt`, `ui/nowplaying/`):**
   - **Compact Portrait (`< 600.dp`):** Bottom `NavigationBar` with persistent `MiniPlayerBar` and single-column `NowPlayingScreen` (`316.dp` radial spectrum ring around `240.dp` vinyl disc).
   - **Wide / Landscape / Foldable / Tablet (`>= 600.dp`):** Left-docked matte-obsidian `NavigationRail` separated by a `0.5.dp` `VerticalDivider` with `MiniPlayerBar` docked strictly in the right content pane; balanced 2-column `NowPlayingScreen` (`46%` left pane with proportionally scaled `220..316.dp` Vinyl Disc + Radial Spectrum Ring so it never clips vertically in landscape or split-screen; `54%` right pane with metadata, isolated `NowPlayingSeekSection`, transport controls, audio-mode strip, and utility buttons); and centered `840.dp` max-width containers on `SettingsScreen`, `DiagnosticsScreen`, `QueueScreen`, and `LyricsScreen`.
@@ -95,7 +102,7 @@ Every diagnostic item is tagged `VERIFIED`, `INDICATED`, or `UNVERIFIABLE`, acco
   - Zero-permission (`no RECORD_AUDIO`, `no android.media.audiofx.Visualizer`) 1024-point Hann-windowed radix-2 FFT driving 64 radial ticks around the vinyl disc (or a compact `42.dp` 32-bar strip under Square Cover).
   - Reads from a post-write PCM side-tap (`48,000`-float mono ring buffer, ~192 KB) with sample-rate decimation for 88.2-192 kHz streams and `AudioTrack.playbackHeadPosition` alignment, leaving PCM output strictly unmodified in both Safe Mode and Bit-Perfect Opt-In mode.
   - Lifecycle-gated (`ON_START..ON_STOP` on `NowPlayingScreen` only) so FFT CPU usage and tap buffer allocation drop to zero off-screen or when disabled.
-  - Switchable **Studio**, **Prism**, and local cover-art **Album** (`AlbumPaletteExtractor`) color palettes, plus optional pre-allocated **Kinetic Sparks** (`MAX_SPARKS = 64`).
+  - Switchable **Studio** (brushed silver/ivory), **Prism**, and local cover-art **Album** (`AlbumPaletteExtractor`) color palettes, plus optional pre-allocated **Kinetic Sparks** (`MAX_SPARKS = 64`).
 
 ---
 
@@ -117,6 +124,7 @@ Strictly prohibited and verified absent from both source and merged manifests:
 - `android.permission.MANAGE_EXTERNAL_STORAGE`
 - `android.permission.WRITE_EXTERNAL_STORAGE`
 - `android.permission.RECORD_AUDIO`
+- `android.permission.READ_MEDIA_IMAGES`
 
 ---
 
@@ -125,23 +133,25 @@ Strictly prohibited and verified absent from both source and merged manifests:
 ```text
 app/src/main/java/com/cangkir/bitperfectplayer/
 |-- BitPerfectApplication.kt      # Application container, repository wiring, & foreground lifecycle tracking
-|-- MainActivity.kt               # Single-activity Compose entry point (edge-to-edge)
+|-- MainActivity.kt               # Single-activity Compose entry point (edge-to-edge, Global Dynamic Cover Theme)
 |-- audio/                        # Decoders (incl. RawExtractorPcmDecoder), WAV parser, modular AudioOutputEngine,
-|                                 # UsbMixerProfileSelector, RouteChangeReconfigurePolicy, ForegroundPlaybackGate, safety, diagnostics, DSP
-|-- data/                         # Room v4 DB, entities, DAOs, DataStore prefs (incl. DefaultHomepage), JSON backup codec
+|                                 # UsbMixerProfileSelector, RouteChangeReconfigurePolicy, ForegroundPlaybackGate,
+|                                 # NotificationSubtitleFormatter, MediaSessionCustomActions, safety, diagnostics, DSP
+|-- data/                         # Room v5 DB (MIGRATION_1_2..4_5), entities, DAOs, DataStore prefs, JSON backup codec
 |-- diagnostics/                  # Opt-in local diagnostic logging (pure formatter/rotation/ring buffer, logger, crash handler, ZIP exporter)
-|-- library/                      # MediaStore/SAF scanning, scan filter, sorting, aspect-preserving artwork, playlists, .m3u8
+|-- library/                      # MediaStore/SAF scanning, EmbeddedArtworkParser (FLAC/MP3), ArtistDetailHelper, ArtistPhotoStore,
+|                                 # aspect-preserving AlbumArtworkLoader, NotificationArtworkHelper/Framer, sorting, playlists, .m3u8
 |-- lyrics/                       # SHA-256 content fingerprint generator, .lrc parser, repository
-`-- ui/                           # Adaptive navigation (WindowLayoutMetrics), ViewModel, drag-and-drop Queue, vinyl/spectrum,
-    |-- library/                  # LibraryScreen, header controls, track list, & group views
-    |-- nowplaying/               # Adaptive 1/2-pane NowPlayingScreen, controls, & hearing safety dialog
+`-- ui/                           # Adaptive navigation (WindowLayoutMetrics), ViewModel, MiniPlayer Queue, drag-and-drop Queue, vinyl/spectrum,
+    |-- library/                  # LibraryScreen, ArtistDetailView, header controls, track list, & group views
+    |-- nowplaying/               # Adaptive 1/2-pane NowPlayingScreen, controls (Front/Back flip), & hearing safety dialog
     |-- playlists/                # PlaylistsScreen, overview, detail view, & dialogs
     |-- settings/                 # SettingsScreen, audio engine, display/library, backup/about, & diagnostic logging sections
-    `-- theme/                    # Matte obsidian Color, Theme, & Type definitions
+    `-- theme/                    # Monochrome Studio Color/Theme/Type, CoverThemePaletteGenerator, & CoverThemeColorCache
 ```
 
-Local persistence uses Room (`BitPerfectDatabase.kt`, schema `version = 4`) with seven entities and verified non-destructive SQLite migrations (`MIGRATION_1_2`, `MIGRATION_2_3`, `MIGRATION_3_4`):
-- `cached_tracks`
+Local persistence uses Room (`BitPerfectDatabase.kt`, schema `version = 5`) with seven entities and verified non-destructive SQLite migrations (`MIGRATION_1_2`, `MIGRATION_2_3`, `MIGRATION_3_4`, `MIGRATION_4_5`):
+- `cached_tracks` (including release `year`)
 - `lyrics`
 - `track_history`
 - `favorite_tracks`
@@ -149,13 +159,13 @@ Local persistence uses Room (`BitPerfectDatabase.kt`, schema `version = 4`) with
 - `playlist_tracks`
 - `track_stats`
 
-Preferences (Safe Mode default, shuffle, repeat, gapless toggle, ReplayGain settings, default homepage, artwork style, spectrum style/sparks, opt-in diagnostic logging flag, SAF URIs, per-scope sort state, and last queue context) are stored locally in Jetpack DataStore Preferences.
+Preferences (Safe Mode default, shuffle, repeat, gapless toggle, ReplayGain settings, default homepage, Dynamic Cover Theme toggle, artwork style, spectrum style/sparks, opt-in diagnostic logging flag, SAF URIs, per-scope sort state, and last queue context) are stored locally in Jetpack DataStore Preferences.
 
 ---
 
 ## Tech Stack and Build Requirements
 
-- **Application ID / Namespace:** `com.cangkir.bitperfectplayer` (`versionName = "1.2"`, `versionCode = 3`)
+- **Application ID / Namespace:** `com.cangkir.bitperfectplayer` (`versionName = "1.3"`, `versionCode = 4`)
 - **SDK Levels:** `minSdk = 26` (Android 8.0), `compileSdk = 37`, `targetSdk = 37`
 - **Toolchain:** Gradle Wrapper `9.9.1`, Gradle Daemon JVM `25`, Java Compatibility `JavaVersion.VERSION_11`
 - **Core Stack:** Android Gradle Plugin `9.5.2`, Kotlin `2.4.21`, KSP `2.3.14`
@@ -202,10 +212,10 @@ Preferences (Safe Mode default, shuffle, repeat, gapless toggle, ReplayGain sett
 ./gradlew assembleRelease
 ```
 
-To verify that no dependency merges `INTERNET`, `RECORD_AUDIO`, `MANAGE_EXTERNAL_STORAGE`, or `WRITE_EXTERNAL_STORAGE` into the debug or release manifests after building:
+To verify that no dependency merges `INTERNET`, `RECORD_AUDIO`, `MANAGE_EXTERNAL_STORAGE`, `WRITE_EXTERNAL_STORAGE`, or `READ_MEDIA_IMAGES` into the debug or release manifests after building:
 
 ```bash
-grep -E "INTERNET|RECORD_AUDIO|MANAGE_EXTERNAL_STORAGE|WRITE_EXTERNAL_STORAGE" \
+grep -E "INTERNET|RECORD_AUDIO|MANAGE_EXTERNAL_STORAGE|WRITE_EXTERNAL_STORAGE|READ_MEDIA_IMAGES" \
   app/build/intermediates/merged_manifest/debug/processDebugMainManifest/AndroidManifest.xml \
   app/build/intermediates/merged_manifest/release/processReleaseMainManifest/AndroidManifest.xml
 ```
@@ -216,8 +226,8 @@ grep -E "INTERNET|RECORD_AUDIO|MANAGE_EXTERNAL_STORAGE|WRITE_EXTERNAL_STORAGE" \
 
 ## Verification Scope and Hardware Safety Notice
 
-- **Automated Software Verification:** Core pure-Kotlin domain logic (including `UsbMixerProfileSelector`, `RouteChangeReconfigurePolicy`, `PcmStreamRules`, `TurntableFlushHeadTracker`, `QueueDragReorderMath`, `DefaultHomepage`, `AlbumArtworkHelper`, `DiagnosticLogFormatter`, `DiagnosticLogRotationPolicy`, `DiagnosticLogBuffer`, `ForegroundPlaybackGate`, and `WindowLayoutMetrics`), Room v1-to-v4 schema migrations, and headless Compose UI behaviors (including the mandatory `HearingSafetyWarningDialog` gate, passive Queue navigation, pure-Compose drag-and-drop reordering, full-list `All Songs` search playback, `DefaultHomepage` cold startup & config-change restoration, opt-in `DIAGNOSTIC LOGGING` settings controls, and adaptive `NavigationRail` / 2-column `NowPlayingScreen` layouts) are covered by **254 automated tests across 40 suites** under `./gradlew testDebugUnitTest`, alongside `ktlintCheck`, `detekt`, Android Lint, and R8 release builds.
-- **Physical Hardware Limits:** Runtime behavior of `AudioManager.MIXER_BEHAVIOR_BIT_PERFECT` and `MIXER_BEHAVIOR_DEFAULT` sample-rate negotiation, Android 16 / OEM `audio/raw` and `MediaCodec` 24-bit output support, UAC hardware volume attenuation, and internal USB-C DAC firmware processing depend on the target device's Android Audio HAL and DAC hardware. The reference hardware profile used during specification is a POCO F4 (Android 14 / HyperOS) paired with a KZ EDX Pro 2 USB-C IEM (107 dB/mW at 24 ohms).
+- **Automated Software Verification:** Core pure-Kotlin domain logic (including `UsbMixerProfileSelector`, `RouteChangeReconfigurePolicy`, `PcmStreamRules`, `TurntableFlushHeadTracker`, `QueueDragReorderMath`, `DefaultHomepage`, `AlbumArtworkHelper`, `CoverThemePaletteGenerator`, `EmbeddedArtworkParser`, `ArtistDetailHelper`, `NotificationSubtitleFormatter`, `NotificationArtworkHelper`, `MediaSessionCustomActions`, `MediaSessionUpdatePolicy`, `DiagnosticLogFormatter`, `DiagnosticLogRotationPolicy`, `DiagnosticLogBuffer`, `ForegroundPlaybackGate`, and `WindowLayoutMetrics`), Room v1-to-v5 schema migrations, Robolectric native-Skia bitmap letterboxing & custom artist photo EXIF storage, and headless Compose UI behaviors (including the mandatory `HearingSafetyWarningDialog` gate, `MiniPlayerBar` passive Queue navigation, pure-Compose drag-and-drop reordering, full-list `All Songs` search playback, `DefaultHomepage` cold startup & config-change restoration, `Dynamic Cover Theme` two-layer/contextual isolation, Artist Detail Hero + parent backstack, Back Cover flip + Vinyl `DISC` art, opt-in `DIAGNOSTIC LOGGING` settings controls, and adaptive `NavigationRail` / 2-column `NowPlayingScreen` layouts) are covered by **305 automated tests across 48 suites** under `./gradlew testDebugUnitTest`, alongside `ktlintCheck`, `detekt`, Android Lint, and R8 release builds.
+- **Physical Hardware Limits:** Runtime behavior of `AudioManager.MIXER_BEHAVIOR_BIT_PERFECT` and `MIXER_BEHAVIOR_DEFAULT` sample-rate negotiation, Android 16 / OEM `audio/raw` and `MediaCodec` 24-bit output support, UAC hardware volume attenuation, internal USB-C DAC firmware processing, and OEM SystemUI media notification button slots depend on the target device's Android Audio HAL, SystemUI skin, and DAC hardware. The reference hardware profile used during specification is a POCO F4 (Android 14 / HyperOS) paired with a KZ EDX Pro 2 USB-C IEM (107 dB/mW at 24 ohms).
 - **Safety Warning:** Before toggling **Bit-Perfect Opt-In** on an unfamiliar phone or USB-C DAC, keep high-sensitivity earphones out of your ears until you confirm whether volume buttons attenuate output or the DAC plays at fixed 100% full scale.
 
 ---

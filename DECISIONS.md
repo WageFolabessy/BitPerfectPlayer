@@ -449,3 +449,28 @@ This file records autonomous architectural, dependency, and environment decision
 - **Rationale:**
   - Visually anchors the active playback queue directly to the currently playing track bar (`MiniPlayerBar`), declutters top app bars, and makes the passive read-only nature of the Queue button spatially intuitive.
 - **Rejected Alternatives:** Keeping duplicated Queue buttons in both top bars and `MiniPlayerBar` (redundant chrome on compact viewports); removing Queue access from `NowPlayingScreen` (hurts one-tap queue inspection during full-screen listening).
+
+---
+
+## D12.7 — `v1.3` Custom Monochrome Notification Badge, Square Dark Letterboxing, & Audiophile `MediaSession` Subtitle
+- **Decision:**
+  - Replaced `app/src/main/res/drawable/ic_notif_music.xml` with `ic_stat_bitperfect.xml` (`24dp`, pure `#FFFFFFFF` monochrome precision ring + 5 quantized PCM bars on transparent background) conforming to Android SystemUI status-bar notification icon rules, deleting `ic_notif_music.xml` so zero unused resources remain.
+  - Created pure-Kotlin `NotificationArtworkHelper` (`0` `android.*` imports) and Android `NotificationArtworkFramer` so non-square (`width != height`) album covers sent to `MediaMetadata.METADATA_KEY_ALBUM_ART` and `Notification.setLargeIcon` are centered proportionally onto a matte-obsidian (`#111114`) square canvas capped at `<= 512x512` off-main on `Dispatchers.Default` (never mutating or recycling `AlbumArtworkLoader` bitmaps and avoiding `TransactionTooLargeException`), while `1:1` square covers pass through without borders (only downscaling when `> 512 px`).
+  - Created pure-Kotlin, locale-independent `NotificationSubtitleFormatter` (`0` `android.*` imports) producing `Artist · Codec Bit-Depth · Sample Rate` (e.g., `Green Day · FLAC 16-bit · 44.1 kHz`, `The Beatles · FLAC 24-bit · 96 kHz`, `Artist Name · MP3 · 44.1 kHz`, graceful fallback to `artist` alone) published consistently to `METADATA_KEY_ARTIST`, `METADATA_KEY_DISPLAY_SUBTITLE`, and `Notification.setContentText`.
+  - Exposed `sourceSampleRateHz` and `sourceBitDepth` on `AudioDiagnosticSnapshot` (strictly source-level fields, never `decodedBitDepth`) and matched `engineState.activeTrackUri == activeTrack.uriString` before applying runtime fallback so lossy MP3/AAC/OGG tracks never display decoded 16-bit PCM depth and rapid track switches never bleed previous-track diagnostics into the subtitle.
+- **Rationale:**
+  - Eliminates SystemUI landscape/portrait cover cropping on lock screens, gives listeners immediate lossless/sample-rate telemetry without unlocking their phone, and keeps all IPC artwork bounded and off the Main Thread.
+- **Rejected Alternatives:** Pushing raw non-square `600x337` bitmaps directly into `MediaMetadata` (Android SystemUI center-crops non-square album art aggressively); passing `AudioDiagnosticInput.decodedEffectiveBitDepth` into the subtitle (would falsely report `"MP3 16-bit"` for lossy files); using `String.format("%.1f kHz")` (breaks decimal separators on comma-decimal locales like `de_DE` / `id_ID`).
+
+---
+
+## D12.8 — `v1.3` `MediaSession` Custom Actions (`Favorite` & `Shuffle`) with Bidirectional Live Sync & OEM SystemUI Honesty
+- **Decision:**
+  - Created pure-Kotlin `MediaSessionCustomActions` (`0` `android.*` imports) defining `ACTION_TOGGLE_FAVORITE` and `ACTION_TOGGLE_SHUFFLE`, state-driven labels/icon descriptors, and command resolution, backed by four pure-monochrome `#FFFFFFFF` vector icons (`ic_notif_favorite_filled.xml`, `ic_notif_favorite_outline.xml`, `ic_notif_shuffle_on.xml` with crisp bottom active dot, `ic_notif_shuffle_off.xml`).
+  - Wired `PlaybackForegroundService` to register `PlaybackState.CustomAction` entries, handle `MediaSession.Callback.onCustomAction(...)` and matching `onStartCommand(...)` intents directly via `libraryRepository.toggleFavorite(...)` and `playbackController.toggleShuffle()` (so toggles work reliably even when the Activity/UI is backgrounded), and observe `libraryRepository.librarySnapshot` (`favoriteUris` / `favoriteFingerprints`) + `playbackController.state` (`queue.shuffleEnabled`) for instant bidirectional sync with in-app UI changes.
+  - Extended `MediaSessionUpdatePolicy` (`MediaMetadataKey.subtitle`, `NotificationContentKey.{subtitle, isFavorite, shuffleEnabled}`, `PublishedPlaybackState.{isFavorite, shuffleEnabled}`) so state toggles trigger an immediate single Binder update while 20 Hz engine position ticks emit **0** redundant IPC calls, leaving `ForegroundPlaybackGate` (Android 17 `API 37` compliance) completely untouched.
+  - Documented transparently in `README.md`, `SPEC.md`, and `docs/HANDOFF_REPORT.md` that Android SystemUI controls final media card button layout: AOSP/Pixel/Custom ROMs surface up to 5 controls including custom actions, whereas certain OEM skins (including some HyperOS versions) may cap visible buttons to the 3 core transport controls (`Previous`, `Play/Pause`, `Next`).
+- **Rationale:**
+  - Gives listeners instant lock-screen / shade Favorite & Shuffle controls on standard Android SystemUI and Bluetooth/Wear controllers using platform `MediaSession` with zero external libraries (`media3`) and zero battery/IPC overhead.
+- **Rejected Alternatives:** Adding `androidx.media3:media3-session` (large dependency overhead when platform `android.media.session.MediaSession` already supports `PlaybackState.CustomAction` natively since API 21); updating only on Activity resume (breaks live icon state sync when toggled from the shade while backgrounded).
+
