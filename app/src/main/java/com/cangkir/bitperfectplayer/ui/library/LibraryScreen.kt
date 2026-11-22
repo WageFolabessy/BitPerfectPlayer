@@ -15,8 +15,6 @@ import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Album
-import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -438,31 +436,24 @@ fun LibraryScreen(
                                 onImportFolder = if (searchQuery.isBlank()) launchImportFolder else null,
                             )
                         }
-                        LibraryTab.FOLDERS -> GroupListView(
+                        LibraryTab.FOLDERS -> FolderGroupListView(
                             groups = libraryState.folders,
                             scrollResetKey = sortPrefs.foldersList,
-                            singularUnit = "folder",
-                            pluralUnit = "folders",
                             sortLabel = sortPrefs.foldersList.compactLabel,
-                            onOpenSort = { activeGroupSortSheet = GroupSortScope.FOLDERS_LIST },
-                            icon = Icons.Filled.Folder,
-                            showArtworkThumbnail = false,
                             albumArtworkLoader = albumArtworkLoader,
-                            emptyMessage = "No music folders scanned yet.",
+                            onOpenSort = { activeGroupSortSheet = GroupSortScope.FOLDERS_LIST },
                             onSelectGroup = onSelectGroup,
                             onPlayGroup = { group -> onPlayTracks(group.tracks, 0, QueueContext.folder(group.name)) },
                         )
-                        LibraryTab.ARTISTS -> GroupListView(
+                        LibraryTab.ARTISTS -> ArtistGroupListView(
                             groups = libraryState.artists,
                             scrollResetKey = sortPrefs.artistsList,
-                            singularUnit = "artist",
-                            pluralUnit = "artists",
                             sortLabel = sortPrefs.artistsList.compactLabel,
-                            onOpenSort = { activeGroupSortSheet = GroupSortScope.ARTISTS_LIST },
-                            icon = Icons.Filled.Person,
-                            showArtworkThumbnail = false,
+                            albumTrackSortSpec = sortPrefs.albumDetail,
                             albumArtworkLoader = albumArtworkLoader,
-                            emptyMessage = "No artists found in local library.",
+                            artistPhotoStore = artistPhotoStore,
+                            artistPhotoRevision = artistPhotoRevision,
+                            onOpenSort = { activeGroupSortSheet = GroupSortScope.ARTISTS_LIST },
                             onSelectGroup = onSelectGroup,
                             onPlayGroup = { group -> onPlayTracks(group.tracks, 0, QueueContext.artist(group.name)) },
                         )

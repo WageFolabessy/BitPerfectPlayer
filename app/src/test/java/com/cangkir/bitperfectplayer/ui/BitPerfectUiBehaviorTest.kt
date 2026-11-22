@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Application
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -2025,7 +2026,7 @@ class BitPerfectUiBehaviorTest {
 
     @Test
     @Config(qualifiers = "w411dp-h915dp")
-    fun artistDetailView_rendersHeroSummaryNewestFirstAlbumsTracksShuffleAndOverflowMenu() {
+    fun artistDetailView_rendersHeroSummaryChronologicalOldestFirstAlbumsTracksShuffleAndOverflowMenu() {
         val recentTrack = hiResFlacTrack.copy(
             uriString = "content://test/audio/saviors_01.flac",
             title = "The American Dream Is Killing Me",
@@ -2106,10 +2107,18 @@ class BitPerfectUiBehaviorTest {
         assertEquals(3, shuffledTracksCount)
 
         composeRule.onNodeWithText("Albums").assertIsDisplayed()
-        composeRule.onNodeWithText("Saviors").assertIsDisplayed()
-        composeRule.onNodeWithText("2024 · 1 track").assertIsDisplayed()
-        composeRule.onNodeWithText("21st Century Breakdown").assertIsDisplayed()
+        val olderBounds = composeRule.onNodeWithText("21st Century Breakdown")
+            .assertIsDisplayed()
+            .fetchSemanticsNode()
+            .boundsInRoot
+        val newerBounds = composeRule.onNodeWithText("Saviors")
+            .assertIsDisplayed()
+            .fetchSemanticsNode()
+            .boundsInRoot
+        // Oldest-first chronological order: 2009 album MUST appear to the left of 2024 album
+        assertTrue("Expected 2009 album left of 2024 album", olderBounds.left < newerBounds.left)
         composeRule.onNodeWithText("2009 · 2 tracks").assertIsDisplayed()
+        composeRule.onNodeWithText("2024 · 1 track").assertIsDisplayed()
         composeRule.onNodeWithText("TRACKS").assertIsDisplayed()
 
         // Verify 3-dot overflow menu exposes Set Artist Photo
@@ -2396,5 +2405,215 @@ class BitPerfectUiBehaviorTest {
 
         composeRule.waitForIdle()
         composeRule.onNodeWithContentDescription("Disc artwork for ${hiResFlacTrack.title}").assertIsDisplayed()
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h915dp")
+    fun artistsTab_andArtistDetailHero_shareUnifiedFourTierFallbackAndOldestFirstAlbumCover() {
+        val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.app.Application>()
+        val photoStore = com.cangkir.bitperfectplayer.library.ArtistPhotoStore(context)
+        val bmp = android.graphics.Bitmap.createBitmap(64, 64, android.graphics.Bitmap.Config.ARGB_8888)
+
+        val trackCustom = hiResFlacTrack.copy(
+            uriString = "content://test/artist/custom_1.flac",
+            artist = "Alpha Custom",
+            album = "Custom Album",
+            year = 2020,
+        )
+        val trackEmbedded = hiResFlacTrack.copy(
+            uriString = "content://test/artist/embedded_1.flac",
+            artist = "Beta Embedded",
+            album = "Embedded Album",
+            year = 2019,
+        )
+        val trackFallback2013 = hiResFlacTrack.copy(
+            uriString = "content://test/artist/fallback_2013.flac",
+            title = "Later Song",
+            artist = "Gamma Fallback",
+            album = "LP 2013",
+            year = 2013,
+        )
+        val trackFallback2003 = hiResFlacTrack.copy(
+            uriString = "content://test/artist/fallback_2003.flac",
+            title = "First Song",
+            artist = "Gamma Fallback",
+            album = "LP 2003",
+            year = 2003,
+        )
+        val trackMonogram = hiResFlacTrack.copy(
+            uriString = "content://test/artist/mono_1.wav",
+            artist = "Delta Mono",
+            album = "No Art Album",
+            fileName = "mono.wav",
+            container = "WAV",
+            year = 2018,
+        )
+
+        // Seed Priority 1 (custom), Priority 2 (embedded ARTIST), and Priority 3 (both 2013 and 2003 album covers)
+        photoStore.seedArtistPhotoForTesting("Alpha Custom", bmp)
+        artworkLoader.seedArtistEmbeddedBitmapForTesting(
+            "Beta Embedded",
+            bmp,
+            com.cangkir.bitperfectplayer.library.AlbumArtworkLoader.THUMBNAIL_SIZE_PX,
+        )
+        artworkLoader.seedArtworkForTesting(
+            trackFallback2013,
+            bmp,
+            com.cangkir.bitperfectplayer.library.AlbumArtworkLoader.THUMBNAIL_SIZE_PX,
+        )
+        artworkLoader.seedArtworkForTesting(
+            trackFallback2003,
+            bmp,
+            com.cangkir.bitperfectplayer.library.AlbumArtworkLoader.THUMBNAIL_SIZE_PX,
+        )
+        artworkLoader.seedArtworkForTesting(trackFallback2013, bmp, com.cangkir.bitperfectplayer.library.AlbumArtworkLoader.HERO_SIZE_PX)
+        artworkLoader.seedArtworkForTesting(trackFallback2003, bmp, com.cangkir.bitperfectplayer.library.AlbumArtworkLoader.HERO_SIZE_PX)
+
+        val snapshot = LibrarySnapshot(
+            allSongs = listOf(trackCustom, trackEmbedded, trackFallback2013, trackFallback2003, trackMonogram),
+            artists = listOf(
+                com.cangkir.bitperfectplayer.library.LibraryGroup("Alpha Custom", "1 song · 1 album", listOf(trackCustom)),
+                com.cangkir.bitperfectplayer.library.LibraryGroup("Beta Embedded", "1 song · 1 album", listOf(trackEmbedded)),
+                com.cangkir.bitperfectplayer.library.LibraryGroup(
+                    "Gamma Fallback",
+                    "2 songs · 2 albums",
+                    listOf(trackFallback2013, trackFallback2003), // Deliberately newer-first input order
+                ),
+                com.cangkir.bitperfectplayer.library.LibraryGroup("Delta Mono", "1 song · 1 album", listOf(trackMonogram)),
+            ),
+        )
+
+        composeRule.setContent {
+            val photoRevision by photoStore.photoRevision.collectAsState()
+            BitPerfectPlayerTheme {
+                LibraryScreen(
+                    libraryState = snapshot,
+                    favoriteTrackUris = emptySet(),
+                    playbackState = PlaybackControllerState(),
+                    albumArtworkLoader = artworkLoader,
+                    artistPhotoStore = photoStore,
+                    artistPhotoRevision = photoRevision,
+                    onRefreshLibrary = {},
+                    onImportFolder = {},
+                    onPlayTracks = { _, _, _ -> },
+                    onEnqueueTrack = {},
+                    onEnqueueNext = {},
+                    onEnqueueTracks = { _, _ -> },
+                    onEnqueueTracksNext = { _, _ -> },
+                    onSetTrackSort = { _, _ -> },
+                    onSetGroupSort = { _, _ -> },
+                    onAddToPlaylist = {},
+                    onShowTrackInfo = {},
+                    onToggleFavorite = {},
+                    onOpenDiagnostics = {},
+                    initialTab = LibraryTab.ARTISTS,
+                )
+            }
+        }
+
+        composeRule.waitForIdle()
+        // Priority 1: Custom photo
+        composeRule.onNodeWithContentDescription("Custom artist photo for Alpha Custom").assertIsDisplayed()
+        // Priority 2: Embedded ARTIST art
+        composeRule.onNodeWithContentDescription("Embedded artist artwork for Beta Embedded").assertIsDisplayed()
+        // Priority 3: First album in oldest-first sorted order (LP 2003, NOT LP 2013!)
+        composeRule.onNodeWithContentDescription("Artist cover from LP 2003 for Gamma Fallback").assertIsDisplayed()
+        // Priority 4: Monochrome monogram fallback
+        composeRule.onNodeWithContentDescription("Artist monogram for Delta Mono").assertIsDisplayed()
+
+        // Reactive live update: setting a custom artist photo updates Artists tab immediately via photoRevision
+        composeRule.runOnIdle {
+            photoStore.seedArtistPhotoForTesting("Delta Mono", bmp)
+        }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithContentDescription("Custom artist photo for Delta Mono").assertIsDisplayed()
+
+        // Tap Gamma Fallback -> ArtistDetailView Hero MUST also pick LP 2003 (oldest-first!)
+        composeRule.onNodeWithText("Gamma Fallback").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithContentDescription("Artist hero cover from LP 2003 for Gamma Fallback").assertIsDisplayed()
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h915dp")
+    fun foldersTab_rendersFrontCoverThumbnailOrFolderIconAndOpensFolderDetailIntact() {
+        val bmp = android.graphics.Bitmap.createBitmap(64, 64, android.graphics.Bitmap.Config.ARGB_8888)
+        val jazzTrack1 = hiResFlacTrack.copy(
+            uriString = "content://test/folders/jazz_01.flac",
+            title = "So What",
+            artist = "Miles Davis",
+            album = "Kind of Blue",
+            folderName = "Jazz Classics",
+            trackNumber = 1,
+        )
+        val jazzTrack2 = hiResFlacTrack.copy(
+            uriString = "content://test/folders/jazz_02.flac",
+            title = "Freddie Freeloader",
+            artist = "Miles Davis",
+            album = "Kind of Blue",
+            folderName = "Jazz Classics",
+            trackNumber = 2,
+        )
+        val coverlessTrack = hiResFlacTrack.copy(
+            uriString = "content://test/folders/raw_01.wav",
+            title = "Field Recording",
+            artist = "Unknown Artist",
+            album = "Unknown Album",
+            folderName = "Field Audio",
+            fileName = "field.wav",
+            container = "WAV",
+            trackNumber = 1,
+        )
+
+        artworkLoader.seedArtworkForTesting(
+            jazzTrack1,
+            bmp,
+            com.cangkir.bitperfectplayer.library.AlbumArtworkLoader.THUMBNAIL_SIZE_PX,
+        )
+
+        val snapshot = LibrarySnapshot(
+            allSongs = listOf(jazzTrack1, jazzTrack2, coverlessTrack),
+            folders = listOf(
+                com.cangkir.bitperfectplayer.library.LibraryGroup("Field Audio", "1 track", listOf(coverlessTrack)),
+                com.cangkir.bitperfectplayer.library.LibraryGroup("Jazz Classics", "2 tracks", listOf(jazzTrack2, jazzTrack1)),
+            ),
+        )
+
+        composeRule.setContent {
+            BitPerfectPlayerTheme {
+                LibraryScreen(
+                    libraryState = snapshot,
+                    favoriteTrackUris = emptySet(),
+                    playbackState = PlaybackControllerState(),
+                    albumArtworkLoader = artworkLoader,
+                    onRefreshLibrary = {},
+                    onImportFolder = {},
+                    onPlayTracks = { _, _, _ -> },
+                    onEnqueueTrack = {},
+                    onEnqueueNext = {},
+                    onEnqueueTracks = { _, _ -> },
+                    onEnqueueTracksNext = { _, _ -> },
+                    onSetTrackSort = { _, _ -> },
+                    onSetGroupSort = { _, _ -> },
+                    onAddToPlaylist = {},
+                    onShowTrackInfo = {},
+                    onToggleFavorite = {},
+                    onOpenDiagnostics = {},
+                    initialTab = LibraryTab.FOLDERS,
+                )
+            }
+        }
+
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("2 folders").assertIsDisplayed()
+        // Folder with cover shows Front Cover thumbnail; coverless folder falls back to Folder icon
+        composeRule.onNodeWithContentDescription("Folder cover for Jazz Classics").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Folder icon for Field Audio").assertIsDisplayed()
+
+        // Tapping a folder still opens Folder Detail cleanly
+        composeRule.onNodeWithText("Jazz Classics").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithContentDescription("Back to Folders").assertIsDisplayed()
+        composeRule.onNodeWithText("So What").assertIsDisplayed()
     }
 }

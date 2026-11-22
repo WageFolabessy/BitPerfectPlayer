@@ -474,3 +474,27 @@ This file records autonomous architectural, dependency, and environment decision
   - Gives listeners instant lock-screen / shade Favorite & Shuffle controls on standard Android SystemUI and Bluetooth/Wear controllers using platform `MediaSession` with zero external libraries (`media3`) and zero battery/IPC overhead.
 - **Rejected Alternatives:** Adding `androidx.media3:media3-session` (large dependency overhead when platform `android.media.session.MediaSession` already supports `PlaybackState.CustomAction` natively since API 21); updating only on Activity resume (breaks live icon state sync when toggled from the shade while backgrounded).
 
+---
+
+## D12.9 — `v1.3` Deterministic Chronological (Oldest-First) Artist Albums, `ReleaseYearParser`, & Automatic `v1.2 -> v1.3` Year Backfill
+- **Decision:**
+  - Extracted pure-Kotlin `ReleaseYearParser` (`0` `android.*` imports) bounding valid release years to `1900..2100`, handling plain years, ISO/slash/dot dates, year prefixes (`"1994; 2009"`), compact `YYYYMMDD`, consensus album release-year resolution (most frequent valid year across all tracks in the album, earliest valid year tie-breaker), and fast header-only `FileChannel` extraction for FLAC `VORBIS_COMMENT` (`DATE`/`ORIGINALDATE`/`YEAR`) and ID3v2.3/v2.4 (`TDRC` -> `TYER` -> `TDOR`) without reading audio frames.
+  - Upgraded `AudioMetadataReader` to read MP3 ID3v2 years header-only during scans, properly fall back from blank/`"0"` `METADATA_KEY_YEAR` to `METADATA_KEY_DATE`, and expose `readReleaseYearFallback(...)`.
+  - Added an internal DataStore bitmask (`release_year_backfill_mask`: MediaStore bit + SAF bit) in `UserPreferencesRepository` / `LocalLibraryRepository` so upgrading from `v1.2` (where migrated `cached_tracks.year` rows are `0`) automatically performs a one-shot deep backfill across both MediaStore and SAF tracks (plus forced re-probe on manual Refresh Library) without incurring repeated `MediaMetadataRetriever` IPC on subsequent cold starts for genuinely untagged files.
+  - Updated `ArtistDetailHelper.buildSortedArtistAlbums` (superseding the initial newest-first ordering in `D12.4`) to sort strictly **oldest-first / chronological** via `ARTIST_ALBUM_COMPARATOR`: dated albums (`1900..2100`) ascending first, undated (`year <= 0`) last, case-insensitive A–Z title + stable URI tie-breaker.
+- **Rationale:**
+  - Chronological oldest-first discography order lets listeners browse an artist's musical evolution naturally from debut onward, and consensus + header-only backfill guarantees upgraded `v1.2` libraries never stay stuck in arbitrary `HashMap` / scan order.
+- **Rejected Alternatives:** Keeping newest-first ordering (less intuitive for studio discographies and inconsistent with chronological listening); re-running `MediaMetadataRetriever` on every untagged file on every cold startup (unnecessary battery/I/O cost after one-shot upgrade backfill).
+
+---
+
+## D12.10 — `v1.3` Unified 4-Tier Artwork in `Artists` Tab & Deterministic Front Cover Thumbnails in `Folders` Tab
+- **Decision:**
+  - Created `ArtistDetailHelper.buildArtistArtworkPlan(...)` as the single shared source of truth for both `ArtistGroupListView` (`Artists` tab) and `ArtistDetailView` (Hero Banner), unifying the exact 4-tier priority chain: (1) `ArtistPhotoStore` custom photo -> (2) embedded `ARTIST` (`8/7/10/19`) via `AlbumArtworkLoader` -> (3) Front Cover of the first album in the artist's oldest-first sorted album list (falling back to subsequent albums only if that first album has no cover) -> (4) Monochrome Studio monogram.
+  - Memoized `ArtistPhotoStore.normalizedArtistHash`, added negative-hit caching in `ArtistPhotoStore`, and made `AlbumArtworkLoader`'s embedded `ARTIST` negative cache size-independent (`160px` / `600px` shared) so 120 Hz scrolling across large artist lists performs zero repeated SHA-256 or disk `stat()` calls; wired `artistPhotoRevision` into `ArtistGroupListView` so custom photo set/reset updates the `Artists` tab immediately on Back.
+  - Kept the `Folders` tab, `Folder Detail`, and `DefaultHomepage.FOLDERS` 100% intact while adding pure-Kotlin `FolderArtworkSelector` (`0` `android.*` imports) and `FolderGroupListView`: sorts folder tracks deterministically (disc # -> track # -> title -> filename -> URI), deduplicates same-album probes, reuses `AlbumArtworkLoader`'s shared thumbnail caches (`loadFolderArtwork`), renders full uncropped `ContentScale.Fit` Front Cover thumbnails with a subtle monochrome corner folder badge and subtitle folder icon, and falls back cleanly to a Monochrome Studio folder icon when coverless.
+- **Rationale:**
+  - Delivers visual consistency between `Artists` and `Artist Detail` and upgrades `Folders` browsing with uncropped album recognition while preserving clear folder-vs-album differentiation and zero 120 Hz scroll jank.
+- **Rejected Alternatives:** Removing the `Folders` tab (breaks directory-based audiophile workflows); eagerly scanning every artist's FLAC/MP3 headers on tab open (causes startup I/O stalls instead of lazy visible-item `LaunchedEffect` loading with 35 ms fling debounce).
+
+

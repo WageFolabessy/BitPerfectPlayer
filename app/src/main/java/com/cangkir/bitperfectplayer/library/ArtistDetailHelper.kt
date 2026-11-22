@@ -4,7 +4,8 @@ import com.cangkir.bitperfectplayer.audio.PlaybackTrack
 import java.util.Locale
 
 /**
- * Grouped album entry rendered inside the horizontal Albums carousel on `ArtistDetailView`.
+ * Grouped album entry rendered inside the horizontal Albums carousel on `ArtistDetailView` and
+ * reused as the single source of truth for `Artists` tab & Hero fallback artwork.
  */
 data class ArtistAlbumItem(
     val albumName: String,
@@ -22,6 +23,17 @@ data class ArtistAlbumItem(
 }
 
 /**
+ * Shared pure-Kotlin artist artwork resolution plan consumed identically by both the `Artists`
+ * tab and `ArtistDetailView` so their 4-priority fallback chains are 100% consistent.
+ */
+data class ArtistArtworkPlan(
+    val artistName: String,
+    val sortedAlbums: List<ArtistAlbumItem>,
+    val embeddedArtistCandidates: List<PlaybackTrack>,
+    val orderedAlbumCoverCandidates: List<PlaybackTrack>,
+)
+
+/**
  * Pure-Kotlin projected summary for `ArtistDetailView` (`Hero Banner` + `Albums` + `TRACKS`).
  */
 data class ArtistDetailSummary(
@@ -30,49 +42,69 @@ data class ArtistDetailSummary(
     val allTracks: List<PlaybackTrack>,
     val totalDurationMs: Long,
     val summaryLine: String,
-    val newestAlbumArtworkCandidates: List<PlaybackTrack>,
+    val orderedAlbumArtworkCandidates: List<PlaybackTrack>,
 )
 
 /**
- * Pure-Kotlin helper computing Artist Detail album grouping (sorted newest release year first),
- * studio duration/summary strings, fallback monograms, and bounded embedded artist-art scan
- * candidates (zero `android.*` / `androidx.*` imports).
+ * Pure-Kotlin helper computing deterministic chronological (oldest-first) Artist Detail album
+ * grouping, shared artist artwork resolution candidates, studio duration/summary strings, and
+ * fallback monograms (zero `android.*` / `androidx.*` imports).
  */
 object ArtistDetailHelper {
-    private const val MIN_VALID_YEAR = 1000
-    private const val MAX_VALID_YEAR = 2999
     private const val DEFAULT_MAX_EMBEDDED_ARTIST_CANDIDATES = 12
 
     /**
-     * Parses a 4-digit release year from tag strings such as `"2023"`, `"2023-05-12"`, or
-     * `"1997/06/16"`. Returns `0` when missing or outside `1000..2999`.
+     * Deterministic chronological album comparator:
+     * 1. Dated albums (`year in 1900..2100`) ALWAYS precede undated albums (`year <= 0`).
+     * 2. Dated albums sorted **oldest-first (`year` ascending)** (e.g., `2003 -> 2005 -> 2007`).
+     * 3. Tie-breaker: case-insensitive album title **A-Z**, then exact title, then stable URI key.
      */
-    fun parseReleaseYear(raw: String?): Int {
-        val trimmed = raw?.trim().orEmpty()
-        if (trimmed.length < 4) return 0
-        var runStart = -1
-        for (i in trimmed.indices) {
-            if (trimmed[i].isDigit()) {
-                if (runStart < 0) runStart = i
-                if (i - runStart + 1 == 4) {
-                    val candidate = trimmed.substring(runStart, i + 1).toIntOrNull() ?: 0
-                    if (candidate in MIN_VALID_YEAR..MAX_VALID_YEAR) return candidate
-                    runStart = -1
-                }
-            } else {
-                runStart = -1
-            }
-        }
-        return 0
-    }
+    val ARTIST_ALBUM_COMPARATOR: Comparator<ArtistAlbumItem> =
+        compareBy<ArtistAlbumItem> { ReleaseYearParser.sanitizeYear(it.year) == 0 }
+            .thenBy { ReleaseYearParser.sanitizeYear(it.year).takeIf { y -> y > 0 } ?: Int.MAX_VALUE }
+            .thenBy { it.albumName.lowercase(Locale.ROOT) }
+            .thenBy { it.albumName }
+            .thenBy { it.representativeTrack?.uriString.orEmpty() }
 
-    fun sanitizeYear(year: Int): Int = if (year in MIN_VALID_YEAR..MAX_VALID_YEAR) year else 0
+    fun parseReleaseYear(raw: String?): Int = ReleaseYearParser.parse(raw)
+
+    fun sanitizeYear(year: Int): Int = ReleaseYearParser.sanitizeYear(year)
+
+    fun resolveAlbumReleaseYear(tracks: List<PlaybackTrack>): Int = ReleaseYearParser.resolveAlbumReleaseYear(tracks.map { it.year })
+
+    /**
+     * Single shared pure-Kotlin builder grouping an artist's tracks into deterministically sorted
+     * (oldest-first / chronological) [ArtistAlbumItem]s with consensus album release years across
+     * all tracks in each album.
+     */
+    fun buildSortedArtistAlbums(
+        artistTracks: List<PlaybackTrack>,
+        albumTrackSortSpec: TrackSortSpec = TrackSortSpec(TrackSortOption.TRACK_NUMBER, SortDirection.ASC),
+        playCountsByKey: Map<String, Int> = emptyMap(),
+    ): List<ArtistAlbumItem> = artistTracks
+        .groupBy { it.album.ifBlank { "Unknown Album" } }
+        .entries
+        .map { (albumName, tracks) ->
+            val ordered = LibrarySortPolicy.sortTracks(
+                tracks = tracks,
+                spec = albumTrackSortSpec,
+                playCountsByKey = playCountsByKey,
+            )
+            val albumYear = resolveAlbumReleaseYear(ordered)
+            ArtistAlbumItem(
+                albumName = albumName,
+                year = albumYear,
+                tracks = ordered,
+                representativeTrack = ordered.firstOrNull(),
+            )
+        }
+        .sortedWith(ARTIST_ALBUM_COMPARATOR)
 
     /**
      * Builds the complete [ArtistDetailSummary] for [artistName] from [artistTracks]:
-     * - Groups tracks by album name and sorts tracks inside each album using [albumTrackSortSpec].
-     * - Sorts albums newest release year first (`year > 0` descending, alphabetical tie-breaker;
-     *   albums without a release year follow alphabetically).
+     * - Groups tracks by album and sorts albums strictly **oldest-first** via [buildSortedArtistAlbums].
+     * - Produces [ArtistDetailSummary.orderedAlbumArtworkCandidates] starting with the first album
+     *   in the oldest-first sorted album list.
      * - Formats the total studio summary line (e.g., `8 albums · 105 tracks · 9h 51 min`).
      */
     fun buildArtistDetail(
@@ -81,36 +113,18 @@ object ArtistDetailHelper {
         albumTrackSortSpec: TrackSortSpec = TrackSortSpec(TrackSortOption.TRACK_NUMBER, SortDirection.ASC),
         playCountsByKey: Map<String, Int> = emptyMap(),
     ): ArtistDetailSummary {
-        val albums = artistTracks
-            .groupBy { it.album.ifBlank { "Unknown Album" } }
-            .entries
-            .map { (albumName, tracks) ->
-                val ordered = LibrarySortPolicy.sortTracks(
-                    tracks = tracks,
-                    spec = albumTrackSortSpec,
-                    playCountsByKey = playCountsByKey,
-                )
-                val albumYear = ordered.maxOfOrNull { sanitizeYear(it.year) } ?: 0
-                ArtistAlbumItem(
-                    albumName = albumName,
-                    year = albumYear,
-                    tracks = ordered,
-                    representativeTrack = ordered.firstOrNull(),
-                )
-            }
-            .sortedWith(
-                compareByDescending<ArtistAlbumItem> { it.year > 0 }
-                    .thenByDescending { it.year }
-                    .thenBy { it.albumName.lowercase(Locale.ROOT) },
-            )
-
+        val albums = buildSortedArtistAlbums(
+            artistTracks = artistTracks,
+            albumTrackSortSpec = albumTrackSortSpec,
+            playCountsByKey = playCountsByKey,
+        )
         val totalDurationMs = artistTracks.sumOf { it.durationMs.coerceAtLeast(0L) }
         val summaryLine = formatArtistSummaryLine(
             albumCount = albums.size,
             trackCount = artistTracks.size,
             totalDurationMs = totalDurationMs,
         )
-        val newestAlbumArtworkCandidates = albums.mapNotNull { it.representativeTrack }
+        val orderedAlbumArtworkCandidates = albums.mapNotNull { it.representativeTrack }
 
         return ArtistDetailSummary(
             artistName = artistName,
@@ -118,7 +132,36 @@ object ArtistDetailHelper {
             allTracks = artistTracks,
             totalDurationMs = totalDurationMs,
             summaryLine = summaryLine,
-            newestAlbumArtworkCandidates = newestAlbumArtworkCandidates,
+            orderedAlbumArtworkCandidates = orderedAlbumArtworkCandidates,
+        )
+    }
+
+    /**
+     * Builds the unified [ArtistArtworkPlan] shared by the `Artists` tab and `ArtistDetailView`
+     * so both screens resolve Priority 2 (embedded `ARTIST`) and Priority 3 (`Front Cover` of
+     * `sortedAlbums.firstOrNull()`, oldest-first) identically.
+     */
+    fun buildArtistArtworkPlan(
+        artistName: String,
+        artistTracks: List<PlaybackTrack>,
+        albumTrackSortSpec: TrackSortSpec = TrackSortSpec(TrackSortOption.TRACK_NUMBER, SortDirection.ASC),
+        maxEmbeddedCandidates: Int = DEFAULT_MAX_EMBEDDED_ARTIST_CANDIDATES,
+    ): ArtistArtworkPlan {
+        val sortedAlbums = buildSortedArtistAlbums(
+            artistTracks = artistTracks,
+            albumTrackSortSpec = albumTrackSortSpec,
+        )
+        val embeddedCandidates = selectEmbeddedArtistArtworkCandidates(
+            albums = sortedAlbums,
+            allTracks = artistTracks,
+            maxCandidates = maxEmbeddedCandidates,
+        )
+        val coverCandidates = sortedAlbums.mapNotNull { it.representativeTrack }
+        return ArtistArtworkPlan(
+            artistName = artistName,
+            sortedAlbums = sortedAlbums,
+            embeddedArtistCandidates = embeddedCandidates,
+            orderedAlbumCoverCandidates = coverCandidates,
         )
     }
 
@@ -156,7 +199,7 @@ object ArtistDetailHelper {
     }
 
     /**
-     * Computes a crisp 1–2 character studio monogram for artists without custom, embedded, or
+     * Computes a crisp 1-2 character studio monogram for artists without custom, embedded, or
      * album cover artwork.
      */
     fun computeMonogram(artistName: String): String {
@@ -174,8 +217,8 @@ object ArtistDetailHelper {
 
     /**
      * Selects a bounded list of FLAC/MP3 tracks to probe lazily for an embedded `ARTIST` picture
-     * block—checking 1 track per distinct album (newest first) before additional tracks so even
-     * 200-track discographies stay fast.
+     * block—checking 1 track per distinct album (chronological order) before additional tracks so
+     * even 200-track discographies stay fast.
      */
     fun selectEmbeddedArtistArtworkCandidates(
         albums: List<ArtistAlbumItem>,

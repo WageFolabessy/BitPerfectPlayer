@@ -7,6 +7,7 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.floatPreferencesKey
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
@@ -56,6 +57,7 @@ class UserPreferencesRepository(private val dataStore: DataStore<Preferences>) {
         val LAST_QUEUE_SOURCE_TYPE = stringPreferencesKey("last_queue_source_type")
         val LAST_QUEUE_SOURCE_KEY = stringPreferencesKey("last_queue_source_key")
         val LAST_QUEUE_SOURCE_LABEL = stringPreferencesKey("last_queue_source_label")
+        val RELEASE_YEAR_BACKFILL_MASK = intPreferencesKey("release_year_backfill_mask")
 
         fun trackSortKey(scope: TrackSortScope) = stringPreferencesKey(scope.preferenceKey)
         fun groupSortKey(scope: GroupSortScope) = stringPreferencesKey(scope.preferenceKey)
@@ -72,6 +74,20 @@ class UserPreferencesRepository(private val dataStore: DataStore<Preferences>) {
         .map { prefs -> mapPreferences(prefs) }
 
     suspend fun getSnapshot(): UserPreferences = preferencesFlow.first()
+
+    suspend fun getYearBackfillMask(): Int = dataStore.data
+        .catch { exception ->
+            if (exception is IOException) emit(emptyPreferences()) else throw exception
+        }
+        .map { prefs -> prefs[Keys.RELEASE_YEAR_BACKFILL_MASK] ?: 0 }
+        .first()
+
+    suspend fun markYearBackfillBit(bit: Int) {
+        dataStore.edit { prefs ->
+            val current = prefs[Keys.RELEASE_YEAR_BACKFILL_MASK] ?: 0
+            prefs[Keys.RELEASE_YEAR_BACKFILL_MASK] = current or bit
+        }
+    }
 
     suspend fun setAudioSafetyMode(mode: AudioSafetyModePreference) {
         dataStore.edit { prefs ->

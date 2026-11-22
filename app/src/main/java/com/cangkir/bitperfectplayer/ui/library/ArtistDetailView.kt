@@ -102,15 +102,16 @@ private data class ResolvedArtistHero(
     val themeCacheKey: String? = null,
     val hasCustomPhoto: Boolean = false,
     val isResolved: Boolean = false,
+    val fallbackAlbumName: String? = null,
 )
 
 /**
  * Studio-grade Artist Detail page featuring:
- * - Full-bleed Hero Banner (custom photo -> embedded `ARTIST` picture -> newest album cover ->
+ * - Full-bleed Hero Banner (custom photo -> embedded `ARTIST` picture -> oldest-first album cover ->
  *   monochrome monogram) with overlaid status-bar-padded Back & overflow controls;
  * - Bold Artist Identity + total statistics (`N albums · M tracks · Xh Y min`) + `Play All` & `Shuffle`;
- * - Horizontal `Albums` carousel sorted newest release year first with uncropped `ContentScale.Fit`
- *   artwork and dynamic cover-tinted info cards (or Monochrome Studio surfaces when OFF);
+ * - Horizontal `Albums` carousel sorted oldest release year first (chronological) with uncropped
+ *   `ContentScale.Fit` artwork and dynamic cover-tinted info cards (or Monochrome Studio surfaces);
  * - Single unified vertical `LazyColumn` continuing directly into the `TRACKS` section;
  * - Contextual Local Dynamic Cover Theme derived from the resolved Artist Hero artwork.
  */
@@ -157,18 +158,22 @@ internal fun ArtistDetailView(
             allTracks = artistDetail.allTracks,
         )
     }
-    val newestAlbumTrack = artistDetail.newestAlbumArtworkCandidates.firstOrNull()
+    val orderedAlbumCoverCandidates = artistDetail.orderedAlbumArtworkCandidates
+    val firstAlbumUri = orderedAlbumCoverCandidates.firstOrNull()?.uriString
 
     // Seed initial hero synchronously from memory caches for zero-flicker opening.
-    var resolvedHero by remember(artistName, artistPhotoRevision) {
+    var resolvedHero by remember(artistName, artistPhotoRevision, firstAlbumUri) {
         val customCached = artistPhotoStore?.getCachedBitmap(artistName)
         val embeddedCached = if (customCached == null) {
             albumArtworkLoader.getCachedArtistEmbeddedBitmap(artistName, AlbumArtworkLoader.HERO_SIZE_PX)
         } else {
             null
         }
-        val albumCached = if (customCached == null && embeddedCached == null && newestAlbumTrack != null) {
-            albumArtworkLoader.getCachedFromMemory(newestAlbumTrack, AlbumArtworkLoader.HERO_SIZE_PX)
+        val albumCached = if (customCached == null && embeddedCached == null) {
+            albumArtworkLoader.getCachedFirstAvailableArtwork(
+                tracks = orderedAlbumCoverCandidates,
+                targetSizePx = AlbumArtworkLoader.HERO_SIZE_PX,
+            )
         } else {
             null
         }
@@ -188,19 +193,20 @@ internal fun ArtistDetailView(
                     hasCustomPhoto = false,
                     isResolved = true,
                 )
-                albumCached != null && newestAlbumTrack != null -> ResolvedArtistHero(
-                    bitmap = albumCached,
+                albumCached != null -> ResolvedArtistHero(
+                    bitmap = albumCached.second,
                     source = ArtistHeroSource.ALBUM_COVER,
-                    themeCacheKey = coverThemeColorCache?.cacheKeyFor(newestAlbumTrack),
+                    themeCacheKey = coverThemeColorCache?.cacheKeyFor(albumCached.first),
                     hasCustomPhoto = false,
                     isResolved = true,
+                    fallbackAlbumName = albumCached.first.album,
                 )
                 else -> ResolvedArtistHero()
             },
         )
     }
 
-    LaunchedEffect(artistName, artistPhotoRevision, embeddedCandidates, newestAlbumTrack?.uriString) {
+    LaunchedEffect(artistName, artistPhotoRevision, embeddedCandidates, orderedAlbumCoverCandidates) {
         val customBitmap = artistPhotoStore?.loadArtistPhotoBitmap(artistName)
         if (customBitmap != null) {
             resolvedHero = ResolvedArtistHero(
@@ -227,17 +233,18 @@ internal fun ArtistDetailView(
             )
             return@LaunchedEffect
         }
-        val fallbackTrack = newestAlbumTrack
-        val fallbackAlbumBitmap = fallbackTrack?.let {
-            albumArtworkLoader.loadArtwork(it, AlbumArtworkLoader.HERO_SIZE_PX)
-        }
-        resolvedHero = if (fallbackAlbumBitmap != null) {
+        val fallbackAlbumCover = albumArtworkLoader.loadFirstAvailableArtwork(
+            tracks = orderedAlbumCoverCandidates,
+            targetSizePx = AlbumArtworkLoader.HERO_SIZE_PX,
+        )
+        resolvedHero = if (fallbackAlbumCover != null) {
             ResolvedArtistHero(
-                bitmap = fallbackAlbumBitmap,
+                bitmap = fallbackAlbumCover.second,
                 source = ArtistHeroSource.ALBUM_COVER,
-                themeCacheKey = coverThemeColorCache?.cacheKeyFor(fallbackTrack),
+                themeCacheKey = coverThemeColorCache?.cacheKeyFor(fallbackAlbumCover.first),
                 hasCustomPhoto = false,
                 isResolved = true,
+                fallbackAlbumName = fallbackAlbumCover.first.album,
             )
         } else {
             ResolvedArtistHero(
@@ -424,9 +431,12 @@ private fun ArtistHeroBanner(
                         ),
                     contentAlignment = Alignment.Center,
                 ) {
+                    val heroDesc = resolvedHero.fallbackAlbumName?.takeIf { it.isNotBlank() }?.let { album ->
+                        "Artist hero cover from $album for $artistName"
+                    } ?: "Artist hero artwork for $artistName"
                     Image(
                         bitmap = imageBitmap,
-                        contentDescription = "Artist hero artwork for $artistName",
+                        contentDescription = heroDesc,
                         contentScale = ContentScale.Fit,
                         modifier = Modifier
                             .fillMaxSize()

@@ -13,6 +13,7 @@ import java.io.FileOutputStream
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -25,9 +26,10 @@ import kotlinx.coroutines.withContext
  * (zero runtime storage/media permissions required; integrates directly with Android Photo Picker).
  *
  * Automatically downscales imported photos to `<= 1024 px` on the longest edge, applies EXIF
- * orientation transforms so portrait photos never appear rotated, and publishes reactive
- * [photoRevision] ticks so `ArtistDetailView` and its Contextual Artist Dynamic Theme refresh
- * immediately upon set or reset.
+ * orientation transforms so portrait photos never appear rotated, caches normalized hashes and
+ * negative misses for zero-jank 120 Hz scrolling in the `Artists` tab, and publishes reactive
+ * [photoRevision] ticks so both the `Artists` tab and `ArtistDetailView` refresh immediately upon
+ * set or reset.
  */
 class ArtistPhotoStore(context: Context) {
     private val appContext = context.applicationContext
@@ -36,15 +38,19 @@ class ArtistPhotoStore(context: Context) {
     private val memoryCache = object : LruCache<String, Bitmap>(MAX_MEMORY_CACHE_KB) {
         override fun sizeOf(key: String, value: Bitmap): Int = (value.byteCount / 1024).coerceAtLeast(1)
     }
+    private val hashCache = ConcurrentHashMap<String, String>()
+    private val missingPhotoHashes = ConcurrentHashMap.newKeySet<String>()
 
     private val _photoRevision = MutableStateFlow(0)
     val photoRevision: StateFlow<Int> = _photoRevision.asStateFlow()
 
     fun normalizedArtistHash(artistName: String): String {
         val normalized = artistName.trim().lowercase(Locale.ROOT)
-        val digest = MessageDigest.getInstance("SHA-256")
-            .digest(normalized.toByteArray(StandardCharsets.UTF_8))
-        return digest.joinToString(separator = "") { byte -> "%02x".format(byte) }
+        return hashCache.getOrPut(normalized) {
+            val digest = MessageDigest.getInstance("SHA-256")
+                .digest(normalized.toByteArray(StandardCharsets.UTF_8))
+            digest.joinToString(separator = "") { byte -> "%02x".format(byte) }
+        }
     }
 
     fun themeCacheKeyFor(artistName: String, revision: Int = _photoRevision.value): String =
@@ -52,21 +58,40 @@ class ArtistPhotoStore(context: Context) {
 
     fun getArtistPhotoFile(artistName: String): File = File(photosDir, "${normalizedArtistHash(artistName)}.jpg")
 
-    fun getCachedBitmap(artistName: String): Bitmap? = memoryCache.get(normalizedArtistHash(artistName))
+    fun getCachedBitmap(artistName: String): Bitmap? = memoryCache.get(normalizedArtistHash(artistName))?.takeIf { !it.isRecycled }
 
-    suspend fun hasCustomArtistPhoto(artistName: String): Boolean = withContext(Dispatchers.IO) {
-        val file = getArtistPhotoFile(artistName)
-        file.isFile && file.length() > 0L
+    internal fun seedArtistPhotoForTesting(artistName: String, bitmap: Bitmap) {
+        val hash = normalizedArtistHash(artistName)
+        missingPhotoHashes.remove(hash)
+        memoryCache.put(hash, bitmap)
+        _photoRevision.update { it + 1 }
+    }
+
+    suspend fun hasCustomArtistPhoto(artistName: String): Boolean {
+        val hash = normalizedArtistHash(artistName)
+        if (memoryCache.get(hash)?.takeIf { !it.isRecycled } != null) return true
+        if (missingPhotoHashes.contains(hash)) return false
+        return withContext(Dispatchers.IO) {
+            val file = File(photosDir, "$hash.jpg")
+            val exists = file.isFile && file.length() > 0L
+            if (!exists) missingPhotoHashes.add(hash)
+            exists
+        }
     }
 
     suspend fun loadArtistPhotoBitmap(artistName: String): Bitmap? {
         val hash = normalizedArtistHash(artistName)
         memoryCache.get(hash)?.takeIf { !it.isRecycled }?.let { return it }
+        if (missingPhotoHashes.contains(hash)) return null
 
         return withContext(Dispatchers.IO) {
             memoryCache.get(hash)?.takeIf { !it.isRecycled }?.let { return@withContext it }
+            if (missingPhotoHashes.contains(hash)) return@withContext null
             val file = File(photosDir, "$hash.jpg")
-            if (!file.isFile || file.length() <= 0L) return@withContext null
+            if (!file.isFile || file.length() <= 0L) {
+                missingPhotoHashes.add(hash)
+                return@withContext null
+            }
             val decoded = runCatching {
                 val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                 BitmapFactory.decodeFile(file.absolutePath, bounds)
@@ -83,7 +108,10 @@ class ArtistPhotoStore(context: Context) {
                 BitmapFactory.decodeFile(file.absolutePath, opts)
             }.getOrNull()
             if (decoded != null) {
+                missingPhotoHashes.remove(hash)
                 memoryCache.put(hash, decoded)
+            } else {
+                missingPhotoHashes.add(hash)
             }
             decoded
         }
@@ -119,6 +147,7 @@ class ArtistPhotoStore(context: Context) {
                 error("Failed to finalize saved artist photo")
             }
 
+            missingPhotoHashes.remove(hash)
             memoryCache.put(hash, finalBitmap)
             _photoRevision.update { it + 1 }
             finalBitmap
@@ -128,6 +157,7 @@ class ArtistPhotoStore(context: Context) {
     suspend fun clearArtistPhoto(artistName: String): Boolean = withContext(Dispatchers.IO) {
         val hash = normalizedArtistHash(artistName)
         memoryCache.remove(hash)
+        missingPhotoHashes.add(hash)
         val file = File(photosDir, "$hash.jpg")
         val deleted = !file.exists() || file.delete()
         _photoRevision.update { it + 1 }

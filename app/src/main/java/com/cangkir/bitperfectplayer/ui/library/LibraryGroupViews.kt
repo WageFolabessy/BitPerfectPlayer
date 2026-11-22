@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,6 +26,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.Flip
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Button
@@ -50,6 +52,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -57,10 +61,14 @@ import com.cangkir.bitperfectplayer.audio.PlaybackTrack
 import com.cangkir.bitperfectplayer.audio.QueueContext
 import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
 import com.cangkir.bitperfectplayer.library.ArtistDetailHelper
+import com.cangkir.bitperfectplayer.library.ArtistPhotoStore
+import com.cangkir.bitperfectplayer.library.FolderArtworkSelector
 import com.cangkir.bitperfectplayer.library.LibraryGroup
+import com.cangkir.bitperfectplayer.library.TrackSortSpec
 import com.cangkir.bitperfectplayer.ui.InlineSortTriggerButton
 import com.cangkir.bitperfectplayer.ui.TrackArtworkThumbnail
 import com.cangkir.bitperfectplayer.ui.theme.ObsidianBackground
+import kotlinx.coroutines.delay
 
 @Composable
 internal fun GroupListView(
@@ -328,7 +336,7 @@ internal fun GroupDetailTrackList(
 private fun AlbumDetailArtworkHeader(albumGroup: LibraryGroup, albumArtworkLoader: AlbumArtworkLoader) {
     val representativeTrack = albumGroup.tracks.firstOrNull() ?: return
     val albumYear = remember(albumGroup.tracks) {
-        albumGroup.tracks.maxOfOrNull { ArtistDetailHelper.sanitizeYear(it.year) } ?: 0
+        ArtistDetailHelper.resolveAlbumReleaseYear(albumGroup.tracks)
     }
     var backCoverBitmap by remember(albumGroup.name, representativeTrack.uriString) {
         mutableStateOf<Bitmap?>(null)
@@ -428,5 +436,488 @@ private fun AlbumDetailArtworkHeader(albumGroup: LibraryGroup, albumArtworkLoade
                 }
             }
         }
+    }
+}
+
+private enum class ArtistListArtworkSource {
+    CUSTOM_PHOTO,
+    EMBEDDED_ARTIST,
+    ALBUM_COVER,
+    MONOGRAM,
+}
+
+private data class ResolvedArtistRowArtwork(
+    val bitmap: Bitmap? = null,
+    val source: ArtistListArtworkSource = ArtistListArtworkSource.MONOGRAM,
+    val fallbackAlbumName: String? = null,
+)
+
+/**
+ * `Artists` tab list rendering each artist with the exact same 4-tier artwork priority chain as
+ * `ArtistDetailView`:
+ * 1. Custom photo from [artistPhotoStore]
+ * 2. Embedded `ARTIST` picture (`type=8/7/10/19`) via [albumArtworkLoader]
+ * 3. Front Cover of the first album in the artist's oldest-first sorted album list
+ * 4. Monochrome Studio monogram fallback.
+ */
+@Composable
+internal fun ArtistGroupListView(
+    groups: List<LibraryGroup>,
+    scrollResetKey: Any,
+    sortLabel: String,
+    albumTrackSortSpec: TrackSortSpec,
+    albumArtworkLoader: AlbumArtworkLoader,
+    artistPhotoStore: ArtistPhotoStore?,
+    artistPhotoRevision: Int,
+    onOpenSort: () -> Unit,
+    onSelectGroup: (LibraryGroup) -> Unit,
+    onPlayGroup: (LibraryGroup) -> Unit,
+) {
+    if (groups.isEmpty()) {
+        GroupEmptyState("No artists found in local library.")
+        return
+    }
+
+    val listState = rememberLazyListState()
+    var previousResetKey by remember { mutableStateOf(scrollResetKey) }
+    LaunchedEffect(scrollResetKey) {
+        if (previousResetKey != scrollResetKey) {
+            previousResetKey = scrollResetKey
+            listState.scrollToItem(0)
+        }
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        SubtleListSortHeaderRow(
+            countLabel = "${groups.size} ${if (groups.size == 1) "artist" else "artists"}",
+            sortLabel = sortLabel,
+            onOpenSort = onOpenSort,
+        )
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(vertical = 4.dp),
+        ) {
+            items(
+                items = groups,
+                key = { it.name },
+                contentType = { "artist_group_row" },
+            ) { group ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onSelectGroup(group) }
+                        .padding(start = 16.dp, end = 6.dp, top = 10.dp, bottom = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    ArtistRowThumbnail(
+                        artistGroup = group,
+                        albumTrackSortSpec = albumTrackSortSpec,
+                        albumArtworkLoader = albumArtworkLoader,
+                        artistPhotoStore = artistPhotoStore,
+                        artistPhotoRevision = artistPhotoRevision,
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = group.name,
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = group.subtitle,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    IconButton(
+                        onClick = { onPlayGroup(group) },
+                        modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.PlayArrow,
+                            contentDescription = "Play all tracks in ${group.name}",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                HorizontalDivider(
+                    thickness = 0.5.dp,
+                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f),
+                    modifier = Modifier.padding(start = 76.dp, end = 16.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ArtistRowThumbnail(
+    artistGroup: LibraryGroup,
+    albumTrackSortSpec: TrackSortSpec,
+    albumArtworkLoader: AlbumArtworkLoader,
+    artistPhotoStore: ArtistPhotoStore?,
+    artistPhotoRevision: Int,
+) {
+    val artistName = artistGroup.name
+    val artworkPlan = remember(artistName, artistGroup.tracks, albumTrackSortSpec) {
+        ArtistDetailHelper.buildArtistArtworkPlan(
+            artistName = artistName,
+            artistTracks = artistGroup.tracks,
+            albumTrackSortSpec = albumTrackSortSpec,
+        )
+    }
+    val firstAlbumUri = artworkPlan.orderedAlbumCoverCandidates.firstOrNull()?.uriString
+
+    var resolved by remember(artistName, artistPhotoRevision, firstAlbumUri) {
+        val customCached = artistPhotoStore?.getCachedBitmap(artistName)
+        val embeddedCached = if (customCached == null) {
+            albumArtworkLoader.getCachedArtistEmbeddedBitmap(artistName, AlbumArtworkLoader.THUMBNAIL_SIZE_PX)
+        } else {
+            null
+        }
+        val albumCached = if (customCached == null && embeddedCached == null) {
+            albumArtworkLoader.getCachedFirstAvailableArtwork(
+                tracks = artworkPlan.orderedAlbumCoverCandidates,
+                targetSizePx = AlbumArtworkLoader.THUMBNAIL_SIZE_PX,
+            )
+        } else {
+            null
+        }
+        mutableStateOf(
+            when {
+                customCached != null -> ResolvedArtistRowArtwork(
+                    bitmap = customCached,
+                    source = ArtistListArtworkSource.CUSTOM_PHOTO,
+                )
+                embeddedCached != null -> ResolvedArtistRowArtwork(
+                    bitmap = embeddedCached,
+                    source = ArtistListArtworkSource.EMBEDDED_ARTIST,
+                )
+                albumCached != null -> ResolvedArtistRowArtwork(
+                    bitmap = albumCached.second,
+                    source = ArtistListArtworkSource.ALBUM_COVER,
+                    fallbackAlbumName = albumCached.first.album,
+                )
+                else -> ResolvedArtistRowArtwork()
+            },
+        )
+    }
+
+    LaunchedEffect(artistName, artistPhotoRevision, artworkPlan) {
+        if (resolved.bitmap == null) {
+            delay(35L)
+        }
+        val customBitmap = artistPhotoStore?.loadArtistPhotoBitmap(artistName)
+        if (customBitmap != null) {
+            resolved = ResolvedArtistRowArtwork(
+                bitmap = customBitmap,
+                source = ArtistListArtworkSource.CUSTOM_PHOTO,
+            )
+            return@LaunchedEffect
+        }
+        val embeddedBitmap = albumArtworkLoader.loadArtistEmbeddedBitmap(
+            artistName = artistName,
+            candidateTracks = artworkPlan.embeddedArtistCandidates,
+            targetSizePx = AlbumArtworkLoader.THUMBNAIL_SIZE_PX,
+        )
+        if (embeddedBitmap != null) {
+            resolved = ResolvedArtistRowArtwork(
+                bitmap = embeddedBitmap,
+                source = ArtistListArtworkSource.EMBEDDED_ARTIST,
+            )
+            return@LaunchedEffect
+        }
+        val albumCover = albumArtworkLoader.loadFirstAvailableArtwork(
+            tracks = artworkPlan.orderedAlbumCoverCandidates,
+            targetSizePx = AlbumArtworkLoader.THUMBNAIL_SIZE_PX,
+        )
+        resolved = if (albumCover != null) {
+            ResolvedArtistRowArtwork(
+                bitmap = albumCover.second,
+                source = ArtistListArtworkSource.ALBUM_COVER,
+                fallbackAlbumName = albumCover.first.album,
+            )
+        } else {
+            ResolvedArtistRowArtwork(source = ArtistListArtworkSource.MONOGRAM)
+        }
+    }
+
+    val shape = remember { RoundedCornerShape(8.dp) }
+    val monogram = remember(artistName) { ArtistDetailHelper.computeMonogram(artistName) }
+    val bitmap = resolved.bitmap
+    val imageBitmap = remember(bitmap) {
+        if (bitmap != null && !bitmap.isRecycled) bitmap.asImageBitmap() else null
+    }
+
+    Box(
+        modifier = Modifier
+            .size(48.dp)
+            .clip(shape)
+            .background(
+                if (imageBitmap != null) {
+                    MaterialTheme.colorScheme.surfaceVariant
+                } else {
+                    MaterialTheme.colorScheme.surfaceContainerHighest
+                },
+            )
+            .border(
+                width = 0.5.dp,
+                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.55f),
+                shape = shape,
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (imageBitmap != null) {
+            val isAlbumFallback = resolved.source == ArtistListArtworkSource.ALBUM_COVER
+            val ratio = imageBitmap.width.toFloat() / imageBitmap.height.coerceAtLeast(1).toFloat()
+            val scale = if (isAlbumFallback || ratio !in 0.65f..1.65f) {
+                ContentScale.Fit
+            } else {
+                ContentScale.Crop
+            }
+            val desc = when (resolved.source) {
+                ArtistListArtworkSource.CUSTOM_PHOTO -> "Custom artist photo for $artistName"
+                ArtistListArtworkSource.EMBEDDED_ARTIST -> "Embedded artist artwork for $artistName"
+                ArtistListArtworkSource.ALBUM_COVER -> {
+                    val album = resolved.fallbackAlbumName?.takeIf { it.isNotBlank() }
+                    if (album != null) "Artist cover from $album for $artistName" else "Artist cover for $artistName"
+                }
+                ArtistListArtworkSource.MONOGRAM -> "Artist monogram for $artistName"
+            }
+            Image(
+                bitmap = imageBitmap,
+                contentDescription = desc,
+                contentScale = scale,
+                alignment = if (isAlbumFallback) Alignment.Center else Alignment.TopCenter,
+                modifier = Modifier.fillMaxSize(),
+            )
+        } else {
+            Text(
+                text = monogram,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.semantics {
+                    contentDescription = "Artist monogram for $artistName"
+                },
+            )
+        }
+    }
+}
+
+/**
+ * `Folders` tab list displaying a crisp, full uncropped Front Cover thumbnail (`ContentScale.Fit`)
+ * resolved deterministically from each folder's tracks with a subtle monochrome folder badge,
+ * falling back cleanly to a Monochrome Studio folder icon when no cover is available.
+ */
+@Composable
+internal fun FolderGroupListView(
+    groups: List<LibraryGroup>,
+    scrollResetKey: Any,
+    sortLabel: String,
+    albumArtworkLoader: AlbumArtworkLoader,
+    onOpenSort: () -> Unit,
+    onSelectGroup: (LibraryGroup) -> Unit,
+    onPlayGroup: (LibraryGroup) -> Unit,
+) {
+    if (groups.isEmpty()) {
+        GroupEmptyState("No music folders scanned yet.")
+        return
+    }
+
+    val listState = rememberLazyListState()
+    var previousResetKey by remember { mutableStateOf(scrollResetKey) }
+    LaunchedEffect(scrollResetKey) {
+        if (previousResetKey != scrollResetKey) {
+            previousResetKey = scrollResetKey
+            listState.scrollToItem(0)
+        }
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        SubtleListSortHeaderRow(
+            countLabel = "${groups.size} ${if (groups.size == 1) "folder" else "folders"}",
+            sortLabel = sortLabel,
+            onOpenSort = onOpenSort,
+        )
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(vertical = 4.dp),
+        ) {
+            items(
+                items = groups,
+                key = { it.name },
+                contentType = { "folder_group_row" },
+            ) { group ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onSelectGroup(group) }
+                        .padding(start = 16.dp, end = 6.dp, top = 10.dp, bottom = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    FolderCoverThumbnail(
+                        folderGroup = group,
+                        albumArtworkLoader = albumArtworkLoader,
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = group.name,
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Folder,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+                                modifier = Modifier.size(13.dp),
+                            )
+                            Text(
+                                text = group.subtitle,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                    IconButton(
+                        onClick = { onPlayGroup(group) },
+                        modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.PlayArrow,
+                            contentDescription = "Play all tracks in ${group.name}",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                HorizontalDivider(
+                    thickness = 0.5.dp,
+                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f),
+                    modifier = Modifier.padding(start = 76.dp, end = 16.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun FolderCoverThumbnail(folderGroup: LibraryGroup, albumArtworkLoader: AlbumArtworkLoader) {
+    val candidates = remember(folderGroup.tracks) {
+        FolderArtworkSelector.orderArtworkCandidates(folderGroup.tracks)
+    }
+    val cacheKey = remember(folderGroup.name, candidates.firstOrNull()?.uriString, candidates.size) {
+        "${folderGroup.name}|${candidates.firstOrNull()?.uriString.orEmpty()}|${candidates.size}"
+    }
+    var bitmap by remember(cacheKey) {
+        mutableStateOf(
+            albumArtworkLoader.getCachedFolderArtwork(
+                folderName = folderGroup.name,
+                candidates = candidates,
+                targetSizePx = AlbumArtworkLoader.THUMBNAIL_SIZE_PX,
+            ),
+        )
+    }
+
+    LaunchedEffect(cacheKey) {
+        if (bitmap == null && candidates.isNotEmpty()) {
+            delay(35L)
+            bitmap = albumArtworkLoader.loadFolderArtwork(
+                folderName = folderGroup.name,
+                candidates = candidates,
+                targetSizePx = AlbumArtworkLoader.THUMBNAIL_SIZE_PX,
+            )
+        }
+    }
+
+    val shape = remember { RoundedCornerShape(8.dp) }
+    val badgeShape = remember { RoundedCornerShape(4.dp) }
+    val currentBitmap = bitmap
+    val imageBitmap = remember(currentBitmap) {
+        if (currentBitmap != null && !currentBitmap.isRecycled) currentBitmap.asImageBitmap() else null
+    }
+
+    Box(
+        modifier = Modifier
+            .size(48.dp)
+            .clip(shape)
+            .background(
+                if (imageBitmap != null) {
+                    MaterialTheme.colorScheme.surfaceVariant
+                } else {
+                    MaterialTheme.colorScheme.surfaceContainerHighest
+                },
+            )
+            .border(
+                width = 0.5.dp,
+                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.55f),
+                shape = shape,
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (imageBitmap != null) {
+            Image(
+                bitmap = imageBitmap,
+                contentDescription = "Folder cover for ${folderGroup.name}",
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.fillMaxSize(),
+            )
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(2.dp)
+                    .size(18.dp)
+                    .clip(badgeShape)
+                    .background(ObsidianBackground.copy(alpha = 0.88f))
+                    .border(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.7f), badgeShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Folder,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.88f),
+                    modifier = Modifier.size(11.dp),
+                )
+            }
+        } else {
+            Icon(
+                imageVector = Icons.Filled.Folder,
+                contentDescription = "Folder icon for ${folderGroup.name}",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+                modifier = Modifier.size(22.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun GroupEmptyState(emptyMessage: String) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = emptyMessage,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }

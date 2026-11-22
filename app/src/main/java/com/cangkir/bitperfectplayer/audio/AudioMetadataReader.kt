@@ -4,7 +4,7 @@ import android.content.Context
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
-import com.cangkir.bitperfectplayer.library.ArtistDetailHelper
+import com.cangkir.bitperfectplayer.library.ReleaseYearParser
 import com.cangkir.bitperfectplayer.lyrics.FileChannelSeekableByteSource
 import java.io.FileInputStream
 
@@ -133,11 +133,11 @@ class AudioMetadataReader(private val context: Context) {
             codec = classified?.defaultCodecLabel ?: "Unknown",
             trackNumberTag = cursor.cdTrackNumber,
             discNumberTag = cursor.discNumber,
-            year = ArtistDetailHelper.sanitizeYear(cursor.year),
+            year = ReleaseYearParser.sanitizeYear(cursor.year),
         )
 
-        // 1. Fast direct lossless FileChannel header verification for WAV and FLAC (< 1 ms, zero Binder IPC)
-        applyLosslessHeaderMetadata(uri, classified, state)
+        // 1. Fast direct FileChannel header verification for WAV/FLAC and ID3v2 year for MP3 (< 1 ms, zero Binder IPC)
+        applyFastHeaderMetadata(uri, classified, state)
 
         // 2. Skip MediaMetadataRetriever completely on MediaStore fast path when essential fields are present
         val hasCursorTags = state.title != null || state.artist != null || state.album != null
@@ -179,7 +179,23 @@ class AudioMetadataReader(private val context: Context) {
         )
     }
 
-    private fun applyLosslessHeaderMetadata(uri: Uri, classified: SupportedAudioFormat?, state: MutableMetadataState) {
+    /**
+     * Lightweight release-year resolver used during automatic `v1.2 -> v1.3` database backfill
+     * when `MediaStore.Audio.Media.YEAR` is `0` or for SAF tracks:
+     * 1. Fast header-only `FileChannel` read (`FLAC` Vorbis `DATE`/`ORIGINALDATE`/`YEAR` or
+     *    `ID3v2` `TDRC`/`TYER`/`TDOR`, zero audio frames read).
+     * 2. `MediaMetadataRetriever` (`METADATA_KEY_YEAR` -> `METADATA_KEY_DATE`) fallback if still `0`.
+     */
+    fun readReleaseYearFallback(uri: Uri, fileName: String, mimeType: String? = null): Int {
+        val classified = AudioFormatClassifier.classify(fileName, mimeType)
+        if (classified == SupportedAudioFormat.FLAC || classified == SupportedAudioFormat.MP3) {
+            val headerYear = readHeaderYearSafely(uri)
+            if (headerYear > 0) return headerYear
+        }
+        return readRetrieverYearSafely(uri)
+    }
+
+    private fun applyFastHeaderMetadata(uri: Uri, classified: SupportedAudioFormat?, state: MutableMetadataState) {
         when (classified) {
             SupportedAudioFormat.WAV -> {
                 readWavHeaderSafely(uri)?.let { wav ->
@@ -202,8 +218,14 @@ class AudioMetadataReader(private val context: Context) {
                     state.headerDiscNumber = flac.discNumber
                     state.headerTrackNumber = flac.trackNumber
                     if (state.year == 0 && flac.year > 0) {
-                        state.year = flac.year
+                        state.year = ReleaseYearParser.sanitizeYear(flac.year)
                     }
+                }
+            }
+            SupportedAudioFormat.MP3 -> {
+                if (state.year == 0) {
+                    val headerYear = readHeaderYearSafely(uri)
+                    if (headerYear > 0) state.year = headerYear
                 }
             }
             else -> Unit
@@ -236,9 +258,7 @@ class AudioMetadataReader(private val context: Context) {
                 state.discNumberTag = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DISC_NUMBER)
             }
             if (state.year == 0) {
-                val rawYear = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_YEAR)
-                    ?: retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DATE)
-                state.year = ArtistDetailHelper.parseReleaseYear(rawYear)
+                state.year = extractRetrieverYear(retriever)
             }
             if (state.durationMs <= 0L) {
                 state.durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
@@ -258,6 +278,35 @@ class AudioMetadataReader(private val context: Context) {
             // Gracefully fall back to cursor/filename & verified header info without crashing.
         } finally {
             runCatching { retriever.release() }
+        }
+    }
+
+    private fun extractRetrieverYear(retriever: MediaMetadataRetriever): Int {
+        val fromYear = ReleaseYearParser.parse(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_YEAR))
+        if (fromYear > 0) return fromYear
+        return ReleaseYearParser.parse(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DATE))
+    }
+
+    private fun readRetrieverYearSafely(uri: Uri): Int {
+        val retriever = MediaMetadataRetriever()
+        return try {
+            retriever.setDataSource(context, uri)
+            extractRetrieverYear(retriever)
+        } catch (_: Exception) {
+            0
+        } finally {
+            runCatching { retriever.release() }
+        }
+    }
+
+    private fun readHeaderYearSafely(uri: Uri): Int {
+        val pfd = runCatching { context.contentResolver.openFileDescriptor(uri, "r") }.getOrNull() ?: return 0
+        return pfd.use { descriptor ->
+            runCatching {
+                FileInputStream(descriptor.fileDescriptor).use { fis ->
+                    ReleaseYearParser.extractYearFromHeader(FileChannelSeekableByteSource(fis.channel))
+                }
+            }.getOrDefault(0)
         }
     }
 

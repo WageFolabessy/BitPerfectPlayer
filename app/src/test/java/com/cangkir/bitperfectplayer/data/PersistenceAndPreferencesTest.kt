@@ -146,6 +146,13 @@ class PersistenceAndPreferencesTest {
             snapshot.sortPreferences.albumsList.option,
         )
 
+        // Release-year upgrade backfill bitmask starts at 0 and ORs cleanly per source
+        assertEquals(0, repo.getYearBackfillMask())
+        repo.markYearBackfillBit(1)
+        assertEquals(1, repo.getYearBackfillMask())
+        repo.markYearBackfillBit(2)
+        assertEquals(3, repo.getYearBackfillMask())
+
         // Removal & reset to Safe Mode
         repo.removePersistedSafTreeUri("content://com.android.externalstorage.documents/tree/primary%3AMusic")
         repo.setAudioSafetyMode(AudioSafetyModePreference.SAFE_VOLUME_MODE)

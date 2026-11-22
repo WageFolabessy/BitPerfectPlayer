@@ -51,6 +51,7 @@ class AlbumArtworkLoader(context: Context) {
     private val missingKeys = ConcurrentHashMap.newKeySet<String>()
     private val slotMissingKeys = ConcurrentHashMap.newKeySet<String>()
     private val folderCoverUriCache = ConcurrentHashMap<String, String>()
+    private val folderResolvedTrackKeyCache = ConcurrentHashMap<String, String>()
 
     /**
      * Lightweight plain-string cache identity key safe to call synchronously on the Main Thread.
@@ -71,8 +72,81 @@ class AlbumArtworkLoader(context: Context) {
      */
     fun getCachedFromMemory(track: PlaybackTrack, targetSizePx: Int = THUMBNAIL_SIZE_PX): Bitmap? {
         val key = memoryKeyFor(track, targetSizePx)
-        return memoryCache.get(key)
+        return memoryCache.get(key)?.takeIf { !it.isRecycled }
     }
+
+    /**
+     * Fast synchronous lookup returning the first candidate in [tracks] already cached in memory.
+     */
+    fun getCachedFirstAvailableArtwork(tracks: List<PlaybackTrack>, targetSizePx: Int = THUMBNAIL_SIZE_PX): Pair<PlaybackTrack, Bitmap>? {
+        val bucket = AlbumArtworkHelper.normalizeSizeBucket(targetSizePx)
+        for (track in tracks) {
+            val cached = getCachedFromMemory(track, bucket)
+            if (cached != null) return track to cached
+        }
+        return null
+    }
+
+    /**
+     * Lazily resolves the first candidate in [tracks] that has local Front Cover artwork,
+     * preserving exact priority order (e.g., oldest-first artist album cover fallback) while
+     * reusing the shared thumbnail/hero memory and disk caches.
+     */
+    suspend fun loadFirstAvailableArtwork(
+        tracks: List<PlaybackTrack>,
+        targetSizePx: Int = THUMBNAIL_SIZE_PX,
+    ): Pair<PlaybackTrack, Bitmap>? {
+        val bucket = AlbumArtworkHelper.normalizeSizeBucket(targetSizePx)
+        for (track in tracks) {
+            val bitmap = loadArtwork(track, bucket)
+            if (bitmap != null) return track to bitmap
+        }
+        return null
+    }
+
+    /**
+     * Fast synchronous lookup for a folder's previously resolved Front Cover thumbnail.
+     */
+    fun getCachedFolderArtwork(folderName: String, candidates: List<PlaybackTrack>, targetSizePx: Int = THUMBNAIL_SIZE_PX): Bitmap? {
+        if (candidates.isEmpty()) return null
+        val bucket = AlbumArtworkHelper.normalizeSizeBucket(targetSizePx)
+        val folderKey = buildFolderArtworkKey(folderName, candidates, bucket)
+        val cachedTrackKey = folderResolvedTrackKeyCache[folderKey]
+        if (cachedTrackKey != null) {
+            if (cachedTrackKey.isEmpty()) return null
+            memoryCache.get(cachedTrackKey)?.takeIf { !it.isRecycled }?.let { return it }
+        }
+        return getCachedFirstAvailableArtwork(candidates, bucket)?.second
+    }
+
+    /**
+     * Deterministically resolves and caches a Front Cover thumbnail for a folder by probing
+     * [candidates] (from [FolderArtworkSelector.orderArtworkCandidates]) in order via [loadArtwork],
+     * reusing existing thumbnail caches with zero redundant file parsing.
+     */
+    suspend fun loadFolderArtwork(folderName: String, candidates: List<PlaybackTrack>, targetSizePx: Int = THUMBNAIL_SIZE_PX): Bitmap? {
+        if (candidates.isEmpty()) return null
+        val bucket = AlbumArtworkHelper.normalizeSizeBucket(targetSizePx)
+        val folderKey = buildFolderArtworkKey(folderName, candidates, bucket)
+        val cachedTrackKey = folderResolvedTrackKeyCache[folderKey]
+        if (cachedTrackKey != null) {
+            if (cachedTrackKey.isEmpty()) return null
+            memoryCache.get(cachedTrackKey)?.takeIf { !it.isRecycled }?.let { return it }
+        }
+
+        val resolved = loadFirstAvailableArtwork(candidates, bucket)
+        return if (resolved != null) {
+            val winningKey = memoryKeyFor(resolved.first, bucket)
+            folderResolvedTrackKeyCache[folderKey] = winningKey
+            resolved.second
+        } else {
+            folderResolvedTrackKeyCache[folderKey] = ""
+            null
+        }
+    }
+
+    private fun buildFolderArtworkKey(folderName: String, candidates: List<PlaybackTrack>, bucket: Int): String =
+        "folder_art|${folderName.trim().lowercase()}|${candidates.first().uriString}|${candidates.size}|$bucket"
 
     /**
      * Clears negative-hit caches (called on manual library refresh so newly added folder art or
@@ -82,6 +156,15 @@ class AlbumArtworkLoader(context: Context) {
         missingKeys.clear()
         slotMissingKeys.clear()
         folderCoverUriCache.clear()
+        folderResolvedTrackKeyCache.clear()
+    }
+
+    internal fun seedArtworkForTesting(track: PlaybackTrack, bitmap: Bitmap, targetSizePx: Int = THUMBNAIL_SIZE_PX) {
+        val bucket = AlbumArtworkHelper.normalizeSizeBucket(targetSizePx)
+        val key = memoryKeyFor(track, bucket)
+        missingKeys.remove(key)
+        folderResolvedTrackKeyCache.clear()
+        memoryCache.put(key, bitmap)
     }
 
     /**
@@ -150,6 +233,15 @@ class AlbumArtworkLoader(context: Context) {
     ) {
         val key = slotCacheKeyFor(track, slot, targetSizePx)
         slotMissingKeys.remove(key)
+        slotMemoryCache.put(key, bitmap)
+    }
+
+    internal fun seedArtistEmbeddedBitmapForTesting(artistName: String, bitmap: Bitmap, targetSizePx: Int = THUMBNAIL_SIZE_PX) {
+        val bucket = AlbumArtworkHelper.normalizeSizeBucket(targetSizePx)
+        val normalized = artistName.trim().lowercase()
+        val key = "artist_slot:ARTIST|$normalized|$bucket"
+        val missingKey = "artist_slot_missing:ARTIST|$normalized"
+        slotMissingKeys.remove(missingKey)
         slotMemoryCache.put(key, bitmap)
     }
 
@@ -234,6 +326,7 @@ class AlbumArtworkLoader(context: Context) {
     /**
      * Lazily probes a bounded list of FLAC/MP3 [candidateTracks] for an embedded `ARTIST` picture
      * block (priority `8 -> 7 -> 10 -> 19`) on `Dispatchers.IO`, stopping at the first match.
+     * Negative misses are cached size-independently across `Artists` tab and `ArtistDetailView`.
      */
     suspend fun loadArtistEmbeddedBitmap(
         artistName: String,
@@ -242,17 +335,19 @@ class AlbumArtworkLoader(context: Context) {
     ): Bitmap? {
         if (candidateTracks.isEmpty()) return null
         val bucket = AlbumArtworkHelper.normalizeSizeBucket(targetSizePx)
-        val key = "artist_slot:ARTIST|${artistName.trim().lowercase()}|$bucket"
+        val normalized = artistName.trim().lowercase()
+        val key = "artist_slot:ARTIST|$normalized|$bucket"
+        val missingKey = "artist_slot_missing:ARTIST|$normalized"
         slotMemoryCache.get(key)?.takeIf { !it.isRecycled }?.let { return it }
-        if (slotMissingKeys.contains(key)) return null
+        if (slotMissingKeys.contains(missingKey)) return null
 
         return withContext(Dispatchers.IO) {
             slotMemoryCache.get(key)?.takeIf { !it.isRecycled }?.let { return@withContext it }
-            if (slotMissingKeys.contains(key)) return@withContext null
+            if (slotMissingKeys.contains(missingKey)) return@withContext null
 
             decodeSemaphore.withPermit {
                 slotMemoryCache.get(key)?.takeIf { !it.isRecycled }?.let { return@withPermit it }
-                if (slotMissingKeys.contains(key)) return@withPermit null
+                if (slotMissingKeys.contains(missingKey)) return@withPermit null
 
                 var found: Bitmap? = null
                 for (track in candidateTracks) {
@@ -266,7 +361,7 @@ class AlbumArtworkLoader(context: Context) {
                 if (found != null) {
                     slotMemoryCache.put(key, found)
                 } else {
-                    slotMissingKeys.add(key)
+                    slotMissingKeys.add(missingKey)
                 }
                 found
             }

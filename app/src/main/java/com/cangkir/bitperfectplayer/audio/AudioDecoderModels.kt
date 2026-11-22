@@ -1,6 +1,6 @@
 package com.cangkir.bitperfectplayer.audio
 
-import com.cangkir.bitperfectplayer.library.ArtistDetailHelper
+import com.cangkir.bitperfectplayer.library.ReleaseYearParser
 import com.cangkir.bitperfectplayer.lyrics.SeekableByteSource
 import java.io.Closeable
 import java.io.IOException
@@ -185,10 +185,18 @@ object FlacStreamInfoParser {
             ParsedVorbisMeta()
         }
 
+        val resolvedYear = if (parsedMeta.year > 0) {
+            parsedMeta.year
+        } else if (offset > 0L) {
+            ReleaseYearParser.extractId3v2Year(source)
+        } else {
+            0
+        }
+
         return baseInfo.copy(
             discNumber = parsedMeta.discNumber,
             trackNumber = parsedMeta.trackNumber,
-            year = parsedMeta.year,
+            year = resolvedYear,
         )
     }
 
@@ -320,7 +328,7 @@ object FlacStreamInfoParser {
                 if (parsed > 0) meta.disc = parsed
             }
             "DATE", "YEAR", "ORIGINALDATE" -> if (meta.year == 0) {
-                val parsed = ArtistDetailHelper.parseReleaseYear(value)
+                val parsed = ReleaseYearParser.parse(value)
                 if (parsed > 0) meta.year = parsed
             }
         }

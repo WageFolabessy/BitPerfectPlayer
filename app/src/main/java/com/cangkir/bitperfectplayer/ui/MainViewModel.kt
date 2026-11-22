@@ -185,7 +185,9 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         }
 
         // Trigger incremental background sync while cached tracks from Room render immediately.
-        refreshLibrary()
+        viewModelScope.launch {
+            container.libraryRepository.refreshLibrary(forceYearBackfill = false)
+        }
 
         // Restore last playback session with its exact saved QueueContext (Album/Artist/Folder/Playlist/etc.)
         // as soon as cached or synced tracks + playlists are available.
@@ -240,7 +242,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         container.albumArtworkLoader.clearNegativeCache()
         container.coverThemeColorCache.clear()
         viewModelScope.launch {
-            container.libraryRepository.refreshLibrary()
+            container.libraryRepository.refreshLibrary(forceYearBackfill = true)
         }
     }
 
