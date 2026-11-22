@@ -2,8 +2,8 @@
 
 - **Project:** `com.cangkir.bitperfectplayer` (Kotlin + Jetpack Compose, 100% Offline Android Music Player)
 - **Active Branch:** `feat/v1.3` *(branched from `main`; `versionName = "1.3"`, `versionCode = 4`, ready for final `v1.3` audit & POCO F4 testing)*
-- **Overall Status:** **`v1.3` Feature-Complete + Chronological Artist Albums, Unified `Artists` Tab Artwork, & `Folders` Tab Cover Thumbnails — Software-Verified (`versionName = "1.3"`, `versionCode = 4`)** *(315 / 315 automated tests passing across 50 suites with `ktlintCheck`, `detekt`, Android Lint `0` `app/src/` warnings, Debug APK, and R8 Release APK clean)*
-- **Tasks Completed:** **17 / 17** (`T0.1` through `T5.4` in `docs/TASKS.md`) + `v1.1` + `v1.2` + `v1.3` Prompts 1–4 verification
+- **Overall Status:** **`v1.3` Feature-Complete + Selective Top-Bar Queue & Pinned `kHz` `MiniPlayerBar` Audio Spec — Software-Verified (`versionName = "1.3"`, `versionCode = 4`)** *(318 / 318 automated tests passing across 50 suites with `ktlintCheck`, `detekt`, Android Lint `0` `app/src/` warnings, Debug APK, and R8 Release APK clean)*
+- **Tasks Completed:** **17 / 17** (`T0.1` through `T5.4` in `docs/TASKS.md`) + `v1.1` + `v1.2` + `v1.3` Prompts 1–5 verification
 - **Active Blockers:** None (`BLOCKED.md` not required)
 
 ---
@@ -1250,5 +1250,38 @@ Addressed the 3 minor findings observed in real-device POCO F4 video testing and
 - [ ] **`v1.2 -> v1.3` Upgrade Year Backfill & Chronological Artist Albums:** Upgrade over an existing `v1.2` install on physical POCO F4 and confirm FLAC/MP3/SAF tracks automatically backfill release years and sort strictly oldest-first (`2003 -> 2005 -> ...`) inside `Artist Detail`.
 - [ ] **`Artists` Tab Unified Artwork & Live Custom Photo Sync:** Scroll the `Artists` tab at 120 Hz confirming smooth custom/embedded/oldest-album-cover/monogram avatars, set/reset a custom photo in `Artist Detail`, tap Back, and confirm the `Artists` tab updates immediately.
 - [ ] **`Folders` Tab Front Cover Thumbnails & `Folder Detail`:** Scroll the `Folders` tab confirming crisp uncropped Front Cover thumbnails with monochrome folder badges, Monochrome Studio folder icon fallback on coverless folders, and intact `Folder Detail` playback.
+
+---
+
+## 38. `v1.3` Selective Passive Top-Bar Queue Restoration & Pinned Compact `kHz` `MiniPlayerBar` Audio Spec (`D12.11`)
+
+### Delivered Refinements
+1. **Selective Passive Top-Bar Queue Restoration & `MiniPlayerBar` Control Simplification ([`LibraryHeaderControls.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/library/LibraryHeaderControls.kt), [`LibraryScreen.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/library/LibraryScreen.kt), [`PlaylistsScreen.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/playlists/PlaylistsScreen.kt), [`BitPerfectAppNav.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/BitPerfectAppNav.kt), [`UiComponents.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/UiComponents.kt)):**
+   - Removed `onOpenQueue` and its `IconButton` from `MiniPlayerBar`, keeping only Play/Pause and Next (`>= 48.dp`) on the right side to reclaim horizontal metadata width.
+   - Restored the passive `>= 48.dp` Queue `IconButton` (`contentDescription = "Open playback queue"`) to `LibraryTopAppBar` (covering `Library` main tabs, standalone & Artist-child `Album Detail`, and `Folder Detail`) and `PlaylistsScreen`'s `TopAppBar` (covering `Playlists` overview, `Playlist Detail`, and `Most Played`), keeping `NowPlayingScreen`'s Queue button intact.
+   - Kept [`ArtistDetailView.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/library/ArtistDetailView.kt) Hero Banner overlay strictly free of any Queue icon (Back + 3-dot overflow only).
+   - Preserved 100% passive read-only Queue opening across all screens (never pauses playback or alters/overwrites the active queue).
+2. **Pure-Kotlin Compact `kHz` Audio Spec Helper & Non-Truncating 2-Line `MiniPlayerBar` Layout ([`NotificationSubtitleFormatter.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/NotificationSubtitleFormatter.kt), [`UiComponents.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/UiComponents.kt)):**
+   - Added `NotificationSubtitleFormatter.formatAudioSpec(...)` overloads (`0` `android.*` / `androidx.*` imports) sharing locale-independent `kHz` formatting with media notifications (`FLAC 24-bit · 96 kHz`, `FLAC 16-bit · 44.1 kHz`, `WAV 24-bit · 48 kHz`, `MP3 · 44.1 kHz`) while leaving comma-formatted `Hz` (`96,000 Hz`) untouched on `PlaybackTrack.formatBadge`, Library/Queue rows, Diagnostics, and Track Info.
+   - Rendered `MiniPlayerBar` Line 2 as a horizontal `Row` pairing Artist `Text(modifier = Modifier.weight(1f, fill = false), maxLines = 1, overflow = TextOverflow.Ellipsis)` with an un-weighted `" · $compactSpec"` `Text(maxLines = 1, softWrap = false)` so short artists stay snug next to the spec and long artists ellipsize while the audio spec never truncates.
+
+### Final Clean `v1.3` Software Verification Evidence (`/home/endricho/.local/bin/gradlew-wsl clean ktlintCheck detekt testDebugUnitTest lintDebug assembleDebug assembleRelease --no-daemon`)
+- **Kotlin Formatting (`ktlintCheck`):** **PASS — 0 violations**.
+- **Static Analysis (`detekt`):** **PASS — 0 issues** (0 baseline suppressions).
+- **Automated JVM Unit + Room v5 Migration + Robolectric Native-Skia + Compose UI Tests (`testDebugUnitTest`):** **318 / 318 passed** across **50 test suites** (`0` failed, `0` errors, `0` skipped, `0` `@Ignore`, `0` `TODO()`), including:
+  - [`NotificationSubtitleFormatterTest.kt`](../app/src/test/java/com/cangkir/bitperfectplayer/audio/NotificationSubtitleFormatterTest.kt): `9 / 9` (+2 verifying `formatAudioSpec` across `44.1`/`48`/`88.2`/`96`/`176.4`/`192 kHz`, with/without bit depth, unknown codec, missing metadata, `PlaybackTrack` runtime fallback, and comma-locale invariance)
+  - [`BitPerfectUiBehaviorTest.kt`](../app/src/test/java/com/cangkir/bitperfectplayer/ui/BitPerfectUiBehaviorTest.kt): `42 / 42` (updated top-bar passive Queue tests verifying `Library` tabs, `Playlists`, `Playlist Detail`, standalone & Artist-child `Album Detail`, and `Folder Detail` + strict exclusion on `Artist Detail` Hero overlay and `MiniPlayerBar`; native-Skia Roboto layout test confirming `MiniPlayerBar` ellipsizes long artist names on `360dp` width while keeping `" · FLAC 24-bit · 96 kHz"` completely untruncated with zero overlap; and passive end-to-end `Album Detail`/`Folder Detail` -> `QueueScreen` flow)
+- **Compiler, KSP, & R8 Warnings:** **0** Kotlin warnings, **0** KSP warnings, **0** R8 warnings.
+- **Android Lint (`lintDebug` & `lintVitalRelease`):** **0 errors**, **0 warnings across all `app/src/` files** (13 remaining advisories are upstream dependency version/AAR notices in `gradle/libs.versions.toml`).
+- **Pure-Kotlin Domain Boundary:** **PASS — 0 `android.*` / `androidx.*` imports** in `NotificationSubtitleFormatter.kt`.
+- **Merged Manifest & Offline Privacy Audit (XML-parsed Source + All 8 Generated Debug/Release/UnitTest Manifests — 9 manifests total):** **PASS — 0 `INTERNET`, 0 `RECORD_AUDIO`, 0 `MANAGE_EXTERNAL_STORAGE`, 0 `WRITE_EXTERNAL_STORAGE`, 0 `READ_MEDIA_IMAGES`**; Release merged manifest verified `android:versionCode="4"` and `android:versionName="1.3"`.
+- **Debug APK (`assembleDebug`):** `app/build/outputs/apk/debug/app-debug.apk` (`21,541,166 bytes` / `20.54 MB`).
+- **Unsigned Release APK (`assembleRelease` with R8):** `app/build/outputs/apk/release/app-release-unsigned.apk` (`2,980,668 bytes` / `2.84 MB`).
+- **R8 Mapping Artifact (`retrace` support):** `app/build/outputs/mapping/release/mapping.txt` (`38,029,303 bytes` / `36.27 MB`).
+
+### Additional Physical Hardware Verification Pending (Not Executed in Software-Only Environment)
+- [ ] **Selective Top-Bar Queue & `Artist Detail` Clarity:** Confirm the passive Queue icon renders crisply on `Library`, `Playlists`, `Playlist Detail`, `Album Detail`, and `Folder Detail` top bars while staying absent from `Artist Detail`'s Hero Banner overlay and `MiniPlayerBar`.
+- [ ] **Non-Truncating `MiniPlayerBar` Audio Spec:** Play hi-res `24-bit/96 kHz` FLAC tracks by long-named artists on POCO F4 and confirm only the artist name ellipsizes while `FLAC 24-bit · 96 kHz` stays pinned and readable under both Monochrome Studio and Dynamic Cover Theme.
+
 
 

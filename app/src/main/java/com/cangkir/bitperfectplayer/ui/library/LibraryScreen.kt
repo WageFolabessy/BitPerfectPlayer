@@ -73,6 +73,7 @@ fun LibraryScreen(
     onShowTrackInfo: (PlaybackTrack) -> Unit,
     onToggleFavorite: (PlaybackTrack) -> Unit,
     onOpenDiagnostics: () -> Unit,
+    onOpenQueue: () -> Unit = {},
     initialTab: LibraryTab = LibraryTab.ALL_SONGS,
     dynamicCoverThemeEnabled: Boolean = false,
     coverThemeColorCache: CoverThemeColorCache? = null,
@@ -308,6 +309,7 @@ fun LibraryScreen(
                     isBitPerfectActive = isBitPerfectActive,
                     onCloseGroup = navigateDetailBack,
                     onImportFolder = launchImportFolder,
+                    onOpenQueue = onOpenQueue,
                     onOpenDiagnostics = onOpenDiagnostics,
                 )
             },

@@ -497,4 +497,21 @@ This file records autonomous architectural, dependency, and environment decision
   - Delivers visual consistency between `Artists` and `Artist Detail` and upgrades `Folders` browsing with uncropped album recognition while preserving clear folder-vs-album differentiation and zero 120 Hz scroll jank.
 - **Rejected Alternatives:** Removing the `Folders` tab (breaks directory-based audiophile workflows); eagerly scanning every artist's FLAC/MP3 headers on tab open (causes startup I/O stalls instead of lazy visible-item `LaunchedEffect` loading with 35 ms fling debounce).
 
+---
+
+## D12.11 — `v1.3` Selective Passive Top-Bar Queue Restoration & Pinned Compact `kHz` `MiniPlayerBar` Audio Spec
+- **Decision (Supersedes `D12.6` for Queue icon placement):**
+  1. **Selective Passive Top-Bar Queue Icon (`LibraryHeaderControls.kt`, `LibraryScreen.kt`, `PlaylistsScreen.kt`, `BitPerfectAppNav.kt`, `UiComponents.kt`):**
+     - Removed the Queue button (`onOpenQueue`) from `MiniPlayerBar` so right-side controls hold only **Play/Pause** and **Next** (`>= 48.dp`), freeing horizontal space for track metadata.
+     - Restored the passive `>= 48.dp` Queue `IconButton` (`contentDescription = "Open playback queue"`) to `LibraryTopAppBar` (covering `Library` main tabs, standalone & Artist-child `Album Detail`, and `Folder Detail`) and `PlaylistsScreen`'s `TopAppBar` (covering `Playlists` overview, `Playlist Detail`, and `Most Played`), while keeping `NowPlayingScreen`'s Queue button intact.
+     - Explicitly excluded `ArtistDetailView`'s Hero Banner overlay so its top row stays minimalist with only Back and the 3-dot overflow menu (`Set Artist Photo` / `Reset Artist Photo`).
+     - Preserved strictly passive (read-only) Queue behavior across every screen: opening Queue never pauses playback or alters/overwrites the active queue.
+  2. **Pinned Non-Truncating 2-Line `MiniPlayerBar` Audio Spec (`NotificationSubtitleFormatter.kt`, `UiComponents.kt`):**
+     - Extracted `NotificationSubtitleFormatter.formatAudioSpec(...)` (pure Kotlin, zero `android.*` imports, shared with media-notification subtitles) to format concise locale-independent `kHz` specs (`44_100 -> "44.1 kHz"`, `48_000 -> "48 kHz"`, `96_000 -> "96 kHz"`, `FLAC 24-bit · 96 kHz`, `MP3 · 44.1 kHz`) while leaving full comma-formatted `Hz` intact across `PlaybackTrack.formatBadge`, Library/Queue rows, Diagnostics, and Track Info.
+     - Structured `MiniPlayerBar` Line 2 as `Row(verticalAlignment = Alignment.CenterVertically)` pairing Artist `Text(modifier = Modifier.weight(1f, fill = false), maxLines = 1, overflow = TextOverflow.Ellipsis)` with an un-weighted `" · $compactSpec"` `Text(maxLines = 1, softWrap = false)` so short artists sit snugly next to the spec and long artist names ellipsize while the compact `kHz` spec never truncates.
+- **Rationale:**
+  - Restores one-tap passive Queue inspection while browsing Library, Albums, Folders, or Playlists without sacrificing `MiniPlayerBar` title/artist legibility or cluttering the full-bleed `Artist Detail` Hero header.
+- **Rejected Alternatives:** Wrapping `MiniPlayerBar` metadata to 3 lines (increases vertical footprint over browsing lists); concatenating artist and spec into a single ellipsized `Text` string (hides container/bit-depth/sample-rate whenever an artist name is long); duplicating formatter logic separately from `NotificationSubtitleFormatter`.
+
+
 

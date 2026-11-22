@@ -198,7 +198,6 @@ private fun BitPerfectAppRootContent(viewModel: MainViewModel, startupHomepage: 
                 onOpenNowPlaying = openNowPlaying,
                 onTogglePlayPause = viewModel::togglePlayPause,
                 onNext = viewModel::next,
-                onOpenQueue = openQueue,
             )
         },
         libraryContent = { initialLibraryTab ->
@@ -224,6 +223,7 @@ private fun BitPerfectAppRootContent(viewModel: MainViewModel, startupHomepage: 
                 onShowTrackInfo = viewModel::openTrackInfo,
                 onToggleFavorite = viewModel::toggleFavorite,
                 onOpenDiagnostics = openDiagnostics,
+                onOpenQueue = openQueue,
                 initialTab = initialLibraryTab,
                 dynamicCoverThemeEnabled = dynamicCoverThemeEnabled,
                 coverThemeColorCache = viewModel.coverThemeColorCache,
@@ -252,6 +252,7 @@ private fun BitPerfectAppRootContent(viewModel: MainViewModel, startupHomepage: 
                 onMovePlaylistEntry = viewModel::movePlaylistEntry,
                 onExportPlaylist = viewModel::exportPlaylistToM3u8,
                 onImportPlaylist = viewModel::importPlaylistFromM3u8,
+                onOpenQueue = openQueue,
             )
         },
         settingsContent = {

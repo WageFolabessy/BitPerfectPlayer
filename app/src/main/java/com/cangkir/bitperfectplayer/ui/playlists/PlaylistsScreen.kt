@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.FileOpen
 import androidx.compose.material.icons.filled.SaveAlt
@@ -68,6 +69,7 @@ fun PlaylistsScreen(
     onMovePlaylistEntry: (Long, Int, Int) -> Unit,
     onExportPlaylist: (ResolvedPlaylist, Uri) -> Unit,
     onImportPlaylist: (Uri) -> Unit,
+    onOpenQueue: () -> Unit = {},
 ) {
     var openedPlaylistId by rememberSaveable { mutableStateOf<Long?>(null) }
     var showMostPlayedDetail by rememberSaveable { mutableStateOf(false) }
@@ -255,6 +257,16 @@ fun PlaylistsScreen(
                     }
                 },
                 actions = {
+                    IconButton(
+                        onClick = onOpenQueue,
+                        modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.QueueMusic,
+                            contentDescription = "Open playback queue",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                     if (openedPlaylist != null) {
                         IconButton(
                             onClick = { launchExport(openedPlaylist) },

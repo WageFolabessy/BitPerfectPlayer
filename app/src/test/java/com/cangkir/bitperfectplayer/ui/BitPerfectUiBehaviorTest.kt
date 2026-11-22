@@ -11,6 +11,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -29,6 +30,7 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.test.core.app.ApplicationProvider
 import com.cangkir.bitperfectplayer.audio.AudioOutputMode
 import com.cangkir.bitperfectplayer.audio.AudioSafetyState
@@ -63,6 +65,7 @@ import com.cangkir.bitperfectplayer.ui.theme.ObsidianBackground
 import com.cangkir.bitperfectplayer.ui.theme.StudioIvoryPrimary
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -71,6 +74,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 
 /**
  * Headless JVM behavioral Compose UI tests powered by Robolectric (pinned to Android 14 / API 34).
@@ -1167,7 +1171,7 @@ class BitPerfectUiBehaviorTest {
     }
 
     @Test
-    fun libraryScreen_topBarOmitsQueueIconAcrossAllTabsAndDetailViews() {
+    fun libraryScreen_topBarExposesPassiveQueueIconAcrossTabsAlbumAndFolderDetails_andExcludesArtistDetail() {
         val albumTrack = hiResFlacTrack
         val secondTrack = hiResFlacTrack.copy(
             uriString = "content://test/audio/boulevard.flac",
@@ -1179,6 +1183,13 @@ class BitPerfectUiBehaviorTest {
         )
         val snapshot = LibrarySnapshot(
             allSongs = listOf(albumTrack, secondTrack),
+            folders = listOf(
+                com.cangkir.bitperfectplayer.library.LibraryGroup(
+                    name = "FLAC Hi-Res",
+                    subtitle = "1 track",
+                    tracks = listOf(albumTrack),
+                ),
+            ),
             albums = listOf(
                 com.cangkir.bitperfectplayer.library.LibraryGroup(
                     name = "21st Century Breakdown",
@@ -1201,6 +1212,9 @@ class BitPerfectUiBehaviorTest {
             activeTrack = secondTrack,
             engineState = EnginePlaybackState(status = PlaybackStatus.PLAYING, durationMs = secondTrack.durationMs),
         )
+        var openQueueCalls = 0
+        var playCalls = 0
+        var enqueueCalls = 0
 
         composeRule.setContent {
             BitPerfectPlayerTheme {
@@ -1211,39 +1225,62 @@ class BitPerfectUiBehaviorTest {
                     albumArtworkLoader = artworkLoader,
                     onRefreshLibrary = {},
                     onImportFolder = {},
-                    onPlayTracks = { _, _, _ -> },
-                    onEnqueueTrack = {},
-                    onEnqueueNext = {},
-                    onEnqueueTracks = { _, _ -> },
-                    onEnqueueTracksNext = { _, _ -> },
+                    onPlayTracks = { _, _, _ -> playCalls++ },
+                    onEnqueueTrack = { enqueueCalls++ },
+                    onEnqueueNext = { enqueueCalls++ },
+                    onEnqueueTracks = { _, _ -> enqueueCalls++ },
+                    onEnqueueTracksNext = { _, _ -> enqueueCalls++ },
                     onSetTrackSort = { _, _ -> },
                     onSetGroupSort = { _, _ -> },
                     onAddToPlaylist = {},
                     onShowTrackInfo = {},
                     onToggleFavorite = {},
                     onOpenDiagnostics = {},
+                    onOpenQueue = { openQueueCalls++ },
                 )
             }
         }
 
-        // 1. All Songs tab -> Queue icon is moved to MiniPlayerBar (absent from top bar)
-        composeRule.onNodeWithContentDescription("Open playback queue").assertDoesNotExist()
+        // 1. All Songs tab -> Queue icon present and strictly passive
+        composeRule.onNodeWithContentDescription("Open playback queue").assertIsDisplayed().performClick()
+        assertEquals(1, openQueueCalls)
 
-        // 2. Albums tab -> open Album detail -> Queue icon absent from top bar
+        // 2. Albums tab -> open Album Detail -> Queue icon present and strictly passive
         composeRule.onNodeWithText("Albums").assertIsDisplayed().performClick()
         composeRule.onNodeWithText("21st Century Breakdown").assertIsDisplayed().performClick()
-        composeRule.onNodeWithContentDescription("Open playback queue").assertDoesNotExist()
+        composeRule.onNodeWithContentDescription("Open playback queue").assertIsDisplayed().performClick()
+        assertEquals(2, openQueueCalls)
 
-        // 3. Back -> Artists tab -> open Artist detail -> Queue icon absent from hero/top bar
+        // 3. Folders tab -> open Folder Detail -> Queue icon present and strictly passive
         composeRule.onNodeWithContentDescription("Back to Albums").assertIsDisplayed().performClick()
+        composeRule.onNodeWithText("Folders").assertIsDisplayed().performClick()
+        composeRule.onNodeWithText("FLAC Hi-Res").assertIsDisplayed().performClick()
+        composeRule.onNodeWithContentDescription("Open playback queue").assertIsDisplayed().performClick()
+        assertEquals(3, openQueueCalls)
+
+        // 4. Artists tab -> Artist Detail -> Queue icon MUST NOT exist on Hero Banner overlay
+        composeRule.onNodeWithContentDescription("Back to Folders").assertIsDisplayed().performClick()
         composeRule.onNodeWithText("Artists").assertIsDisplayed().performClick()
         composeRule.onNodeWithText("Green Day").assertIsDisplayed().performClick()
+        composeRule.onNodeWithContentDescription("Back to Artists").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Artist options for Green Day").assertIsDisplayed()
         composeRule.onNodeWithContentDescription("Open playback queue").assertDoesNotExist()
 
-        // 4. Back -> Favorites tab -> Queue icon absent from top bar
+        // 5. Artist Detail -> Child Album Detail -> Queue icon restored on Album Detail TopAppBar
+        composeRule.onNodeWithContentDescription(
+            "Open album 21st Century Breakdown, 1 track",
+        ).assertIsDisplayed().performClick()
+        composeRule.onNodeWithContentDescription("Open playback queue").assertIsDisplayed().performClick()
+        assertEquals(4, openQueueCalls)
+
+        // 6. Back to Artists -> Favorites tab -> Queue icon present
+        composeRule.onNodeWithContentDescription("Back to Green Day").assertIsDisplayed().performClick()
         composeRule.onNodeWithContentDescription("Back to Artists").assertIsDisplayed().performClick()
         composeRule.onNodeWithText("Favorites").performScrollTo().assertIsDisplayed().performClick()
-        composeRule.onNodeWithContentDescription("Open playback queue").assertDoesNotExist()
+        composeRule.onNodeWithContentDescription("Open playback queue").assertIsDisplayed().performClick()
+        assertEquals(5, openQueueCalls)
+        assertEquals(0, playCalls)
+        assertEquals(0, enqueueCalls)
     }
 
     @Test
@@ -1324,7 +1361,7 @@ class BitPerfectUiBehaviorTest {
     }
 
     @Test
-    fun playlistsScreen_topBarOmitsQueueIconAcrossOverviewAndPlaylistDetail() {
+    fun playlistsScreen_topBarExposesPassiveQueueIconAcrossOverviewAndPlaylistDetail() {
         val playlist = com.cangkir.bitperfectplayer.library.ResolvedPlaylist(
             id = 7L,
             name = "Late Night",
@@ -1339,6 +1376,9 @@ class BitPerfectUiBehaviorTest {
                 ),
             ),
         )
+        var openQueueCalls = 0
+        var playCalls = 0
+        var enqueueCalls = 0
 
         composeRule.setContent {
             BitPerfectPlayerTheme {
@@ -1349,9 +1389,9 @@ class BitPerfectUiBehaviorTest {
                     ),
                     activeTrackUri = hiResFlacTrack.uriString,
                     albumArtworkLoader = artworkLoader,
-                    onPlayTracks = { _, _, _ -> },
-                    onEnqueueTracks = { _, _ -> },
-                    onEnqueueTracksNext = { _, _ -> },
+                    onPlayTracks = { _, _, _ -> playCalls++ },
+                    onEnqueueTracks = { _, _ -> enqueueCalls++ },
+                    onEnqueueTracksNext = { _, _ -> enqueueCalls++ },
                     onSetPlaylistSort = { _, _ -> },
                     onCreatePlaylist = {},
                     onRenamePlaylist = { _, _ -> },
@@ -1360,16 +1400,22 @@ class BitPerfectUiBehaviorTest {
                     onMovePlaylistEntry = { _, _, _ -> },
                     onExportPlaylist = { _, _ -> },
                     onImportPlaylist = {},
+                    onOpenQueue = { openQueueCalls++ },
                 )
             }
         }
 
-        // Overview top bar omits Queue icon (moved to MiniPlayerBar)
-        composeRule.onNodeWithContentDescription("Open playback queue").assertDoesNotExist()
+        // Overview top bar exposes passive Queue icon
+        composeRule.onNodeWithContentDescription("Open playback queue").assertIsDisplayed().performClick()
+        assertEquals(1, openQueueCalls)
 
-        // Playlist detail top bar omits Queue icon as well
+        // Playlist detail top bar exposes passive Queue icon alongside Export
         composeRule.onNodeWithText("Late Night").assertIsDisplayed().performClick()
-        composeRule.onNodeWithContentDescription("Open playback queue").assertDoesNotExist()
+        composeRule.onNodeWithContentDescription("Export Late Night as .m3u8").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Open playback queue").assertIsDisplayed().performClick()
+        assertEquals(2, openQueueCalls)
+        assertEquals(0, playCalls)
+        assertEquals(0, enqueueCalls)
     }
 
     @Test
@@ -1985,19 +2031,21 @@ class BitPerfectUiBehaviorTest {
     }
 
     @Test
-    @Config(qualifiers = "w411dp-h915dp")
-    fun miniPlayerBar_exposesPassiveQueueIconAlongsidePlayPauseAndNext() {
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    @Config(qualifiers = "w360dp-h740dp")
+    fun miniPlayerBar_omitsQueueIconAndPinsCompactKhzSpecWithoutTruncatingLongArtist() {
+        val longArtist = "Avenged Sevenfold Featuring Symphony Orchestra"
+        val longArtistTrack = hiResFlacTrack.copy(artist = longArtist)
         val activePlayback = PlaybackControllerState(
-            queue = QueueSnapshot(items = listOf(hiResFlacTrack), currentIndex = 0),
+            queue = QueueSnapshot(items = listOf(longArtistTrack), currentIndex = 0),
             queueContext = QueueContext.allSongs(),
-            activeTrack = hiResFlacTrack,
-            engineState = EnginePlaybackState(status = PlaybackStatus.PLAYING, durationMs = hiResFlacTrack.durationMs),
+            activeTrack = longArtistTrack,
+            engineState = EnginePlaybackState(status = PlaybackStatus.PLAYING, durationMs = longArtistTrack.durationMs),
         )
         val posFlow = MutableStateFlow(45_000L)
         var openNowPlayingCalls = 0
         var togglePlayPauseCalls = 0
         var nextCalls = 0
-        var openQueueCalls = 0
 
         composeRule.setContent {
             BitPerfectPlayerTheme {
@@ -2008,20 +2056,175 @@ class BitPerfectUiBehaviorTest {
                     onOpenNowPlaying = { openNowPlayingCalls++ },
                     onTogglePlayPause = { togglePlayPauseCalls++ },
                     onNext = { nextCalls++ },
-                    onOpenQueue = { openQueueCalls++ },
                 )
             }
         }
 
-        // Queue button is visible alongside Pause & Next and triggers ONLY onOpenQueue
-        composeRule.onNodeWithContentDescription("Pause playback").assertIsDisplayed()
-        composeRule.onNodeWithContentDescription("Next track").assertIsDisplayed()
-        composeRule.onNodeWithContentDescription("Open playback queue").assertIsDisplayed().performClick()
-
-        assertEquals(1, openQueueCalls)
-        assertEquals(0, togglePlayPauseCalls)
-        assertEquals(0, nextCalls)
+        // Right controls keep ONLY Play/Pause & Next; Queue button must not exist on MiniPlayerBar
+        composeRule.onNodeWithContentDescription("Open playback queue").assertDoesNotExist()
+        val pauseBounds = composeRule.onNodeWithContentDescription("Pause playback")
+            .assertIsDisplayed()
+            .fetchSemanticsNode()
+            .boundsInRoot
+        composeRule.onNodeWithContentDescription("Pause playback").performClick()
+        composeRule.onNodeWithContentDescription("Next track").assertIsDisplayed().performClick()
+        assertEquals(1, togglePlayPauseCalls)
+        assertEquals(1, nextCalls)
         assertEquals(0, openNowPlayingCalls)
+
+        // Compact kHz spec is displayed (never verbose comma-separated Hz)
+        val expectedSpecText = " · FLAC 24-bit · 96 kHz"
+        assertEquals(0, composeRule.onAllNodesWithText("96,000 Hz", substring = true).fetchSemanticsNodes().size)
+        val specNode = composeRule.onNodeWithText(expectedSpecText, useUnmergedTree = true)
+            .assertIsDisplayed()
+            .fetchSemanticsNode()
+        val artistNode = composeRule.onNodeWithText(longArtist, useUnmergedTree = true)
+            .assertIsDisplayed()
+            .fetchSemanticsNode()
+
+        // Only the long artist ellipsizes; the pinned audio spec NEVER truncates or overlaps controls
+        val artistLayoutResults = mutableListOf<TextLayoutResult>()
+        val specLayoutResults = mutableListOf<TextLayoutResult>()
+        artistNode.config[SemanticsActions.GetTextLayoutResult].action?.invoke(artistLayoutResults)
+        specNode.config[SemanticsActions.GetTextLayoutResult].action?.invoke(specLayoutResults)
+        assertEquals(1, artistLayoutResults.size)
+        assertEquals(1, specLayoutResults.size)
+        val artistLayout = artistLayoutResults.single()
+        val specLayout = specLayoutResults.single()
+        assertTrue("Expected long artist text to ellipsize on 360dp phone", artistLayout.isLineEllipsized(0))
+        assertFalse("Pinned compact audio spec must not ellipsize", specLayout.isLineEllipsized(0))
+        assertEquals(1, specLayout.lineCount)
+        assertEquals(expectedSpecText.length, specLayout.getLineEnd(0))
+        assertTrue(
+            "Pinned compact audio spec glyphs must fit inside allocated width without clipping " +
+                "(lineRight=${specLayout.getLineRight(0)}, boxW=${specLayout.size.width})",
+            specLayout.getLineRight(0) <= specLayout.size.width + 1f,
+        )
+        assertTrue("Expected native Roboto glyph width for pinned spec", specNode.boundsInRoot.width > 50f)
+        assertTrue("Pinned spec should sit to the right of artist", specNode.boundsInRoot.left >= artistNode.boundsInRoot.right - 1f)
+        assertTrue("Pinned spec must not overlap Play/Pause", specNode.boundsInRoot.right <= pauseBounds.left + 1f)
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h915dp")
+    fun topBarQueueIcon_fromAlbumAndFolderDetail_opensQueueScreenPassivelyWithoutAlteringActivePlayback() {
+        val browsedTrack = hiResFlacTrack.copy(
+            uriString = "content://test/audio/browsed.flac",
+            title = "Browsed Album Song",
+            artist = "Browsed Artist",
+            album = "Browsed Album",
+            folderName = "Browsed Folder",
+        )
+        val playingTrack = hiResFlacTrack.copy(
+            uriString = "content://test/audio/playing.flac",
+            title = "Currently Playing Queue Song",
+            artist = "Active Artist",
+            album = "Active Album",
+            folderName = "Active Folder",
+        )
+        val snapshot = LibrarySnapshot(
+            allSongs = listOf(browsedTrack, playingTrack),
+            albums = listOf(
+                com.cangkir.bitperfectplayer.library.LibraryGroup(
+                    name = "Browsed Album",
+                    subtitle = "Browsed Artist · 1 track",
+                    tracks = listOf(browsedTrack),
+                ),
+            ),
+            folders = listOf(
+                com.cangkir.bitperfectplayer.library.LibraryGroup(
+                    name = "Browsed Folder",
+                    subtitle = "1 track",
+                    tracks = listOf(browsedTrack),
+                ),
+            ),
+        )
+        var showQueue by mutableStateOf(false)
+        var playbackState by mutableStateOf(
+            PlaybackControllerState(
+                queue = QueueSnapshot(items = listOf(playingTrack), currentIndex = 0),
+                queueContext = QueueContext.allSongs(),
+                activeTrack = playingTrack,
+                engineState = EnginePlaybackState(status = PlaybackStatus.PLAYING, durationMs = playingTrack.durationMs),
+            ),
+        )
+        var playCalls = 0
+        var enqueueCalls = 0
+
+        composeRule.setContent {
+            val saveableStateHolder = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
+            BitPerfectPlayerTheme {
+                if (showQueue) {
+                    saveableStateHolder.SaveableStateProvider("queue") {
+                        QueueScreen(
+                            playbackState = playbackState,
+                            libraryTracks = snapshot.allSongs,
+                            activeContextTracks = snapshot.allSongs,
+                            albumArtworkLoader = artworkLoader,
+                            onBack = { showQueue = false },
+                            onSelectQueueIndex = { playCalls++ },
+                            onAddTrackToQueue = { enqueueCalls++ },
+                            onRemoveQueueItem = {},
+                            onMoveQueueItem = { _, _ -> },
+                            onToggleShuffle = {},
+                            onCycleRepeatMode = {},
+                        )
+                    }
+                } else {
+                    saveableStateHolder.SaveableStateProvider("library") {
+                        LibraryScreen(
+                            libraryState = snapshot,
+                            favoriteTrackUris = emptySet(),
+                            playbackState = playbackState,
+                            albumArtworkLoader = artworkLoader,
+                            onRefreshLibrary = {},
+                            onImportFolder = {},
+                            onPlayTracks = { _, _, _ -> playCalls++ },
+                            onEnqueueTrack = { enqueueCalls++ },
+                            onEnqueueNext = { enqueueCalls++ },
+                            onEnqueueTracks = { _, _ -> enqueueCalls++ },
+                            onEnqueueTracksNext = { _, _ -> enqueueCalls++ },
+                            onSetTrackSort = { _, _ -> },
+                            onSetGroupSort = { _, _ -> },
+                            onAddToPlaylist = {},
+                            onShowTrackInfo = {},
+                            onToggleFavorite = {},
+                            onOpenDiagnostics = {},
+                            onOpenQueue = { showQueue = true },
+                        )
+                    }
+                }
+            }
+        }
+
+        // Open Album Detail -> tap top-bar Queue icon -> opens active queue passively without interrupting playback
+        composeRule.onNodeWithText("Albums").assertIsDisplayed().performClick()
+        composeRule.onNodeWithText("Browsed Album").assertIsDisplayed().performClick()
+        composeRule.onNodeWithContentDescription("Open playback queue").assertIsDisplayed().performClick()
+        composeRule.onNodeWithText("Playback Queue").assertIsDisplayed()
+        composeRule.onNodeWithText("Currently Playing Queue Song").assertIsDisplayed()
+        assertEquals(0, composeRule.onAllNodesWithText("Browsed Album Song").fetchSemanticsNodes().size)
+        assertTrue(playbackState.isPlaying)
+
+        // Return -> open Folder Detail -> tap top-bar Queue icon -> still strictly passive
+        composeRule.onNodeWithContentDescription("Back").assertIsDisplayed().performClick()
+        composeRule.onNodeWithContentDescription("Back to Albums").assertIsDisplayed().performClick()
+        composeRule.onNodeWithText("Folders").assertIsDisplayed().performClick()
+        composeRule.onNodeWithText("Browsed Folder").assertIsDisplayed().performClick()
+        composeRule.onNodeWithContentDescription("Open playback queue").assertIsDisplayed().performClick()
+        composeRule.onNodeWithText("Currently Playing Queue Song").assertIsDisplayed()
+        assertTrue(playbackState.isPlaying)
+
+        // When no track is active, tapping top-bar Queue opens empty passive Queue without starting playback
+        composeRule.runOnIdle {
+            showQueue = false
+            playbackState = PlaybackControllerState()
+        }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithContentDescription("Open playback queue").assertIsDisplayed().performClick()
+        composeRule.onNodeWithText("Playback queue is empty", substring = true).assertIsDisplayed()
+        assertEquals(0, playCalls)
+        assertEquals(0, enqueueCalls)
     }
 
     @Test

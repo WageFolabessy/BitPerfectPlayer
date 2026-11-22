@@ -21,7 +21,6 @@ import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -57,6 +56,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.cangkir.bitperfectplayer.audio.AudioFormatFormatter
 import com.cangkir.bitperfectplayer.audio.AudioOutputMode
+import com.cangkir.bitperfectplayer.audio.NotificationSubtitleFormatter
 import com.cangkir.bitperfectplayer.audio.PlaybackControllerState
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
 import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
@@ -294,9 +294,26 @@ fun MiniPlayerBar(
     onTogglePlayPause: () -> Unit,
     onNext: () -> Unit,
     modifier: Modifier = Modifier,
-    onOpenQueue: () -> Unit = {},
 ) {
     val track = playbackState.activeTrack ?: return
+    val diagnosticsMatchTrack = playbackState.engineState.activeTrackUri?.toString() == track.uriString
+    val runtimeSourceSampleRateHz = if (diagnosticsMatchTrack) playbackState.engineState.diagnostics.sourceSampleRateHz else 0
+    val runtimeSourceBitDepth = if (diagnosticsMatchTrack) playbackState.engineState.diagnostics.sourceBitDepth else null
+    val compactSpec = remember(
+        track.container,
+        track.codec,
+        track.bitDepth,
+        track.sampleRateHz,
+        runtimeSourceSampleRateHz,
+        runtimeSourceBitDepth,
+    ) {
+        NotificationSubtitleFormatter.formatAudioSpec(
+            track = track,
+            runtimeSampleRateHz = runtimeSourceSampleRateHz,
+            runtimeBitDepth = runtimeSourceBitDepth,
+        )
+    }
+    val cleanArtist = remember(track.artist) { track.artist.trim() }
 
     Surface(
         modifier = modifier.fillMaxWidth(),
@@ -316,7 +333,7 @@ fun MiniPlayerBar(
                     .fillMaxWidth()
                     .clickable(onClick = onOpenNowPlaying)
                     .semantics { contentDescription = "Open Now Playing for ${track.title}" }
-                    .padding(start = 14.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+                    .padding(start = 14.dp, end = 6.dp, top = 8.dp, bottom = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
@@ -342,17 +359,52 @@ fun MiniPlayerBar(
                             overflow = TextOverflow.Ellipsis,
                         )
                         Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = "${track.artist} · ${track.formatBadge}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            when {
+                                cleanArtist.isNotEmpty() && compactSpec.isNotEmpty() -> {
+                                    Text(
+                                        text = cleanArtist,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f, fill = false),
+                                    )
+                                    Text(
+                                        text = " · $compactSpec",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        softWrap = false,
+                                    )
+                                }
+                                compactSpec.isNotEmpty() -> {
+                                    Text(
+                                        text = compactSpec,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        softWrap = false,
+                                    )
+                                }
+                                else -> {
+                                    Text(
+                                        text = cleanArtist.ifEmpty { NotificationSubtitleFormatter.UNKNOWN_ARTIST_LABEL },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
 
-                Spacer(modifier = Modifier.width(4.dp))
+                Spacer(modifier = Modifier.width(6.dp))
 
                 IconButton(
                     onClick = onTogglePlayPause,
@@ -375,18 +427,6 @@ fun MiniPlayerBar(
                         contentDescription = "Next track",
                         tint = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.size(24.dp),
-                    )
-                }
-
-                IconButton(
-                    onClick = onOpenQueue,
-                    modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
-                ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.QueueMusic,
-                        contentDescription = "Open playback queue",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(22.dp),
                     )
                 }
             }

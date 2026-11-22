@@ -188,4 +188,181 @@ class NotificationSubtitleFormatterTest {
             ),
         )
     }
+
+    @Test
+    fun formatAudioSpec_formatsStandardAndHiResRatesWithAndWithoutBitDepth() {
+        assertEquals(
+            "FLAC 16-bit · 44.1 kHz",
+            NotificationSubtitleFormatter.formatAudioSpec(
+                container = "FLAC",
+                codec = "FLAC",
+                bitDepth = 16,
+                sampleRateHz = 44_100,
+            ),
+        )
+        assertEquals(
+            "WAV 24-bit · 48 kHz",
+            NotificationSubtitleFormatter.formatAudioSpec(
+                container = "WAV",
+                codec = "PCM",
+                bitDepth = 24,
+                sampleRateHz = 48_000,
+            ),
+        )
+        assertEquals(
+            "FLAC 24-bit · 88.2 kHz",
+            NotificationSubtitleFormatter.formatAudioSpec(
+                container = "FLAC",
+                codec = "FLAC",
+                bitDepth = 24,
+                sampleRateHz = 88_200,
+            ),
+        )
+        assertEquals(
+            "FLAC 24-bit · 96 kHz",
+            NotificationSubtitleFormatter.formatAudioSpec(
+                container = "FLAC",
+                codec = "FLAC",
+                bitDepth = 24,
+                sampleRateHz = 96_000,
+            ),
+        )
+        assertEquals(
+            "FLAC 24-bit · 176.4 kHz",
+            NotificationSubtitleFormatter.formatAudioSpec(
+                container = "FLAC",
+                codec = "FLAC",
+                bitDepth = 24,
+                sampleRateHz = 176_400,
+            ),
+        )
+        assertEquals(
+            "FLAC 24-bit · 192 kHz",
+            NotificationSubtitleFormatter.formatAudioSpec(
+                container = "FLAC",
+                codec = "FLAC",
+                bitDepth = 24,
+                sampleRateHz = 192_000,
+            ),
+        )
+        assertEquals(
+            "MP3 · 44.1 kHz",
+            NotificationSubtitleFormatter.formatAudioSpec(
+                container = "MP3",
+                codec = "MP3",
+                bitDepth = null,
+                sampleRateHz = 44_100,
+            ),
+        )
+        assertEquals(
+            "MP3 · 44.1 kHz",
+            NotificationSubtitleFormatter.formatAudioSpec(
+                container = "MP3",
+                codec = "MP3",
+                bitDepth = 0,
+                sampleRateHz = 44_100,
+            ),
+        )
+        assertEquals(
+            "AAC · 48 kHz",
+            NotificationSubtitleFormatter.formatAudioSpec(
+                container = "M4A",
+                codec = "AAC",
+                bitDepth = null,
+                sampleRateHz = 48_000,
+            ),
+        )
+        assertEquals(
+            "Opus · 48 kHz",
+            NotificationSubtitleFormatter.formatAudioSpec(
+                container = "OGG",
+                codec = "Opus",
+                bitDepth = null,
+                sampleRateHz = 48_000,
+            ),
+        )
+        assertEquals(
+            "Vorbis · 44.1 kHz",
+            NotificationSubtitleFormatter.formatAudioSpec(
+                container = "OGG",
+                codec = "Vorbis",
+                bitDepth = null,
+                sampleRateHz = 44_100,
+            ),
+        )
+    }
+
+    @Test
+    fun formatAudioSpec_handlesUnknownCodecMissingMetadataAndRuntimeFallback() {
+        assertEquals(
+            "M4A · 48 kHz",
+            NotificationSubtitleFormatter.formatAudioSpec(
+                container = "M4A",
+                codec = "Unknown",
+                bitDepth = null,
+                sampleRateHz = 48_000,
+            ),
+        )
+        assertEquals(
+            "",
+            NotificationSubtitleFormatter.formatAudioSpec(
+                container = "AUDIO",
+                codec = "Unknown",
+                bitDepth = null,
+                sampleRateHz = 0,
+            ),
+        )
+        assertEquals(
+            "FLAC",
+            NotificationSubtitleFormatter.formatAudioSpec(
+                container = "FLAC",
+                codec = null,
+                bitDepth = null,
+                sampleRateHz = 0,
+            ),
+        )
+        assertEquals(
+            "44.1 kHz",
+            NotificationSubtitleFormatter.formatAudioSpec(
+                container = "AUDIO",
+                codec = null,
+                bitDepth = null,
+                sampleRateHz = 44_100,
+            ),
+        )
+
+        val partialTrack = PlaybackTrack(
+            uriString = "content://media/external/audio/media/19",
+            title = "Everything In Its Right Place",
+            artist = "Radiohead",
+            album = "Kid A",
+            fileName = "01.flac",
+            container = "FLAC",
+            codec = "FLAC",
+            bitDepth = null,
+            sampleRateHz = 0,
+        )
+        val originalLocale = Locale.getDefault()
+        try {
+            Locale.setDefault(Locale.GERMANY)
+            assertEquals(
+                "FLAC 24-bit · 96 kHz",
+                NotificationSubtitleFormatter.formatAudioSpec(
+                    track = partialTrack,
+                    runtimeSampleRateHz = 96_000,
+                    runtimeBitDepth = 24,
+                ),
+            )
+            assertEquals(
+                "FLAC 16-bit · 44.1 kHz",
+                NotificationSubtitleFormatter.formatAudioSpec(
+                    track = partialTrack,
+                    runtimeSampleRateHz = 44_100,
+                    runtimeBitDepth = 16,
+                ),
+            )
+        } finally {
+            Locale.setDefault(originalLocale)
+        }
+    }
 }

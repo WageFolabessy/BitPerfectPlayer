@@ -3,16 +3,17 @@ package com.cangkir.bitperfectplayer.audio
 import java.util.Locale
 
 /**
- * Pure-Kotlin formatter building concise audiophile media-notification & lock-screen subtitles
- * (`Artist · Codec Bit-Depth · Sample Rate`) with zero `android.*` imports and zero locale-dependent
+ * Pure-Kotlin formatter building concise audiophile media-notification subtitles
+ * (`Artist · Codec Bit-Depth · Sample Rate`) and compact `MiniPlayerBar` audio specs
+ * (`Codec Bit-Depth · Sample Rate`) with zero `android.*` imports and zero locale-dependent
  * decimal separators.
  *
  * Examples:
- * - `Green Day · FLAC 16-bit · 44.1 kHz`
- * - `The Beatles · FLAC 24-bit · 96 kHz`
- * - `Artist Name · WAV 24-bit · 48 kHz`
- * - `Artist Name · MP3 · 44.1 kHz`
- * - `Artist Name` (when audio format metadata is unavailable)
+ * - `Green Day · FLAC 16-bit · 44.1 kHz` / `FLAC 16-bit · 44.1 kHz`
+ * - `The Beatles · FLAC 24-bit · 96 kHz` / `FLAC 24-bit · 96 kHz`
+ * - `Artist Name · WAV 24-bit · 48 kHz` / `WAV 24-bit · 48 kHz`
+ * - `Artist Name · MP3 · 44.1 kHz` / `MP3 · 44.1 kHz`
+ * - `Artist Name` / `""` (when audio format metadata is unavailable)
  */
 object NotificationSubtitleFormatter {
     const val DEFAULT_IDLE_SUBTITLE = "Offline Bit-Perfect Audio"
@@ -38,6 +39,27 @@ object NotificationSubtitleFormatter {
 
     fun format(artist: String?, container: String?, codec: String?, bitDepth: Int? = null, sampleRateHz: Int = 0): String {
         val cleanArtist = sanitizeArtist(artist)
+        val spec = formatAudioSpec(
+            container = container,
+            codec = codec,
+            bitDepth = bitDepth,
+            sampleRateHz = sampleRateHz,
+        )
+        return if (spec.isNotEmpty()) "$cleanArtist · $spec" else cleanArtist
+    }
+
+    fun formatAudioSpec(track: PlaybackTrack, runtimeSampleRateHz: Int = 0, runtimeBitDepth: Int? = null): String {
+        val effectiveRate = runtimeSampleRateHz.takeIf { it > 0 } ?: track.sampleRateHz
+        val effectiveBitDepth = runtimeBitDepth?.takeIf { it > 0 } ?: track.bitDepth
+        return formatAudioSpec(
+            container = track.container,
+            codec = track.codec,
+            bitDepth = effectiveBitDepth,
+            sampleRateHz = effectiveRate,
+        )
+    }
+
+    fun formatAudioSpec(container: String?, codec: String?, bitDepth: Int? = null, sampleRateHz: Int = 0): String {
         val formatLabel = resolveConciseFormatLabel(container = container, codec = codec)
         val validBitDepth = bitDepth?.takeIf { it > 0 }
         val formatWithDepth = when {
@@ -48,11 +70,12 @@ object NotificationSubtitleFormatter {
         }
         val rateLabel = formatCompactSampleRateKhz(sampleRateHz)
 
-        val parts = ArrayList<String>(3)
-        parts.add(cleanArtist)
-        if (formatWithDepth != null) parts.add(formatWithDepth)
-        if (rateLabel != null) parts.add(rateLabel)
-        return parts.joinToString(separator = " · ")
+        return when {
+            formatWithDepth != null && rateLabel != null -> "$formatWithDepth · $rateLabel"
+            formatWithDepth != null -> formatWithDepth
+            rateLabel != null -> rateLabel
+            else -> ""
+        }
     }
 
     /**
