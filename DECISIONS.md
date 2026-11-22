@@ -350,5 +350,19 @@ This file records autonomous architectural, dependency, and environment decision
   - Gives non-root Release APK users a clean, privacy-preserving, one-tap way to collect structured audio HAL, `audio/raw`, USB mixer, turntable, FGS handshake, latency/underrun, and crash diagnostics on real devices without touching `adb`, degrading 120 Hz rendering, or risking audio glitches or library PII leakage.
 - **Rejected Alternatives:** Writing a single unbounded monolithic log file (unreadable by agents and risks unbounded disk growth); auto-enabling logging on fresh install (violates strict opt-in privacy posture); writing to public `Downloads/` with legacy storage permissions (unnecessary permissions); adding external logging or ZIP libraries such as Timber/Zip4j (unnecessary APK bloat when JDK `ZipOutputStream` + pure Kotlin keeps the R8 Release APK at `2.70 MB`).
 
+---
+
+## D11.10 — `v1.2` Adversarial 7-Domain Audit Hardening
+- **Decision:**
+  1. **Strict `trackFormat`-Only Raw PCM Framing (`RawExtractorPcmDecoder`):** Removed `?: flacInfo?.bitsPerSample` fallback from `reportedBitsPerSample` so direct `audio/raw` byte framing always matches the extractor's actual wire format (`KEY_PCM_ENCODING` -> `"bits-per-sample"` / `"bit-depth"` -> `PCM_16BIT`), while keeping `flacInfo?.bitsPerSample` exclusively for honest Stage 1 `sourceBitDepth` reporting.
+  2. **Allocation-Free Float32 PCM Conversion (`PcmStreamRules`):** Converted little-endian PCM bytes to `FloatArray` using direct bit shifts + `Float.fromBits(...)` instead of allocating a temporary `HeapByteBuffer` on every write buffer.
+  3. **Exception-Safe USB Mixer Cleanup (`AudioTrackWriter`):** Added `try { ...; trackBuilt = true } finally { if (!trackBuilt) clearPreferredMixerAttributesOnApi34(usbDevice) }` around `AudioTrack.Builder().build()` so preferred mixer attributes can never leak on construction failure.
+  4. **Debounced Mid-Drag Gapless Sync (`PlaybackController`):** Debounced `syncNextTrackToEngine()` by `250 ms` during `moveQueueItem` (canceled on direct sync/`stop`/`release`) so dragging across `currentIndex + 1` in the last 8 seconds of playback never thrashes `GaplessPreloadController`.
+  5. **Bounded Crash Lock, Zero-CPU Disabled Park, Lazy Cold-Start Summary, & Expanded PII Redaction (`LocalDiagnosticLogger`, `DiagnosticLogFormatter`, `BitPerfectApplication`):** Guarded `writeCrashSync` with `fileWriteLock.tryLock(500L, TimeUnit.MILLISECONDS)`, parked `BitPerfectDiagWriter` indefinitely via `signalCondition.await()` when disabled, gated `buildDeviceSummaryFields` behind `prefs.diagnosticLoggingEnabled` + `playbackControllerLazy.isInitialized()`, and added `redactFilenameAndPaths(...)` covering bare filenames, `/data/user/...`, `/data/data/...`, and SAF volume-colon document IDs.
+- **Rationale:**
+  - Eliminates real-world failure modes (16-bit vs 24-bit raw framing mismatch, per-buffer GC churn, USB mixer attribute leaks, mid-drag decoder thrashing, crash-handler disk deadlocks, eager cold-start controller initialization on IO, and accidental filename leaks in exception messages) with minimal, localized, zero-regression changes.
+- **Rejected Alternatives:** Swallowing `RuntimeException` in `AudioTrackWriter` (breaks detekt `TooGenericExceptionCaught` and obscures real builder errors); terminating and recreating `BitPerfectDiagWriter` thread on every toggle (unnecessary thread lifecycle churn compared to an indefinite `Condition.await()` park).
+
+
 
 

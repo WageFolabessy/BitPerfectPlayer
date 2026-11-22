@@ -2,7 +2,7 @@
 
 - **Project:** `com.cangkir.bitperfectplayer` (Kotlin + Jetpack Compose, 100% Offline Android Music Player)
 - **Active Branch:** `feat/v1.2` *(branched from `main` at `b157c4b`)*
-- **Overall Status:** **`feat/v1.2` Complete & Software-Verified (`versionName = "1.2"`, `versionCode = 3`)** *(243 / 243 automated tests passing across 39 suites with `ktlintCheck`, `detekt`, Android Lint, Debug APK, and R8 Release APK clean; physical POCO F4 + Android 16 / USB-C DAC hardware verification pending)*
+- **Overall Status:** **`feat/v1.2` Complete, Audited, & Software-Verified (`versionName = "1.2"`, `versionCode = 3`)** *(248 / 248 automated tests passing across 39 suites with `ktlintCheck`, `detekt`, Android Lint, Debug APK, and R8 Release APK clean; physical POCO F4 + Android 16 / USB-C DAC hardware verification pending)*
 - **Tasks Completed:** **17 / 17** (`T0.1` through `T5.4` in `docs/TASKS.md`) + `v1.1` release + complete `v1.2` release upgrades
 - **Active Blockers:** None (`BLOCKED.md` not required)
 
@@ -1012,6 +1012,54 @@ Split the 4 oversized Compose screen files (`LibraryScreen.kt`, `PlaylistsScreen
 
 ### Additional Hardware Verification Checklist (Not Executed in Cloud)
 - [ ] **Release APK Field Diagnostics Workflow:** Install signed `v1.2` Release APK on physical POCO F4 / Android 16 device, confirm `DIAGNOSTIC LOGGING` defaults OFF (`No logs stored`), toggle ON, play a 24-bit/96 kHz FLAC + test USB-C DAC + live turntable scrub, verify **Export Logs (.zip)** via Android SAF saves a valid zip (`README_LOGS.txt` + `.txt` channels with zero song titles/paths), verify **Share Logs** opens the Android Share Sheet cleanly via `FileProvider`, and verify **Clear Logs** deletes all stored log/cache files.
+
+---
+
+## 32. `v1.2` Adversarial 7-Domain Code & Runtime Audit & Remediation Summary (`D11.10`)
+
+Following completion of all `v1.2` features on `feat/v1.2`, a full diff-wide adversarial audit (`main..HEAD`) was conducted across all 7 target domains. Confirmed findings were fixed directly with zero behavioral regressions and covered by new automated regression tests.
+
+### Domain-by-Domain Audit Findings & Fixes
+
+1. **Domain 1 — Android 16 `audio/raw` Direct PCM Bypass & Hot-Path Allocations:**
+   - **Finding 1A (Fixed — [`RawExtractorPcmDecoder.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/RawExtractorPcmDecoder.kt)):** Removed the `?: flacInfo?.bitsPerSample` fallback when computing `reportedBitsPerSample` so PCM framing derives strictly from `MediaExtractor`'s `trackFormat` (`KEY_PCM_ENCODING` -> `"bits-per-sample"` / `"bit-depth"` -> `PCM_16BIT`), preventing an extractor emitting down-converted 16-bit `audio/raw` without `KEY_PCM_ENCODING` from being misframed as 24-bit packed PCM (while preserving `flacInfo?.bitsPerSample` for honest Stage 1 `sourceBitDepth` reporting). Also wrapped `IllegalStateException` from `extractor.readSampleData` as `AudioDecodeException.IoError`.
+   - **Finding 1B (Fixed — [`PcmStreamRules.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/PcmStreamRules.kt)):** Rewrote `PcmStreamRules.convertLittleEndianBytesToFloats` with direct little-endian bit shifting + `Float.fromBits(...)`, eliminating a per-buffer `HeapByteBuffer` (`ByteBuffer.wrap`) allocation on every float32 PCM write to `AudioTrack`.
+   - **Regression Test:** `PcmStreamRulesTest.convertLittleEndianBytesToFloats_handlesOffsetsBoundsAndSignBitsBitExactly`.
+2. **Domain 2 — Safe-Mode Live Turntable Scratch & `TurntableFlushHeadTracker`:**
+   - **Audit Verdict: CLEAN.** Verified all 4 start/resume paths (`loadTrack(autoPlay = false)` -> `play()`, cold-start restore -> `play()`, `pause()` -> `play()`, and noisy/USB/route `AUTO_PAUSE` -> `play()`) keep `hasPendingAudioTrackFlush` synchronized and guarantee the 8 MB `TurntablePcmRingBuffer` is never allocated in `BIT_PERFECT_OPT_IN` and always freed on `stop()`, `release()`, and Bit-Perfect mode switch.
+3. **Domain 3 — USB-C DAC `MIXER_BEHAVIOR_DEFAULT` Sample-Rate Lock & Mixer Cleanup:**
+   - **Finding 3A (Fixed — [`AudioTrackWriter.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/AudioTrackWriter.kt)):** Guarded `AudioTrack.Builder().build()` inside `createConfiguredAudioTrackLocked` with a `try { ... } finally { if (!trackBuilt) routeAndMixerManager.clearPreferredMixerAttributesOnApi34(usbDevice) }` rollback so preferred USB mixer attributes can never leak even if `AudioTrack` construction throws during initial open or mid-stream format switches.
+4. **Domain 4 — Passive Queue Navigation, Pure-Compose Drag-and-Drop, & Full-List Search:**
+   - **Finding 4A (Fixed — [`QueueScreen.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/QueueScreen.kt) & [`PlaylistDialogs.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/playlists/PlaylistDialogs.kt)):** Deduplicated `basePool` via `.distinctBy { it.uriString }` in `AddTrackToQueueDialog` so opening the picker while the active context is a Playlist with duplicate tracks can never crash `LazyColumn` with duplicate keys. Also wrapped row + `HorizontalDivider` siblings inside a single `Column(Modifier.fillMaxWidth())` root in both `AddTrackToQueueDialog` and `AddToPlaylistDialog`.
+   - **Finding 4B (Fixed — [`PlaybackController.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/PlaybackController.kt)):** Debounced `syncNextTrackToEngine()` in `moveQueueItem` (`250 ms` `queueReorderSyncJob`, canceled on direct `syncNextTrackToEngine`/`stop`/`release`) so dragging across `currentIndex + 1` in the final 8 seconds of a track never thrashes `GaplessPreloadController` with repeated decoder open/close cycles.
+   - **Finding 4C (Fixed — [`QueueScreen.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/QueueScreen.kt)):** Reset `dragState` inside `LaunchedEffect(rowKeys)` whenever `dragState.draggedItemKey !in rowKeys`, protecting against external queue replacement mid-drag when `queue.items.size > 1`.
+   - **Passive Queue Check: CLEAN.** Verified zero lingering auto-switch queue helpers across navigation and library screens.
+   - **Regression Test:** `BitPerfectUiBehaviorTest.queueScreen_duplicateTracksInQueueAndAddDialog_neverCrashLazyColumn`.
+5. **Domain 5 — Default Homepage Preference & Configuration-Change Restoration:**
+   - **Audit Verdict: CLEAN.** Confirmed one-shot async DataStore latch before mounting `NavHost`, safe preservation across configuration changes via `MainViewModel` + `rememberNavController()` + `rememberSaveable`, and `LocalBackupCodec` backward/forward compatibility (without touching `diagnosticLoggingEnabled`).
+   - **Regression Test:** `BitPerfectUiBehaviorTest.startupNavHost_stateRestorationAfterConfigChange_preservesActiveRouteWithoutSnappingToDefaultHomepage` (`StateRestorationTester`).
+6. **Domain 6 — Uncropped Album Artwork (Option B):**
+   - **Audit Verdict: CLEAN.** Verified proportional decode (`AlbumArtworkHelper` / `AlbumArtworkLoader`), `ContentScale.Fit` on `surfaceVariant` in `TrackArtworkThumbnail` across all browsing/queue/mini-player/square-cover surfaces, and distortion-free `CircleShape` + `ContentScale.Crop` preserved strictly on `VinylDiscPlayer`.
+7. **Domain 7 — Opt-In Local Diagnostic Logging (PII Redaction, Crash Safety, Zero Overhead When OFF, UI Layout):**
+   - **Finding 7A (Fixed — [`DiagnosticLogFormatter.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/diagnostics/DiagnosticLogFormatter.kt), [`MediaCodecAudioDecoder.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/MediaCodecAudioDecoder.kt), [`AudioOutputEngine.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/audio/AudioOutputEngine.kt)):** Extended `redactSensitivePatterns` to scrub `/data/user/\d+/...`, `/data/data/...`, and SAF volume-colon doc IDs (`primary:Music/...`, `XXXX-XXXX:...`), added `redactFilenameAndPaths(raw, knownFileName)`, and applied it to `DECODER_OPEN_ERROR` and `PLAYBACK_WORKER_ERROR` so bare filenames embedded in exception messages can never leak into `errors_and_crashes.txt`.
+   - **Finding 7B (Fixed — [`LocalDiagnosticLogger.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/diagnostics/LocalDiagnosticLogger.kt)):** Replaced unbounded synchronized lock acquisition with `ReentrantLock()` + bounded `fileWriteLock.tryLock(500L, TimeUnit.MILLISECONDS)` inside `writeCrashSync(...)` so `DiagnosticCrashHandler` can never deadlock or hang on disk I/O before delegating to the previous `UncaughtExceptionHandler`.
+   - **Finding 7C (Fixed — [`BitPerfectApplication.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/BitPerfectApplication.kt)):** Skipped `buildDeviceSummaryFields(prefs)` completely when `!prefs.diagnosticLoggingEnabled` and gated `playbackControllerLazy.isInitialized()` so cold start never eagerly initializes `PlaybackController`/`AudioOutputEngine` on `Dispatchers.IO` or allocates diagnostic maps while logging is OFF.
+   - **Finding 7D (Fixed — [`LocalDiagnosticLogger.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/diagnostics/LocalDiagnosticLogger.kt)):** Parked `BitPerfectDiagWriter` indefinitely via `signalCondition.await()` when `!isEnabled && !flushRequested && buffer.size() == 0`, eliminating unnecessary 3-second wakeups after toggling logging OFF.
+   - **Finding 7E (Fixed — [`SettingsDiagnosticLoggingSection.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/settings/SettingsDiagnosticLoggingSection.kt)):** Adjusted `"Export Logs (.zip)"` vs `"Share Logs"` button weights (`1.28f` vs `1f`), compact horizontal padding (`10.dp`), and `TextOverflow.Ellipsis` so `"Export Logs (.zip)"` never clips on narrow `360–393.dp` phones.
+   - **Regression Tests:** `DiagnosticLogFormatterTest.redactFilenameAndPaths_stripsBareFilenamesDataPathsAndSafDocIds` and `LocalDiagnosticLoggerTest.exporter_whenEmptyOrDisabled_returnsGracefulErrorWithoutCreatingZip`.
+
+### Post-Audit Clean Verification Evidence (`./gradlew clean ktlintCheck detekt testDebugUnitTest lintDebug` + `assembleDebug assembleRelease`)
+- **Kotlin Formatting (`ktlintCheck`):** **PASS — 0 violations**.
+- **Static Analysis (`detekt`):** **PASS — 0 issues** (0 baseline files).
+- **Automated JVM Unit + Room Migration + Robolectric Compose UI Tests (`testDebugUnitTest`):** **248 / 248 passed** across **39 test suites** (`0` failed, `0` errors, `0` skipped, `0` `@Ignore`, `0` `TODO()`).
+- **Compiler, KSP, & R8 Warnings:** **0** Kotlin compiler warnings, **0** KSP warnings, **0** R8 warnings.
+- **Android Lint (`lintDebug` & `lintVitalRelease`):** **0 errors**, **0 total warnings**.
+- **Version Integrity:** Merged Release manifest confirmed `android:versionCode="3"` and `android:versionName="1.2"`.
+- **Debug APK (`assembleDebug`):** `app/build/outputs/apk/debug/app-debug.apk` (`20.32 MB` / `21,306,566 bytes`).
+- **Release APK (`assembleRelease` with R8 optimization):** `app/build/outputs/apk/release/app-release-unsigned.apk` (`2.70 MB` / `2,828,380 bytes`).
+- **R8 Mapping Artifact (`retrace` support):** `app/build/outputs/mapping/release/mapping.txt` (`36.17 MB` / `37,922,289 bytes`, non-empty).
+- **Strict Offline & Zero-Permission Audit (XML-parsed Source + All 8 Merged/Packaged Debug, Release, & UnitTest Manifests — 9 manifests total):** **PASS — 0 `INTERNET`, 0 `RECORD_AUDIO`, 0 `MANAGE_EXTERNAL_STORAGE`, 0 `WRITE_EXTERNAL_STORAGE`**; `FileProvider` confirmed `exported="false"`, `grantUriPermissions="true"`, `authorities="com.cangkir.bitperfectplayer.fileprovider"`.
+
 
 
 
