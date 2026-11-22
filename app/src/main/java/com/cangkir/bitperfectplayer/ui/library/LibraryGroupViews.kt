@@ -1,5 +1,9 @@
 package com.cangkir.bitperfectplayer.ui.library
 
+import android.graphics.Bitmap
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -19,6 +23,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Album
+import androidx.compose.material.icons.filled.Flip
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Button
@@ -29,6 +35,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -39,15 +46,21 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
 import com.cangkir.bitperfectplayer.audio.QueueContext
 import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
+import com.cangkir.bitperfectplayer.library.ArtistDetailHelper
 import com.cangkir.bitperfectplayer.library.LibraryGroup
 import com.cangkir.bitperfectplayer.ui.InlineSortTriggerButton
 import com.cangkir.bitperfectplayer.ui.TrackArtworkThumbnail
+import com.cangkir.bitperfectplayer.ui.theme.ObsidianBackground
 
 @Composable
 internal fun GroupListView(
@@ -203,6 +216,12 @@ internal fun GroupDetailTrackList(
     var groupMenuExpanded by remember { mutableStateOf(false) }
 
     Column(modifier = Modifier.fillMaxSize()) {
+        if (showTrackNumber && group.tracks.isNotEmpty()) {
+            AlbumDetailArtworkHeader(
+                albumGroup = group,
+                albumArtworkLoader = albumArtworkLoader,
+            )
+        }
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -302,5 +321,112 @@ internal fun GroupDetailTrackList(
             onToggleFavorite = onToggleFavorite,
             onImportFolder = null,
         )
+    }
+}
+
+@Composable
+private fun AlbumDetailArtworkHeader(albumGroup: LibraryGroup, albumArtworkLoader: AlbumArtworkLoader) {
+    val representativeTrack = albumGroup.tracks.firstOrNull() ?: return
+    val albumYear = remember(albumGroup.tracks) {
+        albumGroup.tracks.maxOfOrNull { ArtistDetailHelper.sanitizeYear(it.year) } ?: 0
+    }
+    var backCoverBitmap by remember(albumGroup.name, representativeTrack.uriString) {
+        mutableStateOf<Bitmap?>(null)
+    }
+    var showingBackCover by remember(albumGroup.name, representativeTrack.uriString) {
+        mutableStateOf(false)
+    }
+
+    LaunchedEffect(albumGroup.name, representativeTrack.uriString) {
+        showingBackCover = false
+        backCoverBitmap = albumArtworkLoader.loadAlbumBackCoverBitmap(
+            albumName = albumGroup.name,
+            tracks = albumGroup.tracks,
+            targetSizePx = AlbumArtworkLoader.HERO_SIZE_PX,
+        )
+    }
+
+    val currentBackBitmap = backCoverBitmap
+    val backImageBitmap = remember(currentBackBitmap) {
+        if (currentBackBitmap != null && !currentBackBitmap.isRecycled) currentBackBitmap.asImageBitmap() else null
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        if (showingBackCover && backImageBitmap != null) {
+            Box(
+                modifier = Modifier
+                    .size(104.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(ObsidianBackground),
+                contentAlignment = Alignment.Center,
+            ) {
+                Image(
+                    bitmap = backImageBitmap,
+                    contentDescription = "Back cover artwork for ${albumGroup.name}",
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+        } else {
+            TrackArtworkThumbnail(
+                track = representativeTrack,
+                artworkLoader = albumArtworkLoader,
+                size = 104.dp,
+                cornerRadius = 12.dp,
+                targetSizePx = AlbumArtworkLoader.HERO_SIZE_PX,
+                placeholderIcon = Icons.Filled.Album,
+                contentDescriptionText = "Front cover artwork for ${albumGroup.name}",
+            )
+        }
+
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = albumGroup.name,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(modifier = Modifier.height(3.dp))
+            Text(
+                text = buildString {
+                    append(representativeTrack.artist)
+                    if (albumYear > 0) append(" · $albumYear")
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (backImageBitmap != null) {
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = { showingBackCover = !showingBackCover },
+                    border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outline),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                    modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Flip,
+                        contentDescription = if (showingBackCover) "Show front cover" else "Show back cover",
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = if (showingBackCover) "Front Cover" else "Back Cover",
+                        style = MaterialTheme.typography.labelMedium,
+                        maxLines = 1,
+                        softWrap = false,
+                    )
+                }
+            }
+        }
     }
 }

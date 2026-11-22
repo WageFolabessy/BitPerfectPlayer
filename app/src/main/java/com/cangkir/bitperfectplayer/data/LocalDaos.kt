@@ -9,6 +9,8 @@ import kotlinx.coroutines.flow.Flow
 
 data class TrackPositionBackfill(val uriString: String, val discNumber: Int, val trackNumber: Int)
 
+data class TrackYearBackfill(val uriString: String, val year: Int)
+
 @Dao
 interface CachedTrackDao {
     @Query("SELECT * FROM cached_tracks ORDER BY title COLLATE NOCASE ASC")
@@ -26,6 +28,9 @@ interface CachedTrackDao {
     @Query("UPDATE cached_tracks SET disc_number = :discNumber, track_number = :trackNumber WHERE uri_string = :uriString")
     suspend fun updateTrackPosition(uriString: String, discNumber: Int, trackNumber: Int)
 
+    @Query("UPDATE cached_tracks SET year = :year WHERE uri_string = :uriString")
+    suspend fun updateTrackYear(uriString: String, year: Int)
+
     @Transaction
     suspend fun backfillTrackPositions(updates: List<TrackPositionBackfill>) {
         for (item in updates) {
@@ -34,6 +39,13 @@ interface CachedTrackDao {
                 discNumber = item.discNumber,
                 trackNumber = item.trackNumber,
             )
+        }
+    }
+
+    @Transaction
+    suspend fun backfillTrackYears(updates: List<TrackYearBackfill>) {
+        for (item in updates) {
+            updateTrackYear(uriString = item.uriString, year = item.year)
         }
     }
 

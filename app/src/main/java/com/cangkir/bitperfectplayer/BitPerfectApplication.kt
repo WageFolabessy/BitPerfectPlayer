@@ -17,6 +17,7 @@ import com.cangkir.bitperfectplayer.diagnostics.DiagnosticCrashHandler
 import com.cangkir.bitperfectplayer.diagnostics.DiagnosticLogExporter
 import com.cangkir.bitperfectplayer.diagnostics.LocalDiagnosticLogger
 import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
+import com.cangkir.bitperfectplayer.library.ArtistPhotoStore
 import com.cangkir.bitperfectplayer.library.LocalLibraryRepository
 import com.cangkir.bitperfectplayer.library.PlaylistRepository
 import com.cangkir.bitperfectplayer.library.TrackInfoLoader
@@ -52,6 +53,7 @@ class AppContainer(context: Context) {
     }
     val metadataReader: AudioMetadataReader by lazy { AudioMetadataReader(appContext) }
     val albumArtworkLoader: AlbumArtworkLoader by lazy { AlbumArtworkLoader(appContext) }
+    val artistPhotoStore: ArtistPhotoStore by lazy { ArtistPhotoStore(appContext) }
     val coverThemeColorCache: CoverThemeColorCache by lazy { CoverThemeColorCache(albumArtworkLoader) }
     val trackInfoLoader: TrackInfoLoader by lazy {
         TrackInfoLoader(

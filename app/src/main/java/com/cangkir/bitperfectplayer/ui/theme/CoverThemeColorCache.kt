@@ -2,6 +2,7 @@ package com.cangkir.bitperfectplayer.ui.theme
 
 import android.graphics.Bitmap
 import android.util.LruCache
+import androidx.core.graphics.scale
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
 import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
 import kotlin.math.roundToInt
@@ -34,13 +35,23 @@ class CoverThemeColorCache(private val albumArtworkLoader: AlbumArtworkLoader) {
 
     fun cacheKeyFor(track: PlaybackTrack): String = albumArtworkLoader.memoryKeyFor(track, AlbumArtworkLoader.THUMBNAIL_SIZE_PX)
 
-    fun peekCached(track: PlaybackTrack): CoverThemeLookup {
-        val entry = cache.get(cacheKeyFor(track)) ?: return CoverThemeLookup.Pending
+    fun peekCached(track: PlaybackTrack): CoverThemeLookup = peekCachedByKey(cacheKeyFor(track))
+
+    fun peekCachedByKey(key: String): CoverThemeLookup {
+        val entry = cache.get(key) ?: return CoverThemeLookup.Pending
         return CoverThemeLookup.Resolved(entry.tokens)
+    }
+
+    fun invalidateKey(key: String) {
+        cache.remove(key)
     }
 
     internal fun seedCacheForTesting(track: PlaybackTrack, tokens: DynamicThemeTokens?) {
         cache.put(cacheKeyFor(track), CachedEntry(tokens))
+    }
+
+    internal fun seedCacheKeyForTesting(key: String, tokens: DynamicThemeTokens?) {
+        cache.put(key, CachedEntry(tokens))
     }
 
     fun clear() {
@@ -53,6 +64,12 @@ class CoverThemeColorCache(private val albumArtworkLoader: AlbumArtworkLoader) {
         cache.get(key)?.let { return it.tokens }
 
         val bitmap = albumArtworkLoader.loadArtwork(track, AlbumArtworkLoader.THUMBNAIL_SIZE_PX)
+        return resolveTokensFromBitmap(key = key, bitmap = bitmap)
+    }
+
+    suspend fun resolveTokensFromBitmap(key: String, bitmap: Bitmap?): DynamicThemeTokens? {
+        if (key.isBlank()) return null
+        cache.get(key)?.let { return it.tokens }
         if (bitmap == null) {
             cache.put(key, CachedEntry(null))
             return null
@@ -92,7 +109,7 @@ class CoverThemeColorCache(private val albumArtworkLoader: AlbumArtworkLoader) {
         val targetHeight = (srcHeight * scale).roundToInt().coerceAtLeast(1)
 
         val sampled = if (targetWidth != srcWidth || targetHeight != srcHeight) {
-            Bitmap.createScaledBitmap(softwareBitmap, targetWidth, targetHeight, true)
+            softwareBitmap.scale(targetWidth, targetHeight)
         } else {
             softwareBitmap
         }

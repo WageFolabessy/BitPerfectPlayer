@@ -23,6 +23,7 @@ import com.cangkir.bitperfectplayer.data.CachedTrackSourceKind
 import com.cangkir.bitperfectplayer.data.FavoriteTrackRecord
 import com.cangkir.bitperfectplayer.data.LocalPersistenceRepository
 import com.cangkir.bitperfectplayer.data.TrackPositionBackfill
+import com.cangkir.bitperfectplayer.data.TrackYearBackfill
 import com.cangkir.bitperfectplayer.data.UserPreferences
 import com.cangkir.bitperfectplayer.data.UserPreferencesRepository
 import com.cangkir.bitperfectplayer.data.toCachedEntity
@@ -141,7 +142,11 @@ class LocalLibraryRepository(
         val scannedSources: Set<CachedTrackSourceKind>,
     )
 
-    private data class SyncMutations(val entitiesToUpsert: List<CachedTrackEntity>, val positionBackfills: List<TrackPositionBackfill>)
+    private data class SyncMutations(
+        val entitiesToUpsert: List<CachedTrackEntity>,
+        val positionBackfills: List<TrackPositionBackfill>,
+        val yearBackfills: List<TrackYearBackfill>,
+    )
 
     /**
      * Runs an incremental background library synchronization without ever clearing the displayed
@@ -200,6 +205,9 @@ class LocalLibraryRepository(
         }
         if (mutations.positionBackfills.isNotEmpty()) {
             persistenceRepository.backfillCachedTrackPositions(mutations.positionBackfills)
+        }
+        if (mutations.yearBackfills.isNotEmpty()) {
+            persistenceRepository.backfillCachedTrackYears(mutations.yearBackfills)
         }
         if (plan.toPruneUris.isNotEmpty()) {
             persistenceRepository.deleteCachedTracksByUris(plan.toPruneUris)
@@ -270,6 +278,7 @@ class LocalLibraryRepository(
     ): SyncMutations {
         val entitiesToUpsert = mutableListOf<CachedTrackEntity>()
         val positionBackfills = mutableListOf<TrackPositionBackfill>()
+        val yearBackfills = mutableListOf<TrackYearBackfill>()
 
         for (candidate in discovered.mediaStorePass.candidates) {
             val existing = cachedByUri[candidate.uriString]
@@ -278,21 +287,26 @@ class LocalLibraryRepository(
                     parseMediaStoreCandidate(candidate, existingFingerprint = existing?.contentFingerprint)
                         .toCachedEntity(CachedTrackSourceKind.MEDIA_STORE, nowEpoch),
                 )
-            } else if (existing != null && existing.discNumber == 0 && existing.trackNumber == 0) {
-                val resolved = TrackNumberParser.resolve(
-                    mediaStorePackedTrack = candidate.packedTrack,
-                    trackNumberTag = candidate.cdTrackNumber,
-                    discNumberTag = candidate.discNumber,
-                    fileName = candidate.displayName,
-                )
-                if (resolved.hasPosition) {
-                    positionBackfills.add(
-                        TrackPositionBackfill(
-                            uriString = candidate.uriString,
-                            discNumber = resolved.discNumber,
-                            trackNumber = resolved.trackNumber,
-                        ),
+            } else if (existing != null) {
+                if (existing.discNumber == 0 && existing.trackNumber == 0) {
+                    val resolved = TrackNumberParser.resolve(
+                        mediaStorePackedTrack = candidate.packedTrack,
+                        trackNumberTag = candidate.cdTrackNumber,
+                        discNumberTag = candidate.discNumber,
+                        fileName = candidate.displayName,
                     )
+                    if (resolved.hasPosition) {
+                        positionBackfills.add(
+                            TrackPositionBackfill(
+                                uriString = candidate.uriString,
+                                discNumber = resolved.discNumber,
+                                trackNumber = resolved.trackNumber,
+                            ),
+                        )
+                    }
+                }
+                if (existing.year == 0 && candidate.year > 0) {
+                    yearBackfills.add(TrackYearBackfill(uriString = candidate.uriString, year = candidate.year))
                 }
             }
         }
@@ -316,7 +330,11 @@ class LocalLibraryRepository(
             positionBackfills = positionBackfills,
         )
 
-        return SyncMutations(entitiesToUpsert = entitiesToUpsert, positionBackfills = positionBackfills)
+        return SyncMutations(
+            entitiesToUpsert = entitiesToUpsert,
+            positionBackfills = positionBackfills,
+            yearBackfills = yearBackfills,
+        )
     }
 
     private fun collectSafSyncMutations(
@@ -473,6 +491,7 @@ class LocalLibraryRepository(
         val packedTrack: Int,
         val cdTrackNumber: String?,
         val discNumber: String?,
+        val year: Int,
         val folderName: String,
         val relativePath: String?,
     )
@@ -505,6 +524,7 @@ class LocalLibraryRepository(
         val artist = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST)
         val album = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM)
         val track = cursor.getColumnIndex(MediaStore.Audio.Media.TRACK)
+        val year = cursor.getColumnIndex(MediaStore.Audio.Media.YEAR)
         val cdTrack = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             cursor.getColumnIndex(MediaStore.Audio.Media.CD_TRACK_NUMBER)
         } else {
@@ -582,6 +602,7 @@ class LocalLibraryRepository(
         add(MediaStore.Audio.Media.ARTIST)
         add(MediaStore.Audio.Media.ALBUM)
         add(MediaStore.Audio.Media.TRACK)
+        add(MediaStore.Audio.Media.YEAR)
         add(MediaStore.Audio.Media.DURATION)
         add(MediaStore.Audio.Media.SIZE)
         add(MediaStore.Audio.Media.DATE_MODIFIED)
@@ -649,6 +670,7 @@ class LocalLibraryRepository(
         )
         val folderName = resolveMediaStoreFolderName(bucketName, relativePath, legacyDataPath)
         val packedTrack = if (cols.track >= 0 && !cursor.isNull(cols.track)) cursor.getInt(cols.track) else 0
+        val rawYear = if (cols.year >= 0 && !cursor.isNull(cols.year)) cursor.getInt(cols.year) else 0
 
         return RawMediaStoreCandidate(
             uri = contentUri,
@@ -665,6 +687,7 @@ class LocalLibraryRepository(
             packedTrack = packedTrack,
             cdTrackNumber = cursor.getNonNullTrimmedStringOrNull(cols.cdTrack),
             discNumber = cursor.getNonNullTrimmedStringOrNull(cols.disc),
+            year = ArtistDetailHelper.sanitizeYear(rawYear),
             folderName = folderName,
             relativePath = relativePath,
         )
@@ -699,6 +722,7 @@ class LocalLibraryRepository(
             cursorPackedTrack = candidate.packedTrack,
             cursorCdTrackNumber = candidate.cdTrackNumber,
             cursorDiscNumber = candidate.discNumber,
+            cursorYear = candidate.year,
         )
 
         return PlaybackTrack(
@@ -720,6 +744,7 @@ class LocalLibraryRepository(
             relativePath = candidate.relativePath,
             discNumber = meta.discNumber,
             trackNumber = meta.trackNumber,
+            year = meta.year,
         )
     }
 
@@ -815,6 +840,7 @@ class LocalLibraryRepository(
             parentTreeUriString = entry.parentTreeUriString,
             discNumber = meta.discNumber,
             trackNumber = meta.trackNumber,
+            year = meta.year,
         )
     }
 

@@ -27,6 +27,7 @@ data class PlaybackTrack(
     val relativePath: String? = null,
     val discNumber: Int = 0,
     val trackNumber: Int = 0,
+    val year: Int = 0,
 ) {
     /**
      * Precomputed subtle non-redundant metadata line using exact Hz units (e.g., `FLAC · 24-bit · 96,000 Hz`).

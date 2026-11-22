@@ -404,8 +404,48 @@ This file records autonomous architectural, dependency, and environment decision
   - Delivers album-reactive dark studio personalization with zero third-party libraries (`androidx.palette`), zero extra permissions, zero audio-path side effects, zero 120 Hz canvas frame allocations, and strict deterministic WCAG legibility across extreme covers.
 - **Rejected Alternatives:** Adding `androidx.palette:palette-ktx` (unnecessary external dependency for a single-hue quantized dark palette); extracting pixels on the Main Thread or from full `600 px` hero bitmaps (avoided via `<= 32x32` `Dispatchers.Default` sampling cached per album); mutating global theme state when browsing Album Details (risks full-tree recomposition and flickering mini-player/nav chrome on Back).
 
+---
 
+## D12.3 — `v1.3` Pure-Kotlin On-Demand Multi-Artwork Header Parser (`FLAC` & `MP3`)
+- **Decision:**
+  - Implemented pure-Kotlin `EmbeddedArtworkParser` (`0` `android.*`/`androidx.*` imports) reading embedded multi-artwork slots strictly from audio file headers on demand (never during bulk library scanning):
+    - `FLAC`: parses `METADATA_BLOCK_PICTURE` (`blockType == 6`) sequentially from `fLaC` headers (and leading optional `ID3v2` wrappers), skipping non-matching blocks without allocating image buffers.
+    - `MP3`: parses `ID3` v2.3 & v2.4 `APIC` frames (handling extended headers, synchsafe & fallback frame sizes, v2.4 Data Length Indicator, tag/frame unsynchronization, and UTF-16 `0x00 0x00` description terminators).
+    - Slot priority mapping: `ARTIST` (`8` Artist/Performer -> `7` Lead Artist -> `10` Band/Orchestra -> `19` Band Logotype), `DISC` (`6`), `BACK_COVER` (`4`), and `FRONT_COVER` (`3`), enforcing a strict `8 MB` cap per picture block and returning `null` gracefully for WAV/M4A/OGG or malformed/truncated headers.
+  - Extended `AlbumArtworkLoader` with a dedicated bounded `8 MB` `slotMemoryCache` + `slotMissingKeys` negative cache (cleared on manual library refresh) so on-demand `DISC`, `BACK_COVER`, and `ARTIST` bitmaps never evict fast scrolling album thumbnails.
+- **Rationale:**
+  - Avoids pulling heavyweight tagging libraries (such as JAudioTagger) or scanning multi-megabyte embedded artwork during initial MediaStore/SAF library indexing while unlocking rich multi-picture FLAC/MP3 tags for audiophile collections.
+- **Rejected Alternatives:** Adding JAudioTagger (large dependency, reflection/R8 rules overhead); extracting all picture slots during `LocalLibraryRepository.refreshLibrary()` (unacceptable scan-time I/O and database bloat).
 
+---
 
+## D12.4 — `v1.3` Studio Artist Detail Redesign, Room v5 Release Year, Custom Artist Photo Picker, & Parent Backstack
+- **Decision:**
+  - Added release `year: Int = 0` to `PlaybackTrack` and upgraded `BitPerfectDatabase` non-destructively from `version = 4` to `version = 5` (`MIGRATION_4_5`: `ALTER TABLE cached_tracks ADD COLUMN year INTEGER NOT NULL DEFAULT 0`), extracting release year from `MediaStore.Audio.Media.YEAR`, FLAC `VORBIS_COMMENT` (`DATE`/`YEAR`/`ORIGINALDATE` in the existing header pass), and `MediaMetadataRetriever` fallback, plus cursor-only `backfillTrackYears` for unchanged v4 cached tracks without full re-scans.
+  - Created pure-Kotlin `ArtistDetailHelper` (`0` `android.*` imports) computing newest-release-year-first album grouping (alphabetical tie-breaker), studio summary statistics (`N albums · M tracks · Xh Y min`), crisp 1–2 character monograms, and bounded FLAC/MP3 embedded-artist scan candidates (`<= 12`, prioritizing 1 per distinct album).
+  - Created `ArtistPhotoStore` persisting custom artist photos offline in app-private `filesDir/artist_photos/<sha256>.jpg` downscaled to `<= 1024 px` (JPEG 88%) using a pure-Kotlin JPEG APP1 EXIF Orientation (`0x0112`) reader (zero `androidx.exifinterface` dependency and zero `android.media.ExifInterface` Lint warnings), integrated with Android's zero-permission Photo Picker (`PickVisualMedia(ImageOnly)` with `GetContent("image/*")` fallback) via the 3-dot overflow menu (`Set Artist Photo` / `Reset Artist Photo`).
+  - Redesigned Artist Detail (`ArtistDetailView.kt`) as a single unified vertical `LazyColumn` (zero nested vertical scrolls) with a full-bleed Hero Banner (custom photo -> embedded `ARTIST` -> newest album cover `ContentScale.Fit` -> monochrome monogram), smooth bottom scrim, bold identity + stats + `Play All` & `Shuffle` (`PlaybackController.playQueueShuffled`), horizontal `Albums` `LazyRow` (`152.dp` cards with full uncropped `ContentScale.Fit` covers and dynamic cover-tinted WCAG-clamped info blocks when `Dynamic Cover Theme` is enabled), ruled `TRACKS` section divider, and isolated Contextual Local Artist Dynamic Theme (`ArtistDetailDynamicThemeWrapper` via `CoverThemeColorCache.resolveTokensFromBitmap`, refreshing immediately on custom photo set/reset while leaving `MiniPlayerBar` bound to the Global playing-track theme).
+  - Added child Album Detail backstack tracking (`openedArtistAlbumName`) in `LibraryScreen` so navigating `Artists -> Artist Detail -> Album Detail -> Back` restores `Artist Detail` (and its local artist theme) before returning to the `Artists` tab.
+- **Rationale:**
+  - Delivers a clean studio-grade Artist Detail experience with zero storage/media image permissions (`0` `READ_MEDIA_IMAGES`), zero external dependencies, non-destructive Room migration, and preserved 120 Hz scroll fluidity.
+- **Rejected Alternatives:** Adding `androidx.exifinterface` (unnecessary external library for a single `0x0112` orientation tag); requesting `READ_MEDIA_IMAGES` for artist photos (violates minimal-permission privacy posture when `PickVisualMedia` requires zero permissions); jumping directly from Artist -> Album Detail -> Back back to the `Artists` tab (breaks spatial hierarchy).
 
+---
 
+## D12.5 — `v1.3` `Disc` & `Back Cover` Artwork Wiring (Opsi 1)
+- **Decision:**
+  - Wired `VinylCircularArtwork` (`VinylDiscPlayer.kt`) to lazily load `EmbeddedArtworkSlot.DISC` off-main on `Dispatchers.IO`, displaying embedded Disc art inside the circular vinyl center label (`CircleShape` + `ContentScale.Crop`, Option B) when present and seamlessly falling back to Front Cover with zero decoding inside 120 Hz rotation frames.
+  - Wired `SwipeableSquareArtwork` (`NowPlayingControls.kt`) and `AlbumDetailArtworkHeader` (`LibraryGroupViews.kt`) to lazily probe `EmbeddedArtworkSlot.BACK_COVER` on `Dispatchers.IO`: when absent, render **zero** extra UI; when present, render a `>= 48.dp` Front/Back flip toggle showing full uncropped `ContentScale.Fit` Back Cover and automatically resetting to Front Cover on track or album change.
+- **Rationale:**
+  - Honors Option B artwork presentation (uncropped rectangular covers, circular vinyl label) and keeps UI completely clutter-free for the vast majority of tracks that only embed Front Cover art.
+- **Rejected Alternatives:** Showing a disabled "No Back Cover" toggle on tracks without back covers (visual clutter); using `ContentScale.Crop` on Back Cover tracklists (crops track listings on physical CD back sleeves).
+
+---
+
+## D12.6 — `v1.3` Move Passive Queue Icon from Top App Bars to `MiniPlayerBar`
+- **Decision:**
+  - Removed the Queue icon (`Icons.AutoMirrored.Filled.QueueMusic`) from `LibraryTopAppBar` (all Library tabs and detail views) and `PlaylistsScreen`'s `TopAppBar`.
+  - Added the strictly passive Queue `IconButton` (`contentDescription = "Open playback queue"`, `>= 48.dp` touch target) to `MiniPlayerBar` alongside Play/Pause and Next, keeping the Queue utility button intact on `NowPlayingScreen`.
+- **Rationale:**
+  - Visually anchors the active playback queue directly to the currently playing track bar (`MiniPlayerBar`), declutters top app bars, and makes the passive read-only nature of the Queue button spatially intuitive.
+- **Rejected Alternatives:** Keeping duplicated Queue buttons in both top bars and `MiniPlayerBar` (redundant chrome on compact viewports); removing Queue access from `NowPlayingScreen` (hurts one-tap queue inspection during full-screen listening).

@@ -168,6 +168,25 @@ class PlaybackController(
         loadActiveTrack(active, startPositionMs = startPositionMs, autoPlay = autoPlay)
     }
 
+    fun playQueueShuffled(tracks: List<PlaybackTrack>, context: QueueContext = QueueContext.allSongs()) {
+        if (tracks.isEmpty()) return
+        val randomStartIndex = if (tracks.size > 1) kotlin.random.Random.nextInt(tracks.size) else 0
+        queueManager.setQueue(tracks, randomStartIndex)
+        val shuffledSnapshot = queueManager.setShuffle(true)
+        val active = shuffledSnapshot.currentItem ?: return
+        _state.update {
+            it.copy(
+                queue = shuffledSnapshot,
+                queueContext = context,
+                activeTrack = active,
+            )
+        }
+        scope.launch(Dispatchers.IO) {
+            runCatching { preferencesRepository.setShuffleEnabled(true) }
+        }
+        loadActiveTrack(active, startPositionMs = 0L, autoPlay = true)
+    }
+
     fun playTrackAt(queueIndex: Int) {
         val selected = queueManager.selectIndex(queueIndex) ?: return
         _state.update { it.copy(queue = queueManager.snapshot(), activeTrack = selected) }

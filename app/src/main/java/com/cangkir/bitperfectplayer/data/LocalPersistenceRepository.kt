@@ -50,6 +50,11 @@ class LocalPersistenceRepository(
         cachedTrackDao.backfillTrackPositions(updates)
     }
 
+    suspend fun backfillCachedTrackYears(updates: List<TrackYearBackfill>) {
+        if (updates.isEmpty()) return
+        cachedTrackDao.backfillTrackYears(updates)
+    }
+
     suspend fun deleteCachedTracksByUris(uris: List<String>) {
         if (uris.isEmpty()) return
         // Stay safely below SQLite's 999 bind parameter limit.

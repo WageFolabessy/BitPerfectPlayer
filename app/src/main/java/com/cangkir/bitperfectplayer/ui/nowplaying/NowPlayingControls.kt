@@ -2,6 +2,7 @@ package com.cangkir.bitperfectplayer.ui.nowplaying
 
 import android.graphics.Bitmap
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -20,6 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Flip
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Lyrics
 import androidx.compose.material.icons.filled.Pause
@@ -40,6 +42,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -50,8 +53,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -60,8 +65,10 @@ import com.cangkir.bitperfectplayer.audio.AlbumPaletteExtractor
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
 import com.cangkir.bitperfectplayer.audio.RepeatMode
 import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
+import com.cangkir.bitperfectplayer.library.EmbeddedArtworkSlot
 import com.cangkir.bitperfectplayer.ui.TrackArtworkThumbnail
 import com.cangkir.bitperfectplayer.ui.formatDurationMs
+import com.cangkir.bitperfectplayer.ui.theme.ObsidianBackground
 import com.cangkir.bitperfectplayer.ui.theme.TextMuted
 import kotlinx.coroutines.flow.StateFlow
 
@@ -96,9 +103,36 @@ internal fun SwipeableSquareArtwork(
 ) {
     val swipeThresholdPx = with(LocalDensity.current) { 76.dp.toPx() }
     var artworkDragOffsetPx by remember(track.uriString) { mutableFloatStateOf(0f) }
+    var showBackCover by remember(track.uriString) { mutableStateOf(false) }
+    var backCoverBitmap by remember(track.uriString, track.dateModifiedSeconds) {
+        mutableStateOf<Bitmap?>(
+            albumArtworkLoader.getCachedTrackSlotBitmap(
+                track = track,
+                slot = EmbeddedArtworkSlot.BACK_COVER,
+                targetSizePx = AlbumArtworkLoader.HERO_SIZE_PX,
+            ),
+        )
+    }
+
+    LaunchedEffect(track.uriString, track.dateModifiedSeconds) {
+        showBackCover = false
+        if (backCoverBitmap == null) {
+            backCoverBitmap = albumArtworkLoader.loadTrackSlotBitmap(
+                track = track,
+                slot = EmbeddedArtworkSlot.BACK_COVER,
+                targetSizePx = AlbumArtworkLoader.HERO_SIZE_PX,
+            )
+        }
+    }
+
+    val currentBackBitmap = backCoverBitmap
+    val backImageBitmap = remember(currentBackBitmap) {
+        if (currentBackBitmap != null && !currentBackBitmap.isRecycled) currentBackBitmap.asImageBitmap() else null
+    }
 
     Box(
         modifier = Modifier
+            .size(artworkSize)
             .pointerInput(track.uriString, swipeThresholdPx) {
                 detectHorizontalDragGestures(
                     onDragEnd = {
@@ -122,13 +156,49 @@ internal fun SwipeableSquareArtwork(
                 translationX = artworkDragOffsetPx * 0.32f
             },
     ) {
-        TrackArtworkThumbnail(
-            track = track,
-            artworkLoader = albumArtworkLoader,
-            size = artworkSize,
-            cornerRadius = 16.dp,
-            targetSizePx = AlbumArtworkLoader.HERO_SIZE_PX,
-        )
+        if (showBackCover && backImageBitmap != null) {
+            Box(
+                modifier = Modifier
+                    .size(artworkSize)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(ObsidianBackground),
+                contentAlignment = Alignment.Center,
+            ) {
+                Image(
+                    bitmap = backImageBitmap,
+                    contentDescription = "Back cover artwork for ${track.title}",
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.size(artworkSize),
+                )
+            }
+        } else {
+            TrackArtworkThumbnail(
+                track = track,
+                artworkLoader = albumArtworkLoader,
+                size = artworkSize,
+                cornerRadius = 16.dp,
+                targetSizePx = AlbumArtworkLoader.HERO_SIZE_PX,
+            )
+        }
+
+        if (backImageBitmap != null) {
+            IconButton(
+                onClick = { showBackCover = !showBackCover },
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(6.dp)
+                    .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = 0.58f)),
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Flip,
+                    contentDescription = if (showBackCover) "Show front cover" else "Show back cover",
+                    tint = Color.White,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+        }
     }
 }
 

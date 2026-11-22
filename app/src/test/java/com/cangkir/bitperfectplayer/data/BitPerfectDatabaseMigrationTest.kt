@@ -17,12 +17,13 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * End-to-end SQLite schema & migration verification test across Room v1 -> v2 -> v3 -> v4.
+ * End-to-end SQLite schema & migration verification test across Room v1 -> v2 -> v3 -> v4 -> v5.
  *
- * Executes actual SQLite DDL (`MIGRATION_1_2`, `MIGRATION_2_3`, `MIGRATION_3_4`) and triggers
- * Room's generated `BitPerfectDatabase_Impl.onValidateSchema(...)` to guarantee upgrading from
- * any historical APK version on a physical device never throws `IllegalStateException` and never
- * loses user lyrics, favorites, history, playlists, or listening statistics.
+ * Executes actual SQLite DDL (`MIGRATION_1_2`, `MIGRATION_2_3`, `MIGRATION_3_4`, `MIGRATION_4_5`)
+ * and triggers Room's generated `BitPerfectDatabase_Impl.onValidateSchema(...)` to guarantee
+ * upgrading from any historical APK version on a physical device never throws
+ * `IllegalStateException` and never loses user lyrics, favorites, history, playlists, or
+ * listening statistics.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], application = Application::class)
@@ -57,7 +58,7 @@ class BitPerfectDatabaseMigrationTest {
     }
 
     @Test
-    fun migrateV1ToV4_validatesFullRoomSchemaAndPreservesLyricsFavoritesAndHistory() = runTest {
+    fun migrateV1ToV5_validatesFullRoomSchemaAndPreservesLyricsFavoritesAndHistory() = runTest {
         // 1. Seed a genuine Room v1 SQLite database on disk
         SQLiteDatabase.openOrCreateDatabase(dbFile, null).use { sqlite ->
             sqlite.execSQL(
@@ -126,12 +127,13 @@ class BitPerfectDatabaseMigrationTest {
             sqlite.version = 1
         }
 
-        // 2. Open with Room v4 and run the complete MIGRATION_1_2 -> MIGRATION_2_3 -> MIGRATION_3_4 chain
+        // 2. Open with Room v5 and run the complete MIGRATION_1_2 -> MIGRATION_4_5 chain
         val db = Room.databaseBuilder(app, BitPerfectDatabase::class.java, dbFile.name)
             .addMigrations(
                 BitPerfectDatabase.MIGRATION_1_2,
                 BitPerfectDatabase.MIGRATION_2_3,
                 BitPerfectDatabase.MIGRATION_3_4,
+                BitPerfectDatabase.MIGRATION_4_5,
             )
             .allowMainThreadQueries()
             .build()
@@ -147,7 +149,7 @@ class BitPerfectDatabaseMigrationTest {
         assertEquals(1, history.size)
         assertEquals("Hello", history.first().title)
 
-        // 4. Verify v2/v3/v4 tables & columns work cleanly after migration
+        // 4. Verify v2/v3/v4/v5 tables & columns work cleanly after migration
         db.cachedTrackDao().upsertAll(
             listOf(
                 CachedTrackEntity(
@@ -172,6 +174,7 @@ class BitPerfectDatabaseMigrationTest {
                     lastSyncedEpochMs = 1_700_000_010_000L,
                     discNumber = 1,
                     trackNumber = 1,
+                    year = 2024,
                 ),
             ),
         )
@@ -179,21 +182,23 @@ class BitPerfectDatabaseMigrationTest {
         assertEquals(1, cached.size)
         assertEquals(1, cached.first().discNumber)
         assertEquals(1, cached.first().trackNumber)
+        assertEquals(2024, cached.first().year)
     }
 
     @Test
-    fun migrateV2AndV3ToV4_preservesCachedTracksPlaylistsAndStatsWithDefaultDiscAndTrackNumbers() = runTest {
-        // 1. Seed a Room v2 database with existing cached_tracks (19 columns, before disc_number/track_number)
+    fun migrateV2AndV3ToV5_preservesCachedTracksPlaylistsAndStatsWithDefaultYearAndBackfill() = runTest {
+        // 1. Seed a Room v2 database with existing cached_tracks (19 columns, before disc/track/year)
         SQLiteDatabase.openOrCreateDatabase(dbFile, null).use { sqlite ->
             seedV2SchemaAndRow(sqlite)
         }
 
-        // 2. Open with Room v4 (runs MIGRATION_2_3 and MIGRATION_3_4)
+        // 2. Open with Room v5 (runs MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
         val db = Room.databaseBuilder(app, BitPerfectDatabase::class.java, dbFile.name)
             .addMigrations(
                 BitPerfectDatabase.MIGRATION_1_2,
                 BitPerfectDatabase.MIGRATION_2_3,
                 BitPerfectDatabase.MIGRATION_3_4,
+                BitPerfectDatabase.MIGRATION_4_5,
             )
             .allowMainThreadQueries()
             .build()
@@ -204,8 +209,9 @@ class BitPerfectDatabaseMigrationTest {
         assertEquals("Peacemaker", cachedBeforeBackfill.first().title)
         assertEquals(0, cachedBeforeBackfill.first().discNumber)
         assertEquals(0, cachedBeforeBackfill.first().trackNumber)
+        assertEquals(0, cachedBeforeBackfill.first().year)
 
-        // 3. Verify cursor-only backfill updates disc_number and track_number in place
+        // 3. Verify cursor-only backfills update disc_number, track_number, and year in place
         db.cachedTrackDao().backfillTrackPositions(
             listOf(
                 TrackPositionBackfill(
@@ -215,9 +221,18 @@ class BitPerfectDatabaseMigrationTest {
                 ),
             ),
         )
+        db.cachedTrackDao().backfillTrackYears(
+            listOf(
+                TrackYearBackfill(
+                    uriString = "content://media/external/audio/media/202",
+                    year = 2009,
+                ),
+            ),
+        )
         val cachedAfterBackfill = db.cachedTrackDao().getAll().first()
         assertEquals(1, cachedAfterBackfill.discNumber)
         assertEquals(7, cachedAfterBackfill.trackNumber)
+        assertEquals(2009, cachedAfterBackfill.year)
 
         // 4. Verify v3 playlist foreign-key CASCADE delete works on migrated DB
         val playlistId = db.playlistDao().insertPlaylist(

@@ -207,5 +207,6 @@ object LibraryProjector {
         contentFingerprint = incoming.contentFingerprint ?: base.contentFingerprint,
         discNumber = incoming.discNumber.takeIf { it > 0 } ?: base.discNumber,
         trackNumber = incoming.trackNumber.takeIf { it > 0 } ?: base.trackNumber,
+        year = incoming.year.takeIf { it > 0 } ?: base.year,
     )
 }

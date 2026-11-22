@@ -59,6 +59,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
 import com.cangkir.bitperfectplayer.audio.VinylScrubMath
 import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
+import com.cangkir.bitperfectplayer.library.EmbeddedArtworkSlot
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.roundToLong
@@ -716,13 +717,25 @@ private fun VinylCircularArtwork(track: PlaybackTrack, artworkLoader: AlbumArtwo
     val cacheIdentity = remember(track.uriString, track.album, track.artist, track.dateModifiedSeconds, targetSizePx) {
         artworkLoader.memoryKeyFor(track, targetSizePx)
     }
-    var bitmap by remember(cacheIdentity) {
+    var discBitmap by remember(track.uriString, track.dateModifiedSeconds, targetSizePx) {
+        mutableStateOf<Bitmap?>(
+            artworkLoader.getCachedTrackSlotBitmap(track, EmbeddedArtworkSlot.DISC, targetSizePx),
+        )
+    }
+    var frontBitmap by remember(cacheIdentity) {
         mutableStateOf<Bitmap?>(artworkLoader.getCachedFromMemory(track, targetSizePx))
     }
 
-    LaunchedEffect(cacheIdentity) {
-        if (bitmap == null) {
-            bitmap = artworkLoader.loadArtwork(track, targetSizePx)
+    LaunchedEffect(track.uriString, cacheIdentity) {
+        if (discBitmap == null) {
+            discBitmap = artworkLoader.loadTrackSlotBitmap(
+                track = track,
+                slot = EmbeddedArtworkSlot.DISC,
+                targetSizePx = targetSizePx,
+            )
+        }
+        if (discBitmap == null && frontBitmap == null) {
+            frontBitmap = artworkLoader.loadArtwork(track, targetSizePx)
         }
     }
 
@@ -733,16 +746,20 @@ private fun VinylCircularArtwork(track: PlaybackTrack, artworkLoader: AlbumArtwo
             .border(width = 1.dp, color = VinylArtworkBorder, shape = CircleShape),
         contentAlignment = Alignment.Center,
     ) {
-        val currentBitmap = bitmap
-        val imageBitmap = remember(currentBitmap) {
-            if (currentBitmap != null && !currentBitmap.isRecycled) currentBitmap.asImageBitmap() else null
+        val displayedBitmap = discBitmap ?: frontBitmap
+        val imageBitmap = remember(displayedBitmap) {
+            if (displayedBitmap != null && !displayedBitmap.isRecycled) displayedBitmap.asImageBitmap() else null
         }
         if (imageBitmap != null) {
             // Option B: Preserve the authentic circular vinyl center label using uniform,
-            // distortion-free center-fill over the aspect-preserved bitmap from AlbumArtworkLoader.
+            // distortion-free center-fill over embedded Disc art (preferred) or Front Cover.
             Image(
                 bitmap = imageBitmap,
-                contentDescription = "Album art for ${track.title}",
+                contentDescription = if (discBitmap != null) {
+                    "Disc artwork for ${track.title}"
+                } else {
+                    "Album art for ${track.title}"
+                },
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
             )

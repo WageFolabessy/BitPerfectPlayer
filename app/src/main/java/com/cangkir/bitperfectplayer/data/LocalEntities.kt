@@ -67,6 +67,8 @@ data class CachedTrackEntity(
     val discNumber: Int = 0,
     @ColumnInfo(name = "track_number", defaultValue = "0")
     val trackNumber: Int = 0,
+    @ColumnInfo(name = "year", defaultValue = "0")
+    val year: Int = 0,
 )
 
 @Entity(tableName = "lyrics")
@@ -158,6 +160,7 @@ fun CachedTrackEntity.toPlaybackTrack(): PlaybackTrack = PlaybackTrack(
     relativePath = relativePath,
     discNumber = discNumber.coerceAtLeast(0),
     trackNumber = trackNumber.coerceAtLeast(0),
+    year = year.coerceAtLeast(0),
 )
 
 fun PlaybackTrack.toCachedEntity(sourceKind: CachedTrackSourceKind, syncedEpochMs: Long = System.currentTimeMillis()): CachedTrackEntity =
@@ -183,6 +186,7 @@ fun PlaybackTrack.toCachedEntity(sourceKind: CachedTrackSourceKind, syncedEpochM
         lastSyncedEpochMs = PersistenceSanitizer.sanitizeNonNegative(syncedEpochMs),
         discNumber = discNumber.coerceAtLeast(0),
         trackNumber = trackNumber.coerceAtLeast(0),
+        year = year.coerceAtLeast(0),
     )
 
 fun LyricsEntity.toDomain(): LyricsRecord = LyricsRecord(

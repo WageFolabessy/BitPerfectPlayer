@@ -198,10 +198,12 @@ private fun BitPerfectAppRootContent(viewModel: MainViewModel, startupHomepage: 
                 onOpenNowPlaying = openNowPlaying,
                 onTogglePlayPause = viewModel::togglePlayPause,
                 onNext = viewModel::next,
+                onOpenQueue = openQueue,
             )
         },
         libraryContent = { initialLibraryTab ->
             val dynamicCoverThemeEnabled by viewModel.dynamicCoverThemeEnabled.collectAsStateWithLifecycle()
+            val artistPhotoRevision by viewModel.artistPhotoRevision.collectAsStateWithLifecycle()
             LibraryScreen(
                 libraryState = libraryState,
                 favoriteTrackUris = favoriteTrackUris,
@@ -221,11 +223,15 @@ private fun BitPerfectAppRootContent(viewModel: MainViewModel, startupHomepage: 
                 onAddToPlaylist = openAddToPlaylist,
                 onShowTrackInfo = viewModel::openTrackInfo,
                 onToggleFavorite = viewModel::toggleFavorite,
-                onOpenQueue = openQueue,
                 onOpenDiagnostics = openDiagnostics,
                 initialTab = initialLibraryTab,
                 dynamicCoverThemeEnabled = dynamicCoverThemeEnabled,
                 coverThemeColorCache = viewModel.coverThemeColorCache,
+                artistPhotoStore = viewModel.artistPhotoStore,
+                artistPhotoRevision = artistPhotoRevision,
+                onShuffleTracks = { tracks, context -> viewModel.playTracks(tracks, context = context, shuffled = true) },
+                onSetCustomArtistPhoto = { artist, uri -> viewModel.updateCustomArtistPhoto(artist, uri) },
+                onResetCustomArtistPhoto = { artist -> viewModel.updateCustomArtistPhoto(artist, null) },
             )
         },
         playlistsContent = {
@@ -239,7 +245,6 @@ private fun BitPerfectAppRootContent(viewModel: MainViewModel, startupHomepage: 
                 onEnqueueTracks = viewModel::enqueueTracks,
                 onEnqueueTracksNext = viewModel::enqueueTracksNext,
                 onSetPlaylistSort = viewModel::setTrackSort,
-                onOpenQueue = openQueue,
                 onCreatePlaylist = viewModel::createPlaylist,
                 onRenamePlaylist = viewModel::renamePlaylist,
                 onDeletePlaylist = viewModel::deletePlaylist,

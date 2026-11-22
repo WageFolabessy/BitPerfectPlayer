@@ -17,6 +17,7 @@ import com.cangkir.bitperfectplayer.data.NowPlayingArtworkStyle
 import com.cangkir.bitperfectplayer.data.SpectrumColorStyle
 import com.cangkir.bitperfectplayer.diagnostics.DiagnosticLogStats
 import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
+import com.cangkir.bitperfectplayer.library.ArtistPhotoStore
 import com.cangkir.bitperfectplayer.library.GroupSortScope
 import com.cangkir.bitperfectplayer.library.GroupSortSpec
 import com.cangkir.bitperfectplayer.library.LibrarySnapshot
@@ -63,6 +64,8 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     val playbackPositionMs: StateFlow<Long> = container.playbackController.playbackPositionMs
     val sleepTimerState: StateFlow<SleepTimerState> = container.playbackController.sleepTimerState
     val albumArtworkLoader: AlbumArtworkLoader = container.albumArtworkLoader
+    val artistPhotoStore: ArtistPhotoStore = container.artistPhotoStore
+    val artistPhotoRevision: StateFlow<Int> = container.artistPhotoStore.photoRevision
     val coverThemeColorCache: CoverThemeColorCache = container.coverThemeColorCache
     val diagnosticLogStats: StateFlow<DiagnosticLogStats> = container.diagnosticLogger.storageStats
 
@@ -259,13 +262,38 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
 
-    fun playTracks(tracks: List<PlaybackTrack>, startIndex: Int = 0, context: QueueContext = QueueContext.allSongs()) {
-        container.playbackController.playQueue(
-            tracks = tracks,
-            startIndex = startIndex,
-            autoPlay = true,
-            context = context,
-        )
+    fun playTracks(
+        tracks: List<PlaybackTrack>,
+        startIndex: Int = 0,
+        context: QueueContext = QueueContext.allSongs(),
+        shuffled: Boolean = false,
+    ) {
+        if (shuffled) {
+            container.playbackController.playQueueShuffled(tracks = tracks, context = context)
+        } else {
+            container.playbackController.playQueue(
+                tracks = tracks,
+                startIndex = startIndex,
+                autoPlay = true,
+                context = context,
+            )
+        }
+    }
+
+    fun updateCustomArtistPhoto(artistName: String, sourceUri: Uri?) {
+        viewModelScope.launch {
+            if (sourceUri == null) {
+                container.artistPhotoStore.clearArtistPhoto(artistName)
+                _uiMessage.value = "Reset artist photo for \"$artistName\""
+            } else {
+                val result = container.artistPhotoStore.saveArtistPhoto(artistName, sourceUri)
+                _uiMessage.value = if (result.isSuccess) {
+                    "Updated artist photo for \"$artistName\""
+                } else {
+                    result.exceptionOrNull()?.message ?: "Could not save artist photo"
+                }
+            }
+        }
     }
 
     fun playTrackAtQueueIndex(index: Int) {

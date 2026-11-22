@@ -19,7 +19,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.GraphicEq
@@ -55,13 +54,12 @@ import com.cangkir.bitperfectplayer.ui.theme.TextMuted
 @Composable
 internal fun LibraryTopAppBar(
     openedGroupTitle: String?,
-    selectedTabLabel: String,
+    backTargetLabel: String,
     statusText: String,
     statusDotColor: Color,
     isBitPerfectActive: Boolean,
     onCloseGroup: () -> Unit,
     onImportFolder: () -> Unit,
-    onOpenQueue: () -> Unit,
     onOpenDiagnostics: () -> Unit,
 ) {
     TopAppBar(
@@ -99,7 +97,7 @@ internal fun LibraryTopAppBar(
                 ) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Back to $selectedTabLabel",
+                        contentDescription = "Back to $backTargetLabel",
                     )
                 }
             }
@@ -112,16 +110,6 @@ internal fun LibraryTopAppBar(
                 Icon(
                     imageVector = Icons.Filled.CreateNewFolder,
                     contentDescription = "Import music folder via SAF",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            IconButton(
-                onClick = onOpenQueue,
-                modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
-            ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.QueueMusic,
-                    contentDescription = "Open playback queue",
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
