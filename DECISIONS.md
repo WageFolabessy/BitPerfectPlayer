@@ -695,4 +695,22 @@ This file records autonomous architectural, dependency, and environment decision
   - Delivers consistent spatial navigation, gesture responsiveness, visual polish, and defensive edge-case safety for messy real-world local music libraries without weakening hearing protection or adding any network/storage permissions.
 - **Rejected Alternatives:** Keeping duplicated bottom-nav scaffolds inside individual pager pages (perpetuates state-jump indicator flashes on `Settings <-> Library`); suppressing playlist reorder drag-and-drop with Up/Down arrows (inconsistent with `QueueScreen`); firing Snackbars on every Favorite heart toggle (causes toast fatigue during library browsing); letting duplicate entries accumulate silently in user playlists (confuses casual playlist building).
 
+---
+
+## `D12.20` — Side-by-Side Debug Variant Isolation (`com.cangkir.bitperfectplayer.debug`, `BitPerfect Dev`, Dynamic `${applicationId}` Providers) (2026-11-24)
+- **Context:**
+  - After publishing signed `v1.3` release (`com.cangkir.bitperfectplayer`), future development/debug builds signed with the standard Android debug keystore need to install cleanly side-by-side on the user's POCO F4 without hitting `INSTALL_FAILED_UPDATE_INCOMPATIBLE` (signature mismatch) or `INSTALL_FAILED_CONFLICTING_PROVIDER` (`FileProvider` / AndroidX Startup provider authority collision).
+- **Decision:**
+  1. **Variant Isolation in [`app/build.gradle.kts`](app/build.gradle.kts):**
+     - Kept `namespace = "com.cangkir.bitperfectplayer"`, `defaultConfig.applicationId = "com.cangkir.bitperfectplayer"`, `versionCode = 4`, and `versionName = "1.3"` intact.
+     - Configured `buildTypes.debug` with `applicationIdSuffix = ".debug"`, `versionNameSuffix = "-dev"`, and `manifestPlaceholders["appName"] = "BitPerfect Dev"`.
+     - Configured `buildTypes.release` with `manifestPlaceholders["appName"] = "BitPerfectPlayer"` (preserving all R8 optimization and release behavior).
+  2. **Dynamic Manifest Label & Authorities ([`AndroidManifest.xml`](app/src/main/AndroidManifest.xml), [`DiagnosticLogExporter.kt`](app/src/main/java/com/cangkir/bitperfectplayer/diagnostics/DiagnosticLogExporter.kt)):**
+     - Bound `<application android:label="${appName}" ...>` cleanly in `AndroidManifest.xml` (inherited by launcher `.MainActivity`), keeping `${applicationId}.fileprovider` on `androidx.core.content.FileProvider` (while AndroidX `androidx-startup` merges `${applicationId}.androidx-startup`).
+     - Extracted `DiagnosticLogExporter.resolveFileProviderAuthority(packageName)` used dynamically from `appContext.packageName`, while preserving `LocalBackupCodec.APP_ID = "com.cangkir.bitperfectplayer"` so local `.json` backups stay portable between `BitPerfectPlayer` and `BitPerfect Dev`.
+- **Rationale:**
+  - Isolates package ID, app drawer label, Room/DataStore app sandboxes, and every merged `ContentProvider` authority between `release` (`com.cangkir.bitperfectplayer`) and `debug` (`com.cangkir.bitperfectplayer.debug`) with zero impact on production `release` builds.
+- **Rejected Alternatives:** Signing local debug builds with the release keystore in source control (security risk and leaves only one app slot on device); creating a separate product flavor when Gradle's built-in `buildTypes.debug` `applicationIdSuffix` already handles clean side-by-side isolation.
+
+
 

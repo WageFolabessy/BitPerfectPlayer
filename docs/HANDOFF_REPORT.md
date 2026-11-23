@@ -1603,3 +1603,16 @@ Addressed the 3 minor findings observed in real-device POCO F4 video testing and
 
 ### Physical Hardware Verification Pending (Software-Only Environment)
 - [ ] Verify end-to-end UX on POCO F4 (`22021211RG`, HyperOS Android 14): 120 Hz seek/preamp slider dragging inside `HorizontalPager`, direct Bottom-Nav `Library <-> Settings` jumps with zero intermediate highlight, top-level horizontal swiping (`Folders -> Playlists -> Settings`, both idle and playing), `MiniPlayerBar` upward swipe to `Now Playing`, Playlist `DragHandle` reordering & duplicate/"Undo" Snackbars, Favorites-tab Undo Snackbar, and root-hoisted `Dynamic Theme` colors across Bottom Nav / MiniPlayer / Details.
+
+---
+
+## 47. Side-by-Side Debug Build Variant Configuration (`D12.20`)
+
+### Changes Delivered (`main`)
+- **[`app/build.gradle.kts`](../app/build.gradle.kts):** Preserved `namespace = "com.cangkir.bitperfectplayer"`, `defaultConfig.applicationId = "com.cangkir.bitperfectplayer"`, `versionCode = 4`, and `versionName = "1.3"`, while configuring `buildTypes.debug` with `applicationIdSuffix = ".debug"`, `versionNameSuffix = "-dev"`, and `manifestPlaceholders["appName"] = "BitPerfect Dev"`, and `buildTypes.release` with `manifestPlaceholders["appName"] = "BitPerfectPlayer"`.
+- **[`app/src/main/AndroidManifest.xml`](../app/src/main/AndroidManifest.xml):** Updated `<application android:label="${appName}" ...>` while preserving `android:authorities="${applicationId}.fileprovider"` on `androidx.core.content.FileProvider`.
+- **[`DiagnosticLogExporter.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/diagnostics/DiagnosticLogExporter.kt) & [`LocalDiagnosticLoggerTest.kt`](../app/src/test/java/com/cangkir/bitperfectplayer/diagnostics/LocalDiagnosticLoggerTest.kt):** Exposed `DiagnosticLogExporter.resolveFileProviderAuthority(packageName)` and verified `debugBuildVariant_isolatesPackageIdLabelAndDynamicFileProviderAuthority` under Robolectric (`BuildConfig.APPLICATION_ID == "com.cangkir.bitperfectplayer.debug"`, `BuildConfig.VERSION_NAME == "1.3-dev"`, label `"BitPerfect Dev"`, and `content://com.cangkir.bitperfectplayer.debug.fileprovider/...` share URIs).
+- **Merged Manifest Verification (`gradlew-wsl ktlintCheck detekt testDebugUnitTest lintDebug assembleDebug assembleRelease`):**
+  - **Debug Package / App Label / Providers:** `package="com.cangkir.bitperfectplayer.debug"`, `android:versionName="1.3-dev"`, `android:label="BitPerfect Dev"`, providers `["com.cangkir.bitperfectplayer.debug.fileprovider", "com.cangkir.bitperfectplayer.debug.androidx-startup"]`.
+  - **Release Package / App Label / Providers:** `package="com.cangkir.bitperfectplayer"`, `android:versionName="1.3"`, `android:label="BitPerfectPlayer"`, providers `["com.cangkir.bitperfectplayer.fileprovider", "com.cangkir.bitperfectplayer.androidx-startup"]`.
+  - **Tests / Static Analysis / Lint / Privacy:** **412 / 412 passed** across **63 suites** (`0` failed, `0` skipped), `0` `ktlintCheck` / `detekt` / `app/src/` Lint warnings or errors, and `0` forbidden permissions across all debug & release merged manifests.

@@ -1,8 +1,11 @@
 package com.cangkir.bitperfectplayer.diagnostics
 
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
+import androidx.core.content.IntentCompat
 import androidx.test.core.app.ApplicationProvider
+import com.cangkir.bitperfectplayer.BuildConfig
 import java.io.File
 import java.io.FileInputStream
 import java.util.zip.ZipInputStream
@@ -134,5 +137,38 @@ class LocalDiagnosticLoggerTest {
         val shareRes = exporter.prepareShareIntent()
         assertTrue(shareRes.isFailure)
         assertTrue(shareRes.exceptionOrNull()?.message?.contains("No diagnostic logs stored") == true)
+    }
+
+    @Test
+    fun debugBuildVariant_isolatesPackageIdLabelAndDynamicFileProviderAuthority() = runTest {
+        assertEquals(
+            "com.cangkir.bitperfectplayer.fileprovider",
+            DiagnosticLogExporter.resolveFileProviderAuthority("com.cangkir.bitperfectplayer"),
+        )
+        assertEquals(
+            "com.cangkir.bitperfectplayer.debug.fileprovider",
+            DiagnosticLogExporter.resolveFileProviderAuthority("com.cangkir.bitperfectplayer.debug"),
+        )
+        assertEquals("com.cangkir.bitperfectplayer.debug", BuildConfig.APPLICATION_ID)
+        assertEquals("1.3-dev", BuildConfig.VERSION_NAME)
+        assertEquals("com.cangkir.bitperfectplayer.debug", context.packageName)
+        assertEquals(
+            "BitPerfect Dev",
+            context.packageManager.getApplicationLabel(context.applicationInfo).toString(),
+        )
+
+        logger.setEnabled(true)
+        logger.logAudio("TRACK_OPEN") { mapOf("fp" to "abcdef01", "ext" to "flac") }
+        logger.flushSync()
+
+        val shareRes = DiagnosticLogExporter(context, logger).prepareShareIntent()
+        assertTrue("Expected share intent success: $shareRes", shareRes.isSuccess)
+        val chooserIntent = shareRes.getOrThrow().shareIntent
+        val sendIntent = IntentCompat.getParcelableExtra(chooserIntent, Intent.EXTRA_INTENT, Intent::class.java)
+        val sharedUri = sendIntent?.clipData?.getItemAt(0)?.uri
+        assertTrue(
+            "Expected debug FileProvider URI authority, got: $sharedUri",
+            sharedUri?.toString()?.startsWith("content://com.cangkir.bitperfectplayer.debug.fileprovider/") == true,
+        )
     }
 }

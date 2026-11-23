@@ -70,7 +70,7 @@ class DiagnosticLogExporter(context: Context, private val logger: LocalDiagnosti
             FileOutputStream(zipFile, false).use { out ->
                 writeZipArchive(out, files)
             }
-            val authority = "${appContext.packageName}.fileprovider"
+            val authority = resolveFileProviderAuthority(appContext.packageName)
             val contentUri = FileProvider.getUriForFile(appContext, authority, zipFile)
             val sendIntent = Intent(Intent.ACTION_SEND).apply {
                 type = "application/zip"
@@ -134,6 +134,8 @@ class DiagnosticLogExporter(context: Context, private val logger: LocalDiagnosti
         private const val ZIP_COPY_BUFFER_BYTES = 8_192
         private const val EMPTY_LOGS_MESSAGE =
             "No diagnostic logs stored yet. Enable Local Diagnostic Logging to record a session."
+
+        fun resolveFileProviderAuthority(packageName: String): String = "$packageName.fileprovider"
 
         fun suggestZipFileName(appVersionName: String, nowEpochMs: Long = System.currentTimeMillis()): String {
             val safeVer = appVersionName.trim().replace(Regex("[^A-Za-z0-9._-]"), "").ifEmpty { "1.2" }

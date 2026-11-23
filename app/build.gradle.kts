@@ -23,7 +23,13 @@ android {
     }
 
     buildTypes {
+        debug {
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-dev"
+            manifestPlaceholders["appName"] = "BitPerfect Dev"
+        }
         release {
+            manifestPlaceholders["appName"] = "BitPerfectPlayer"
             optimization {
                 enable = true
                 packageScope = setOf("androidx.**", "kotlin.**", "kotlinx.**")
