@@ -210,6 +210,20 @@ fun InteractiveVinylDisc(
                     val downDx = down.position.x - centerX
                     val downDy = down.position.y - centerY
                     if (!VinylScrubMath.isWithinScrubRing(downDx, downDy, outerRadiusPx, innerDeadZonePx)) {
+                        if (downDx * downDx + downDy * downDy <= outerRadiusPx * outerRadiusPx) {
+                            down.consume()
+                            var spindleHeld = true
+                            while (spindleHeld) {
+                                val event = awaitPointerEvent()
+                                val change = event.changes.firstOrNull { it.id == down.id }
+                                if (change == null || !change.pressed) {
+                                    change?.consume()
+                                    spindleHeld = false
+                                } else if (change.position != change.previousPosition) {
+                                    change.consume()
+                                }
+                            }
+                        }
                         return@awaitEachGesture
                     }
 

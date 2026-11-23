@@ -493,11 +493,22 @@ internal class TurntableScratchRunner(
     }
 
     fun resumeFromPausedStepIfNeeded(state: PlaybackLoopState) {
-        if (state.wasPausedInLoop) {
+        val routeRebaseNeeded = pendingRouteHeadRebase.getAndSet(false)
+        if (state.wasPausedInLoop || routeRebaseNeeded) {
             val headFrames = trackWriter.readUnsignedPlaybackHeadFrames(state.currentTrack)
-            if (pendingRouteHeadRebase.getAndSet(false)) {
+            if (routeRebaseNeeded) {
+                val headBaseBefore = state.headBaseFrames
                 state.applyRouteHeadRebase(headFrames)
                 trackWriter.resetSpectrumTapIfPresent(state.sampleRate, state.totalFramesWrittenToTrack)
+                diagnosticLogger?.logAudio("ROUTE_HEAD_REBASE") {
+                    linkedMapOf(
+                        "observedHead" to headFrames,
+                        "headBaseBefore" to headBaseBefore,
+                        "seekBaseMs" to state.seekBaseMs,
+                        "rebasedHead" to state.headBaseFrames,
+                        "armFlushGuard" to state.pendingFlushResetGuard,
+                    )
+                }
             } else {
                 state.reconcileAsyncFlushReset(headFrames)
                 state.countHeadFrames = maxOf(headFrames, state.headBaseFrames)

@@ -31,10 +31,15 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -47,6 +52,8 @@ import com.cangkir.bitperfectplayer.ui.theme.TextMuted
 import com.cangkir.bitperfectplayer.ui.theme.studioSwitchColors
 import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.StateFlow
+
+internal const val REPLAY_GAIN_PREAMP_SLIDER_TEST_TAG = "replay_gain_preamp_slider"
 
 private val ReplayGainBarShape = RoundedCornerShape(10.dp)
 private val ReplayGainOptionShape = RoundedCornerShape(8.dp)
@@ -68,6 +75,7 @@ internal data class SettingsAudioEngineCallbacks(
     val onSetReplayGainPreventClipping: (Boolean) -> Unit,
     val onOpenSleepTimer: () -> Unit,
     val onOpenDiagnostics: () -> Unit,
+    val onPreampSliderBoundsInRootChanged: (Rect) -> Unit = {},
 )
 
 @Composable
@@ -90,6 +98,7 @@ internal fun SettingsAudioEngineSection(
                 onSetReplayGainMode = callbacks.onSetReplayGainMode,
                 onSetReplayGainPreampDb = callbacks.onSetReplayGainPreampDb,
                 onSetReplayGainPreventClipping = callbacks.onSetReplayGainPreventClipping,
+                onPreampSliderBoundsInRootChanged = callbacks.onPreampSliderBoundsInRootChanged,
             )
             SettingsHairline()
             SettingsSleepTimerRow(
@@ -146,6 +155,7 @@ private fun SettingsReplayGainSection(
     onSetReplayGainMode: (ReplayGainMode) -> Unit,
     onSetReplayGainPreampDb: (Float) -> Unit,
     onSetReplayGainPreventClipping: (Boolean) -> Unit,
+    onPreampSliderBoundsInRootChanged: (Rect) -> Unit = {},
 ) {
     Column(
         modifier = Modifier
@@ -191,6 +201,7 @@ private fun SettingsReplayGainSection(
                 preventClipping = rgConfig.preventClipping,
                 onSetPreampDb = onSetReplayGainPreampDb,
                 onSetPreventClipping = onSetReplayGainPreventClipping,
+                onPreampSliderBoundsInRootChanged = onPreampSliderBoundsInRootChanged,
             )
         }
     }
@@ -248,7 +259,11 @@ private fun SettingsReplayGainActiveControls(
     preventClipping: Boolean,
     onSetPreampDb: (Float) -> Unit,
     onSetPreventClipping: (Boolean) -> Unit,
+    onPreampSliderBoundsInRootChanged: (Rect) -> Unit = {},
 ) {
+    DisposableEffect(Unit) {
+        onDispose { onPreampSliderBoundsInRootChanged(Rect.Zero) }
+    }
     Spacer(modifier = Modifier.height(12.dp))
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -283,7 +298,12 @@ private fun SettingsReplayGainActiveControls(
             activeTickColor = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.45f),
             inactiveTickColor = MaterialTheme.colorScheme.outline,
         ),
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag(REPLAY_GAIN_PREAMP_SLIDER_TEST_TAG)
+            .onGloballyPositioned { coords ->
+                onPreampSliderBoundsInRootChanged(coords.boundsInRoot())
+            },
     )
     Row(
         modifier = Modifier

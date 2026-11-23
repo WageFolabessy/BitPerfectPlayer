@@ -169,4 +169,22 @@ class DiagnosticLogFormatterTest {
         assertTrue(sanitized.contains("<REDACTED_FILE>"))
         assertTrue(sanitized.contains("<REDACTED_PATH>"))
     }
+
+    @Test
+    fun formatEntry_preservesAudioResumePathEnumWhileRedactingFilePathAndFilesystemValues() {
+        val line = DiagnosticLogFormatter.formatEntry(
+            epochMs = 2_000L,
+            level = DiagnosticLogLevel.INFO,
+            channel = DiagnosticLogChannel.PERFORMANCE,
+            event = "PLAY_RESUME_LATENCY",
+            fields = linkedMapOf(
+                "path" to "IN_PLACE_RESUME",
+                "filePath" to "/storage/emulated/0/Music/PrivateSong.flac",
+                "totalMs" to 14L,
+            ),
+        )
+        assertTrue(line.contains("path=IN_PLACE_RESUME"))
+        assertTrue(line.contains("filePath=<REDACTED_PII>"))
+        assertFalse(line.contains("PrivateSong"))
+    }
 }

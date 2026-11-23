@@ -4,6 +4,8 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.hardware.usb.UsbDevice
+import android.hardware.usb.UsbManager
 import android.media.AudioAttributes
 import android.media.AudioDeviceCallback
 import android.media.AudioDeviceInfo
@@ -17,18 +19,19 @@ import android.util.Log
 import androidx.annotation.RequiresApi
 import androidx.core.content.ContextCompat
 import com.cangkir.bitperfectplayer.BuildConfig
+import com.cangkir.bitperfectplayer.diagnostics.DiagnosticLogLevel
 import com.cangkir.bitperfectplayer.diagnostics.LocalDiagnosticLogger
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Internal collaborator managing Android audio output device routing, `AudioDeviceCallback`
- * (including `isSink` filtering, duplicate-route deduplication, cold-start initial-callback
- * suppression, and `ACTION_AUDIO_BECOMING_NOISY` <-> `onAudioDevicesRemoved` coalescing via
- * [AudioRouteEventFilter]), `AudioFocusRequest` lifecycle (with Bit-Perfect ducking isolation),
- * and Android 14+ (`API 34+`) `MIXER_BEHAVIOR_BIT_PERFECT` negotiation + mandatory
- * `clearPreferredMixerAttributes` cleanup.
+ * Internal collaborator managing Android audio output device routing, `AudioDeviceCallback` +
+ * early `UsbManager.ACTION_USB_DEVICE_ATTACHED` / `ACTION_USB_DEVICE_DETACHED` (`USB_CLASS_AUDIO`)
+ * detection (including `isSink` filtering, duplicate-route deduplication, cold-start initial-callback
+ * suppression, and multi-source connect/disconnect coalescing via [AudioRouteEventFilter]),
+ * `AudioFocusRequest` lifecycle (with Bit-Perfect ducking isolation), and Android 14+ (`API 34+`)
+ * `MIXER_BEHAVIOR_BIT_PERFECT` negotiation + mandatory `clearPreferredMixerAttributes` cleanup.
  */
 internal class AudioRouteAndMixerManager(
     private val appContext: Context,
@@ -44,6 +47,7 @@ internal class AudioRouteAndMixerManager(
     private val isCurrentlyPlaying: () -> Boolean,
     private val isReleased: () -> Boolean,
     private val diagnosticLogger: LocalDiagnosticLogger? = null,
+    private val currentEngineStatusName: () -> String = { "UNKNOWN" },
 ) {
     private data class MixerNegotiationResult(
         val behavior: NegotiatedMixerBehavior,
@@ -151,17 +155,56 @@ internal class AudioRouteAndMixerManager(
             val decision = routeEventFilter.onBecomingNoisy(
                 nowElapsedMs = SystemClock.elapsedRealtime(),
                 resolvedFallbackDevice = fallbackDevice?.let(::toRouteDescriptor),
-            ) as RouteFilterDecision.BecomingNoisy
-            activeOutputDevice = fallbackDevice
-            if (decision.clearUsbDeviceId != null) {
-                clearPreferredMixerAttributesAsyncOnApi34(previousDevice)
-            }
-            val cmd = safetyController.onBecomingNoisy(
-                fallbackDeviceName = fallbackDevice?.let(::resolveDeviceName) ?: "Internal Speaker",
-                fallbackIsUsbAudio = fallbackDevice?.let(::isUsbOutputDevice) == true,
             )
-            onSafetyCommand(cmd)
-            scheduleAsyncOutputDeviceRefresh()
+            activeOutputDevice = fallbackDevice
+            logRouteEvent(
+                trigger = "BECOMING_NOISY",
+                decision = decision,
+                sinkCount = if (previousDevice != null) 1 else 0,
+                hasUsbSink = previousDevice?.let(::isUsbOutputDevice) == true,
+                coalesced = decision is RouteFilterDecision.CoalescedDisconnectCleanup,
+            )
+            when (decision) {
+                is RouteFilterDecision.BecomingNoisy -> {
+                    if (decision.clearUsbDeviceId != null) {
+                        clearPreferredMixerAttributesAsyncOnApi34(previousDevice)
+                    }
+                    val cmd = safetyController.onBecomingNoisy(
+                        fallbackDeviceName = fallbackDevice?.let(::resolveDeviceName) ?: "Internal Speaker",
+                        fallbackIsUsbAudio = fallbackDevice?.let(::isUsbOutputDevice) == true,
+                    )
+                    onSafetyCommand(cmd)
+                }
+                is RouteFilterDecision.CoalescedDisconnectCleanup -> {
+                    if (decision.removedUsbDeviceId != null) {
+                        clearPreferredMixerAttributesAsyncOnApi34(previousDevice)
+                    }
+                    safetyController.syncActiveOutputDeviceMetadata(
+                        deviceName = fallbackDevice?.let(::resolveDeviceName) ?: "Internal Speaker",
+                        isUsbAudio = fallbackDevice?.let(::isUsbOutputDevice) == true,
+                    )
+                    onDiagnosticsChanged()
+                }
+                else -> Unit
+            }
+        }
+    }
+
+    private val usbAudioDeviceReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (isReleased()) return
+            val action = intent?.action ?: return
+            if (action != UsbManager.ACTION_USB_DEVICE_ATTACHED && action != UsbManager.ACTION_USB_DEVICE_DETACHED) {
+                return
+            }
+            val usbDevice = extractUsbDeviceFromIntent(intent) ?: return
+            if (!isUsbAudioClassDevice(usbDevice)) return
+            val nowMs = SystemClock.elapsedRealtime()
+            if (action == UsbManager.ACTION_USB_DEVICE_ATTACHED) {
+                handleEarlyUsbAudioAttached(usbDevice, nowMs)
+            } else {
+                handleEarlyUsbAudioDetached(nowMs)
+            }
         }
     }
 
@@ -169,17 +212,24 @@ internal class AudioRouteAndMixerManager(
         override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) {
             if (isReleased()) return
             addKnownOutputSinks(addedDevices)
-            val hasSinkAdditions = addedDevices.any { it.isSink }
+            val sinkCount = addedDevices.count { it.isSink }
+            val hasUsbSink = addedDevices.any { it.isSink && isUsbOutputDevice(it) }
             val preferredAfter = selectPreferredFromCachedSinks(ignoreNoisySuppression = true)
             val decision = routeEventFilter.onDevicesAdded(
                 addedDevices = addedDevices.map(::toRouteDescriptor),
                 preferredActiveAfterAdd = preferredAfter?.let(::toRouteDescriptor),
+                nowElapsedMs = SystemClock.elapsedRealtime(),
+            )
+            logRouteEvent(
+                trigger = "DEVICES_ADDED",
+                decision = decision,
+                sinkCount = sinkCount,
+                hasUsbSink = hasUsbSink,
+                coalesced = decision is RouteFilterDecision.CoalescedUsbConnectMetadataSync ||
+                    decision is RouteFilterDecision.Ignore,
             )
             when (decision) {
-                RouteFilterDecision.Ignore -> {
-                    if (hasSinkAdditions) scheduleAsyncOutputDeviceRefresh()
-                    return
-                }
+                RouteFilterDecision.Ignore -> return
                 is RouteFilterDecision.SyncInitialDevice -> {
                     routeFilterInitialized.set(true)
                     val chosen = addedDevices.firstOrNull { it.isSink && it.id == decision.device.id } ?: preferredAfter
@@ -188,6 +238,16 @@ internal class AudioRouteAndMixerManager(
                         deviceName = decision.device.name,
                         isUsbAudio = decision.device.isUsbOutput,
                         isHardwareVolumeVerified = false,
+                    )
+                    onDiagnosticsChanged()
+                }
+                is RouteFilterDecision.CoalescedUsbConnectMetadataSync -> {
+                    routeFilterInitialized.set(true)
+                    val chosen = addedDevices.firstOrNull { it.isSink && it.id == decision.device.id } ?: preferredAfter
+                    activeOutputDevice = chosen
+                    safetyController.syncActiveOutputDeviceMetadata(
+                        deviceName = decision.device.name,
+                        isUsbAudio = decision.device.isUsbOutput,
                     )
                     onDiagnosticsChanged()
                 }
@@ -204,13 +264,13 @@ internal class AudioRouteAndMixerManager(
                 }
                 else -> Unit
             }
-            if (hasSinkAdditions) scheduleAsyncOutputDeviceRefresh()
         }
 
         override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) {
             if (isReleased()) return
             removeKnownOutputSinks(removedDevices)
-            val hasSinkRemovals = removedDevices.any { it.isSink }
+            val sinkCount = removedDevices.count { it.isSink }
+            val hasUsbSink = removedDevices.any { it.isSink && isUsbOutputDevice(it) }
             val removedExternalSinkId = removedDevices.firstOrNull { it.isSink && isExternalOutputDevice(it) }?.id
             val fallback = selectPreferredFromCachedSinks(
                 excludeDeviceId = removedExternalSinkId,
@@ -221,11 +281,16 @@ internal class AudioRouteAndMixerManager(
                 preferredActiveAfterRemove = fallback?.let(::toRouteDescriptor),
                 nowElapsedMs = SystemClock.elapsedRealtime(),
             )
+            logRouteEvent(
+                trigger = "DEVICES_REMOVED",
+                decision = decision,
+                sinkCount = sinkCount,
+                hasUsbSink = hasUsbSink,
+                coalesced = decision is RouteFilterDecision.CoalescedDisconnectCleanup ||
+                    decision is RouteFilterDecision.Ignore,
+            )
             when (decision) {
-                RouteFilterDecision.Ignore -> {
-                    if (hasSinkRemovals) scheduleAsyncOutputDeviceRefresh()
-                    return
-                }
+                RouteFilterDecision.Ignore -> return
                 is RouteFilterDecision.CoalescedDisconnectCleanup -> {
                     val removedUsb = decision.removedUsbDeviceId?.let { id ->
                         removedDevices.firstOrNull { it.isSink && it.id == id }
@@ -260,17 +325,106 @@ internal class AudioRouteAndMixerManager(
                 }
                 else -> Unit
             }
-            if (hasSinkRemovals) scheduleAsyncOutputDeviceRefresh()
+        }
+    }
+
+    private fun extractUsbDeviceFromIntent(intent: Intent): UsbDevice? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+    } else {
+        @Suppress("DEPRECATION")
+        intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
+    }
+
+    private fun isUsbAudioClassDevice(usbDevice: UsbDevice): Boolean = runCatching {
+        val count = usbDevice.interfaceCount
+        if (count <= 0) return@runCatching false
+        val classes = IntArray(count) { idx -> usbDevice.getInterface(idx).interfaceClass }
+        AudioRouteEventFilter.hasUsbAudioInterface(classes)
+    }.getOrDefault(false)
+
+    private fun handleEarlyUsbAudioAttached(usbDevice: UsbDevice, nowMs: Long) {
+        val productName = runCatching { usbDevice.productName?.trim().orEmpty() }
+            .getOrDefault("")
+            .ifEmpty { AudioRouteEventFilter.DEFAULT_EARLY_USB_DEVICE_NAME }
+        val decision = routeEventFilter.onUsbAudioAttachedEarly(productName, nowMs)
+        logRouteEvent(
+            trigger = "USB_ATTACHED_EARLY",
+            decision = decision,
+            sinkCount = 1,
+            hasUsbSink = true,
+            coalesced = decision is RouteFilterDecision.Ignore,
+        )
+        if (decision is RouteFilterDecision.DeviceConnected) {
+            routeFilterInitialized.set(true)
+            val cmd = safetyController.onAudioDeviceConnected(
+                deviceName = decision.device.name,
+                isUsbAudio = true,
+                isHardwareVolumeVerified = false,
+            )
+            onSafetyCommand(cmd)
+        }
+    }
+
+    private fun handleEarlyUsbAudioDetached(nowMs: Long) {
+        val previousUsbDevice = activeOutputDevice?.takeIf(::isUsbOutputDevice) ?: removeCachedUsbSinks()
+        removeCachedUsbSinks()
+        val fallback = selectPreferredFromCachedSinks(ignoreNoisySuppression = true)
+        val decision = routeEventFilter.onUsbAudioDetachedEarly(
+            nowElapsedMs = nowMs,
+            resolvedFallbackDevice = fallback?.let(::toRouteDescriptor),
+        )
+        activeOutputDevice = fallback
+        logRouteEvent(
+            trigger = "USB_DETACHED_EARLY",
+            decision = decision,
+            sinkCount = 1,
+            hasUsbSink = true,
+            coalesced = decision is RouteFilterDecision.CoalescedDisconnectCleanup ||
+                decision is RouteFilterDecision.Ignore,
+        )
+        when (decision) {
+            RouteFilterDecision.Ignore -> return
+            is RouteFilterDecision.CoalescedDisconnectCleanup -> {
+                if (previousUsbDevice != null || decision.removedUsbDeviceId != null) {
+                    clearPreferredMixerAttributesAsyncOnApi34(previousUsbDevice)
+                }
+                safetyController.syncActiveOutputDeviceMetadata(
+                    deviceName = fallback?.let(::resolveDeviceName) ?: "Internal Speaker",
+                    isUsbAudio = fallback?.let(::isUsbOutputDevice) == true,
+                )
+                onDiagnosticsChanged()
+            }
+            is RouteFilterDecision.UsbDisconnected -> {
+                clearPreferredMixerAttributesAsyncOnApi34(previousUsbDevice)
+                val cmd = safetyController.onUsbDisconnected(
+                    fallbackDeviceName = fallback?.let(::resolveDeviceName) ?: "Internal Speaker",
+                )
+                onSafetyCommand(cmd)
+            }
+            else -> Unit
+        }
+    }
+
+    private fun logRouteEvent(trigger: String, decision: RouteFilterDecision, sinkCount: Int, hasUsbSink: Boolean, coalesced: Boolean) {
+        diagnosticLogger?.logAudio("ROUTE_EVENT") {
+            val activeDev = activeOutputDevice
+            linkedMapOf(
+                "trigger" to trigger,
+                "decision" to decision.javaClass.simpleName,
+                "sinkCount" to sinkCount,
+                "hasUsbSink" to hasUsbSink,
+                "activeConn" to mapConnectionType(activeDev).name,
+                "activeType" to (activeDev?.type ?: 0),
+                "coalesced" to coalesced,
+                "mode" to safetyController.state().mode.name,
+                "status" to currentEngineStatusName(),
+            )
         }
     }
 
     fun initializeRouteMonitoring() {
         registerAudioMonitors()
         scheduleAsyncOutputDeviceRefresh(isInitialSync = true)
-    }
-
-    fun refreshOutputDevicesOffCriticalPath() {
-        scheduleAsyncOutputDeviceRefresh(isInitialSync = false)
     }
 
     fun registerAudioMonitors() {
@@ -287,6 +441,18 @@ internal class AudioRouteAndMixerManager(
                 ContextCompat.RECEIVER_NOT_EXPORTED,
             )
         }
+        runCatching {
+            val usbFilter = IntentFilter().apply {
+                addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED)
+                addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
+            }
+            ContextCompat.registerReceiver(
+                appContext,
+                usbAudioDeviceReceiver,
+                usbFilter,
+                ContextCompat.RECEIVER_NOT_EXPORTED,
+            )
+        }
     }
 
     fun unregisterAudioMonitors() {
@@ -294,6 +460,7 @@ internal class AudioRouteAndMixerManager(
             receiversRegistered = false
             runCatching { audioManager.unregisterAudioDeviceCallback(audioDeviceCallback) }
             runCatching { appContext.unregisterReceiver(becomingNoisyReceiver) }
+            runCatching { appContext.unregisterReceiver(usbAudioDeviceReceiver) }
         }
         synchronized(sinksLock) {
             knownOutputSinks.clear()
@@ -308,9 +475,11 @@ internal class AudioRouteAndMixerManager(
         val startMs = SystemClock.elapsedRealtime()
         val res = audioManager.requestAudioFocus(audioFocusRequest)
         val elapsedMs = (SystemClock.elapsedRealtime() - startMs).coerceAtLeast(0L)
-        if (AudioStartPathPolicy.shouldLogSlowAudioStage(BuildConfig.DEBUG, elapsedMs)) {
-            Log.w(TAG, "Slow audio stage [requestAudioFocus]: ${elapsedMs}ms (res=$res)")
-        }
+        recordSlowStageIfNeeded(
+            stage = "requestAudioFocus",
+            elapsedMs = elapsedMs,
+            extra = mapOf("result" to res),
+        )
         hasAudioFocus = (res == AudioManager.AUDIOFOCUS_REQUEST_GRANTED)
         if (!hasAudioFocus) {
             diagnosticLogger?.logError("AUDIOFOCUS_REQUEST_FAILED") {
@@ -320,10 +489,30 @@ internal class AudioRouteAndMixerManager(
         return hasAudioFocus
     }
 
-    fun abandonAudioFocusLocked() {
-        if (!hasAudioFocus) return
+    fun abandonAudioFocusLocked(): Long {
+        if (!hasAudioFocus) return 0L
+        val startMs = SystemClock.elapsedRealtime()
         runCatching { audioManager.abandonAudioFocusRequest(audioFocusRequest) }
         hasAudioFocus = false
+        val elapsedMs = (SystemClock.elapsedRealtime() - startMs).coerceAtLeast(0L)
+        recordSlowStageIfNeeded(stage = "abandonAudioFocus", elapsedMs = elapsedMs)
+        return elapsedMs
+    }
+
+    private fun recordSlowStageIfNeeded(stage: String, elapsedMs: Long, extra: Map<String, Any?> = emptyMap()) {
+        if (AudioStartPathPolicy.shouldLogSlowAudioStage(BuildConfig.DEBUG, elapsedMs)) {
+            Log.w(TAG, "Slow audio stage [$stage]: ${elapsedMs}ms $extra")
+        }
+        if (AudioStartPathPolicy.shouldRecordSlowAudioStage(elapsedMs)) {
+            diagnosticLogger?.logPerf("SLOW_AUDIO_STAGE", level = DiagnosticLogLevel.WARN) {
+                val fields = LinkedHashMap<String, Any?>(4 + extra.size)
+                fields["stage"] = stage
+                fields["elapsedMs"] = elapsedMs
+                fields["mode"] = safetyController.state().mode.name
+                fields.putAll(extra)
+                fields
+            }
+        }
     }
 
     /**
@@ -406,13 +595,11 @@ internal class AudioRouteAndMixerManager(
         activeNegotiatedMixerBehavior = negotiation.behavior
         activeNegotiatedMixerSummary = negotiation.summary
         val mixerElapsedMs = (SystemClock.elapsedRealtime() - mixerStartMs).coerceAtLeast(0L)
-        if (AudioStartPathPolicy.shouldLogSlowAudioStage(BuildConfig.DEBUG, mixerElapsedMs)) {
-            Log.w(
-                TAG,
-                "Slow audio stage [mixerNegotiation]: ${mixerElapsedMs}ms " +
-                    "(strategy=$strategy, mode=$safetyMode, usb=${usbDevice != null})",
-            )
-        }
+        recordSlowStageIfNeeded(
+            stage = "mixerNegotiation",
+            elapsedMs = mixerElapsedMs,
+            extra = mapOf("strategy" to strategy.name, "usb" to (usbDevice != null)),
+        )
         diagnosticLogger?.logAudio("USB_MIXER_NEGOTIATED") {
             linkedMapOf(
                 "mode" to safetyController.state().mode.name,
@@ -455,13 +642,19 @@ internal class AudioRouteAndMixerManager(
                 runCatching {
                     routeMonitorExecutor.execute {
                         if (!isReleased()) {
+                            val clearStartMs = SystemClock.elapsedRealtime()
                             runCatching {
                                 audioManager.clearPreferredMixerAttributes(playbackAudioAttributes, targetDevice)
                             }
+                            val clearMs = (SystemClock.elapsedRealtime() - clearStartMs).coerceAtLeast(0L)
+                            recordSlowStageIfNeeded(stage = "clearPreferredMixer", elapsedMs = clearMs)
                         }
                     }
                 }.onFailure {
+                    val clearStartMs = SystemClock.elapsedRealtime()
                     runCatching { audioManager.clearPreferredMixerAttributes(playbackAudioAttributes, targetDevice) }
+                    val clearMs = (SystemClock.elapsedRealtime() - clearStartMs).coerceAtLeast(0L)
+                    recordSlowStageIfNeeded(stage = "clearPreferredMixer", elapsedMs = clearMs)
                 }
             }
         } else {
@@ -487,9 +680,12 @@ internal class AudioRouteAndMixerManager(
                     ?: explicitDevice?.takeIf { it.id == deviceIdToClear }
                     ?: activeOutputDevice?.takeIf { it.id == deviceIdToClear }
                 if (targetDevice != null) {
+                    val clearStartMs = SystemClock.elapsedRealtime()
                     runCatching {
                         audioManager.clearPreferredMixerAttributes(playbackAudioAttributes, targetDevice)
                     }
+                    val clearMs = (SystemClock.elapsedRealtime() - clearStartMs).coerceAtLeast(0L)
+                    recordSlowStageIfNeeded(stage = "clearPreferredMixer", elapsedMs = clearMs)
                 }
             }
             if (!mixerSessionTracker.hasActivePreference) {
@@ -505,7 +701,11 @@ internal class AudioRouteAndMixerManager(
 
     fun resolveDiagnosticDeviceAndConnection(fallbackDeviceName: String): Pair<String, OutputConnectionType> {
         val device = activeOutputDevice ?: selectPreferredFromCachedSinks()
-        val connType = mapConnectionType(device)
+        val connType = when {
+            device != null -> mapConnectionType(device)
+            safetyController.state().isUsbAudioConnected -> OutputConnectionType.USB_DEVICE
+            else -> OutputConnectionType.INTERNAL_SPEAKER
+        }
         val deviceName = device?.let(::resolveDeviceName) ?: fallbackDeviceName
         return deviceName to connType
     }
@@ -639,6 +839,20 @@ internal class AudioRouteAndMixerManager(
         if (deviceId == null) return
         synchronized(sinksLock) {
             knownOutputSinks.remove(deviceId)
+        }
+    }
+
+    private fun removeCachedUsbSinks(): AudioDeviceInfo? {
+        synchronized(sinksLock) {
+            val usbIds = knownOutputSinks.values.filter { isUsbOutputDevice(it) }.map { it.id }
+            var firstRemoved: AudioDeviceInfo? = null
+            for (id in usbIds) {
+                val removed = knownOutputSinks.remove(id)
+                if (firstRemoved == null && removed != null) {
+                    firstRemoved = removed
+                }
+            }
+            return firstRemoved
         }
     }
 

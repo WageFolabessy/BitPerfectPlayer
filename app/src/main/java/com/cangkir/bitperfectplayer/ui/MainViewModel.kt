@@ -58,7 +58,7 @@ data class LyricsUiState(
  * Shared presentation ViewModel connecting Compose UI screens to [AppContainer] repositories and
  * [com.cangkir.bitperfectplayer.audio.PlaybackController].
  */
-class MainViewModel(private val container: AppContainer) : ViewModel() {
+class MainViewModel(internal val container: AppContainer) : ViewModel() {
 
     val libraryState: StateFlow<LibrarySnapshot> = container.libraryRepository.librarySnapshot
     val playlistsState: StateFlow<PlaylistsUiSnapshot> = container.playlistRepository.playlistsSnapshot
@@ -821,3 +821,5 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
 }
+
+fun MainViewModel.dismissActiveSession() = container.playbackController.dismissActiveSession()

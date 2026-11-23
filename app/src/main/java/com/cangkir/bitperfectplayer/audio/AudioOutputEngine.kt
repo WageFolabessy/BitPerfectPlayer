@@ -109,6 +109,7 @@ class AudioOutputEngine(
     private val pendingRouteReconfigureOnPlay = AtomicBoolean(false)
     private val pendingSeekMs = AtomicLong(PendingSeekCoalescer.NO_PENDING_SEEK)
     private val seekCoalescer = PendingSeekCoalescer(pendingSeekMs)
+    private val lastPlayRequestElapsedMs = AtomicLong(0L)
 
     @Volatile private var consecutiveAutoRecoveries: Int = 0
 
@@ -136,19 +137,36 @@ class AudioOutputEngine(
 
     @Volatile private var activeTrackUsesBitPerfectOrPreferredRoute: Boolean = false
 
+    @Volatile private var activeTrackPinnedToPreferredUsbDevice: Boolean = false
+
+    @Volatile private var lastWorkerStartFocusMs: Long = 0L
+
+    @Volatile private var lastWorkerStartTrackPlayMs: Long = 0L
+
     private val routeAndMixerManager = AudioRouteAndMixerManager(
         appContext, audioManager, mainHandler, playbackAudioAttributes, safetyController,
         onSafetyCommand = ::handleSafetyCommand,
         onDiagnosticsChanged = ::publishDiagnostics,
         onFocusLossPause = {
             commandCoalescer.cancelPendingStartOnExternalPause()
-            pauseInternal(clearFocus = false, notice = null)
+            applyImmediatePauseState(notice = null)
+            enqueueControlTask {
+                if (!releasedFlag.get()) {
+                    engineLock.withLock {
+                        activeAudioTrack?.let { track ->
+                            logUnderrunDeltaIfAny(track, trigger = "focus_loss_pause")
+                            trackWriter.safePause(track)
+                        }
+                    }
+                }
+            }
         },
         onFocusGainResume = ::play,
         onDuckSafeModeVolume = { vol -> runCatching { activeAudioTrack?.setVolume(vol) } },
         isCurrentlyPlaying = { _state.value.isPlaying },
         isReleased = { releasedFlag.get() },
         diagnosticLogger = diagnosticLogger,
+        currentEngineStatusName = { _state.value.status.name },
     )
     private val trackWriter = AudioTrackWriter(
         playbackAudioAttributes,
@@ -158,6 +176,8 @@ class AudioOutputEngine(
         pendingSeekMs,
         loadGeneration,
         diagnosticLogger = diagnosticLogger,
+        safetyModeProvider = { safetyController.state().mode },
+        isUsbConnectedProvider = { safetyController.state().isUsbAudioConnected },
     )
     private val preloadController = GaplessPreloadController(
         appContext = appContext,
@@ -304,6 +324,9 @@ class AudioOutputEngine(
 
     fun play() {
         if (releasedFlag.get()) return
+        val nowMs = SystemClock.elapsedRealtime()
+        lastPlayRequestElapsedMs.set(nowMs)
+        logEngineLifecycle(event = "PLAY_REQ", source = "ENGINE_PLAY")
         consecutiveAutoRecoveries = 0
         val current = _state.value
         val alreadyStreaming = current.status == PlaybackStatus.PLAYING &&
@@ -330,6 +353,9 @@ class AudioOutputEngine(
     }
 
     private fun playLocked() {
+        val playLockedEntryMs = SystemClock.elapsedRealtime()
+        val requestStartMs = lastPlayRequestElapsedMs.getAndSet(0L).takeIf { it > 0L } ?: playLockedEntryMs
+        val queueWaitMs = (playLockedEntryMs - requestStartMs).coerceAtLeast(0L)
         val track = activeAudioTrack
         val shouldReload = RouteChangeReconfigurePolicy.shouldReloadOnPlay(
             hasPendingRouteReconfigure = pendingRouteReconfigureOnPlay.get(),
@@ -340,7 +366,7 @@ class AudioOutputEngine(
             isAudioTrackHealthy = trackWriter.isTrackHealthy(track),
         )
         if (shouldReload) {
-            reloadCurrentTrackForPlayLocked()
+            reloadCurrentTrackForPlayLocked(requestStartMs = requestStartMs, queueWaitMs = queueWaitMs)
             return
         }
         val activeTrack = track ?: run {
@@ -348,37 +374,7 @@ class AudioOutputEngine(
             return
         }
         if (playbackThread?.isAlive != true) {
-            routeAndMixerManager.resumeAfterTransientFocusLoss = false
-            if (safetyController.state().mode == AudioOutputMode.SAFE_VOLUME_MODE) {
-                runCatching { activeTrack.setVolume(1.0f) }
-            }
-            val startMs = SystemClock.elapsedRealtime()
-            when (
-                startPlaybackWorkerLocked(
-                    initialSeekMs = _playbackPositionMs.value,
-                    expectedGeneration = loadGeneration.get(),
-                    forceAudioFocus = true,
-                    clearPendingSeek = false,
-                )
-            ) {
-                WorkerStartResult.STARTED -> {
-                    logSlowAudioTrackBuildAndStart(startMs, activeDecoder?.format?.sampleRateHz ?: 0)
-                    _state.update {
-                        it.copy(
-                            status = PlaybackStatus.PLAYING,
-                            errorMessage = null,
-                            lastAutoPauseNotice = null,
-                            isPreparingPlayback = false,
-                            preservePlayingUiDuringTransition = false,
-                        )
-                    }
-                    routeAndMixerManager.refreshOutputDevicesOffCriticalPath()
-                }
-                WorkerStartResult.AUDIO_TRACK_FAILED -> reloadCurrentTrackForPlayLocked()
-                WorkerStartResult.AUDIO_FOCUS_DENIED -> {
-                    _state.update { it.copy(isPreparingPlayback = false, preservePlayingUiDuringTransition = false) }
-                }
-            }
+            resumeByRestartingWorkerLocked(activeTrack, requestStartMs, queueWaitMs)
             return
         }
         if (!isPausedFlag.get() && _state.value.status == PlaybackStatus.PLAYING) {
@@ -393,6 +389,7 @@ class AudioOutputEngine(
             return
         }
         val startMs = SystemClock.elapsedRealtime()
+        val focusStartMs = SystemClock.elapsedRealtime()
         if (!routeAndMixerManager.requestAudioFocusLocked(forceRequest = true)) {
             isPausedFlag.set(true)
             trackWriter.safePause(activeTrack)
@@ -406,16 +403,19 @@ class AudioOutputEngine(
             }
             return
         }
+        val focusMs = (SystemClock.elapsedRealtime() - focusStartMs).coerceAtLeast(0L)
         routeAndMixerManager.resumeAfterTransientFocusLoss = false
         stopWorkerFlag.set(false)
         isPausedFlag.set(false)
         if (safetyController.state().mode == AudioOutputMode.SAFE_VOLUME_MODE) {
             runCatching { activeTrack.setVolume(1.0f) }
         }
+        val trackPlayStartMs = SystemClock.elapsedRealtime()
         if (!trackWriter.safePlay(activeTrack)) {
-            reloadCurrentTrackForPlayLocked()
+            reloadCurrentTrackForPlayLocked(requestStartMs = requestStartMs, queueWaitMs = queueWaitMs)
             return
         }
+        val trackPlayMs = (SystemClock.elapsedRealtime() - trackPlayStartMs).coerceAtLeast(0L)
         logSlowAudioTrackBuildAndStart(startMs, activeDecoder?.format?.sampleRateHz ?: 0)
         _state.update {
             it.copy(
@@ -426,10 +426,57 @@ class AudioOutputEngine(
                 preservePlayingUiDuringTransition = false,
             )
         }
-        routeAndMixerManager.refreshOutputDevicesOffCriticalPath()
+        logPlayResumeLatency(
+            path = "IN_PLACE_RESUME",
+            queueWaitMs = queueWaitMs,
+            focusMs = focusMs,
+            trackPlayMs = trackPlayMs,
+            totalMs = (SystemClock.elapsedRealtime() - requestStartMs).coerceAtLeast(0L),
+        )
     }
 
-    private fun reloadCurrentTrackForPlayLocked() {
+    private fun resumeByRestartingWorkerLocked(activeTrack: AudioTrack, requestStartMs: Long, queueWaitMs: Long) {
+        routeAndMixerManager.resumeAfterTransientFocusLoss = false
+        if (safetyController.state().mode == AudioOutputMode.SAFE_VOLUME_MODE) {
+            runCatching { activeTrack.setVolume(1.0f) }
+        }
+        val startMs = SystemClock.elapsedRealtime()
+        when (
+            startPlaybackWorkerLocked(
+                initialSeekMs = _playbackPositionMs.value,
+                expectedGeneration = loadGeneration.get(),
+                forceAudioFocus = true,
+                clearPendingSeek = false,
+            )
+        ) {
+            WorkerStartResult.STARTED -> {
+                logSlowAudioTrackBuildAndStart(startMs, activeDecoder?.format?.sampleRateHz ?: 0)
+                _state.update {
+                    it.copy(
+                        status = PlaybackStatus.PLAYING,
+                        errorMessage = null,
+                        lastAutoPauseNotice = null,
+                        isPreparingPlayback = false,
+                        preservePlayingUiDuringTransition = false,
+                    )
+                }
+                logPlayResumeLatency(
+                    path = "WORKER_RESTART",
+                    queueWaitMs = queueWaitMs,
+                    focusMs = lastWorkerStartFocusMs,
+                    trackPlayMs = lastWorkerStartTrackPlayMs,
+                    totalMs = (SystemClock.elapsedRealtime() - requestStartMs).coerceAtLeast(0L),
+                )
+            }
+            WorkerStartResult.AUDIO_TRACK_FAILED ->
+                reloadCurrentTrackForPlayLocked(requestStartMs = requestStartMs, queueWaitMs = queueWaitMs)
+            WorkerStartResult.AUDIO_FOCUS_DENIED -> {
+                _state.update { it.copy(isPreparingPlayback = false, preservePlayingUiDuringTransition = false) }
+            }
+        }
+    }
+
+    private fun reloadCurrentTrackForPlayLocked(requestStartMs: Long = SystemClock.elapsedRealtime(), queueWaitMs: Long = 0L) {
         pendingRouteReconfigureOnPlay.set(false)
         val req = currentRequest ?: return
         val resumePos = if (_state.value.status == PlaybackStatus.COMPLETED) {
@@ -444,6 +491,33 @@ class AudioOutputEngine(
             preserveAutoPauseNotice = false,
             forceAudioFocus = true,
         )
+        logPlayResumeLatency(
+            path = "RELOAD",
+            queueWaitMs = queueWaitMs,
+            focusMs = lastWorkerStartFocusMs,
+            trackPlayMs = lastWorkerStartTrackPlayMs,
+            totalMs = (SystemClock.elapsedRealtime() - requestStartMs).coerceAtLeast(0L),
+        )
+    }
+
+    private fun logPlayResumeLatency(path: String, queueWaitMs: Long, focusMs: Long, trackPlayMs: Long, totalMs: Long) {
+        val safety = safetyController.state()
+        val sr = activeDecoder?.format?.sampleRateHz ?: audioTrackActualSampleRateHz
+        val enc = activeDecoder?.format?.encoding?.name ?: audioTrackActualEncodingLabel
+        diagnosticLogger?.logPerf("PLAY_RESUME_LATENCY") {
+            linkedMapOf(
+                "path" to path,
+                "queueWaitMs" to queueWaitMs,
+                "focusMs" to focusMs,
+                "trackPlayMs" to trackPlayMs,
+                "totalMs" to totalMs,
+                "sr" to sr,
+                "enc" to enc,
+                "mode" to safety.mode.name,
+                "usb" to safety.isUsbAudioConnected,
+                "pinnedUsb" to activeTrackPinnedToPreferredUsbDevice,
+            )
+        }
     }
 
     /**
@@ -457,8 +531,9 @@ class AudioOutputEngine(
     }
 
     fun pause() {
+        logEngineLifecycle(event = "PAUSE_REQ", source = "ENGINE_PAUSE")
         routeAndMixerManager.resumeAfterTransientFocusLoss = false
-        pauseInternal(clearFocus = false, notice = null)
+        applyImmediatePauseState(notice = null)
         if (commandCoalescer.submitPause()) {
             scheduleControlDrain()
         }
@@ -467,14 +542,43 @@ class AudioOutputEngine(
     fun notifyBackgroundStartBlocked(notice: String) {
         routeAndMixerManager.resumeAfterTransientFocusLoss = false
         commandCoalescer.cancelPendingStartOnExternalPause()
-        pauseInternal(clearFocus = true, notice = notice)
-        _state.update { current ->
-            current.copy(
-                status = PlaybackStatus.PAUSED,
-                errorMessage = null,
-                lastAutoPauseNotice = notice,
-                isPreparingPlayback = false,
-                preservePlayingUiDuringTransition = false,
+        applyImmediatePauseState(notice = notice)
+        enqueueControlTask {
+            if (!releasedFlag.get()) {
+                engineLock.withLock {
+                    activeAudioTrack?.let { track ->
+                        logUnderrunDeltaIfAny(track, trigger = "bg_blocked_pause")
+                        trackWriter.safePause(track)
+                    }
+                    routeAndMixerManager.abandonAudioFocusLocked()
+                }
+            }
+        }
+    }
+
+    fun logSessionCleared(source: String = "MINI_PLAYER_SWIPE") {
+        logEngineLifecycle(event = "SESSION_CLEARED", source = source)
+    }
+
+    private fun logEngineLifecycle(event: String, source: String) {
+        val logger = diagnosticLogger ?: return
+        if (!logger.isEnabled) return
+        val statusName = _state.value.status.name
+        val posMs = _playbackPositionMs.value
+        val trackHealthy = trackWriter.isTrackHealthy(activeAudioTrack)
+        val workerAlive = playbackThread?.isAlive == true
+        val pendingReconfig = pendingRouteReconfigureOnPlay.get()
+        val hasFocus = routeAndMixerManager.hasAudioFocus
+        logger.logAudio("ENGINE_LIFECYCLE") {
+            linkedMapOf(
+                "event" to event,
+                "source" to source,
+                "status" to statusName,
+                "posMs" to posMs,
+                "trackHealthy" to trackHealthy,
+                "workerAlive" to workerAlive,
+                "pendingReconfig" to pendingReconfig,
+                "hasFocus" to hasFocus,
             )
         }
     }
@@ -549,6 +653,7 @@ class AudioOutputEngine(
 
     fun stop() {
         if (releasedFlag.get()) return
+        logEngineLifecycle(event = "STOP_REQ", source = "ENGINE_STOP")
         scratchRunner.abortScratch()
         if (_state.value.status == PlaybackStatus.IDLE && activeAudioTrack == null && activeDecoder == null) {
             scratchRunner.releaseRingBuffer()
@@ -618,6 +723,16 @@ class AudioOutputEngine(
         AUDIO_TRACK_FAILED,
     }
 
+    private data class TrackLoadTimings(
+        val loadStartMs: Long,
+        val audioTrackBuildStartMs: Long,
+        val stopOldMs: Long,
+        val decoderOpenMs: Long,
+        val rgScanMs: Long,
+        val trackCreateMs: Long,
+        val wasPreloaded: Boolean,
+    )
+
     private fun loadTrackLocked(
         request: EngineTrackRequest,
         generation: Long,
@@ -633,6 +748,7 @@ class AudioOutputEngine(
         pendingRouteReconfigureOnPlay.set(false)
         val loadStartMs = SystemClock.elapsedRealtime()
         stopWorkerAndReleaseTrackLocked(clearMixer = clearMixerBeforeCreate, asyncMixerClear = true)
+        val stopOldMs = (SystemClock.elapsedRealtime() - loadStartMs).coerceAtLeast(0L)
         currentRequest = request
         activeTrackReplayGainMetadata = null
         recomputeReplayGain()
@@ -648,6 +764,9 @@ class AudioOutputEngine(
         }
 
         val decoder: PcmAudioDecoder?
+        var wasPreloaded = false
+        var decoderOpenMs = 0L
+        var rgScanMs = 0L
         try {
             val preloaded = if (request.startPositionMs == 0L && !isLoadStale(generation)) {
                 takeStagedPreloadedTrackMatchingUri(request.uri)
@@ -658,9 +777,13 @@ class AudioOutputEngine(
             }
             val shouldReadRg = AudioStartPathPolicy.shouldScanReplayGainMetadata(replayGainConfig.mode)
             if (preloaded != null) {
+                wasPreloaded = true
                 preloadController.consumeQueuedNextRequestIfMatches(request.uri)
                 activeTrackReplayGainMetadata = preloaded.replayGainMetadata ?: if (shouldReadRg) {
-                    preloadController.readReplayGainMetadata(request.uri, request.fileName, request.mimeType)
+                    val rgStartMs = SystemClock.elapsedRealtime()
+                    preloadController.readReplayGainMetadata(request.uri, request.fileName, request.mimeType).also {
+                        rgScanMs = (SystemClock.elapsedRealtime() - rgStartMs).coerceAtLeast(0L)
+                    }
                 } else {
                     null
                 }
@@ -668,14 +791,19 @@ class AudioOutputEngine(
             } else {
                 preloadController.clearPreloadedNextLocked()
                 // Open and prime decoder BEFORE creating AudioTrack so codec.outputFormat is confirmed.
+                val decodeOpenStartMs = SystemClock.elapsedRealtime()
                 val opened = openDecoderForTrackLocked(request, generation)
+                decoderOpenMs = (SystemClock.elapsedRealtime() - decodeOpenStartMs).coerceAtLeast(0L)
                 if (opened == null) {
                     routeAndMixerManager.clearPreferredMixerAttributesAsyncOnApi34(null)
                     clearPreparingFlagsIfUnbound(request.uri)
                     return
                 }
                 activeTrackReplayGainMetadata = if (shouldReadRg) {
-                    preloadController.readReplayGainMetadata(request.uri, request.fileName, request.mimeType)
+                    val rgStartMs = SystemClock.elapsedRealtime()
+                    preloadController.readReplayGainMetadata(request.uri, request.fileName, request.mimeType).also {
+                        rgScanMs = (SystemClock.elapsedRealtime() - rgStartMs).coerceAtLeast(0L)
+                    }
                 } else {
                     null
                 }
@@ -702,6 +830,7 @@ class AudioOutputEngine(
             clearPreparingFlagsIfUnbound(request.uri)
             return
         }
+        val trackCreateMs = (SystemClock.elapsedRealtime() - audioTrackStartMs).coerceAtLeast(0L)
         if (isLoadStale(generation)) {
             trackWriter.safeStopAndRelease(audioTrack)
             runCatching { decoder.close() }
@@ -716,8 +845,15 @@ class AudioOutputEngine(
             generation = generation,
             preserveAutoPauseNotice = preserveAutoPauseNotice,
             forceAudioFocus = forceAudioFocus,
-            loadStartMs = loadStartMs,
-            audioTrackBuildStartMs = audioTrackStartMs,
+            timings = TrackLoadTimings(
+                loadStartMs = loadStartMs,
+                audioTrackBuildStartMs = audioTrackStartMs,
+                stopOldMs = stopOldMs,
+                decoderOpenMs = decoderOpenMs,
+                rgScanMs = rgScanMs,
+                trackCreateMs = trackCreateMs,
+                wasPreloaded = wasPreloaded,
+            ),
         )
     }
 
@@ -791,6 +927,7 @@ class AudioOutputEngine(
                 audioTrackActualSampleRateHz = configured.actualSampleRateHz
                 audioTrackActualEncodingLabel = configured.actualEncodingLabel
                 activeTrackUsesBitPerfectOrPreferredRoute = isBitPerfectOrPreferredRoute(configured)
+                activeTrackPinnedToPreferredUsbDevice = configured.isPinnedToPreferredUsbDevice
                 lastReportedUnderrunCount = 0
             }
             .onFailure { error ->
@@ -828,11 +965,12 @@ class AudioOutputEngine(
         generation: Long,
         preserveAutoPauseNotice: Boolean,
         forceAudioFocus: Boolean,
-        loadStartMs: Long,
-        audioTrackBuildStartMs: Long,
+        timings: TrackLoadTimings,
     ) {
         activeDecoder = decoder
         activeAudioTrack = audioTrack
+        lastWorkerStartFocusMs = 0L
+        lastWorkerStartTrackPlayMs = 0L
         val initialPosMs = if (request.startPositionMs == 0L) 0L else decoder.currentPositionMs.coerceAtLeast(0L)
         _playbackPositionMs.value = initialPosMs
         val startResult = startLoadedTrackIfAutoPlayLocked(
@@ -845,7 +983,7 @@ class AudioOutputEngine(
         )
         val startedPlaying = startResult == WorkerStartResult.STARTED
         if (startedPlaying) {
-            logSlowAudioTrackBuildAndStart(audioTrackBuildStartMs, decoder.format.sampleRateHz)
+            logSlowAudioTrackBuildAndStart(timings.audioTrackBuildStartMs, decoder.format.sampleRateHz)
         }
         if (startResult == WorkerStartResult.AUDIO_TRACK_FAILED) {
             pendingRouteReconfigureOnPlay.set(true)
@@ -867,18 +1005,23 @@ class AudioOutputEngine(
             )
         }
         publishDiagnostics()
-        if (startedPlaying) {
-            routeAndMixerManager.refreshOutputDevicesOffCriticalPath()
-        }
-        val loadMs = (SystemClock.elapsedRealtime() - loadStartMs).coerceAtLeast(0L)
+        val loadMs = (SystemClock.elapsedRealtime() - timings.loadStartMs).coerceAtLeast(0L)
         diagnosticLogger?.logPerf("TRACK_LOAD_LATENCY") {
             linkedMapOf(
+                "stopOldMs" to timings.stopOldMs,
+                "decoderOpenMs" to timings.decoderOpenMs,
+                "rgScanMs" to timings.rgScanMs,
+                "trackCreateMs" to timings.trackCreateMs,
+                "focusMs" to lastWorkerStartFocusMs,
+                "trackPlayMs" to lastWorkerStartTrackPlayMs,
                 "loadMs" to loadMs,
+                "preloaded" to timings.wasPreloaded,
                 "autoPlay" to request.autoPlay,
                 "startedPlaying" to startedPlaying,
                 "sr" to decoder.format.sampleRateHz,
                 "enc" to decoder.format.encoding.name,
                 "ch" to decoder.format.channelCount,
+                "mode" to safetyController.state().mode.name,
             )
         }
     }
@@ -922,6 +1065,7 @@ class AudioOutputEngine(
                 audioTrackActualSampleRateHz = configured.actualSampleRateHz
                 audioTrackActualEncodingLabel = configured.actualEncodingLabel
                 activeTrackUsesBitPerfectOrPreferredRoute = isBitPerfectOrPreferredRoute(configured)
+                activeTrackPinnedToPreferredUsbDevice = configured.isPinnedToPreferredUsbDevice
                 lastReportedUnderrunCount = 0
             }
             .getOrNull()?.track ?: return WorkerStartResult.AUDIO_TRACK_FAILED
@@ -938,6 +1082,7 @@ class AudioOutputEngine(
     }
 
     private fun handleSafetyCommand(command: SafetyCommand) {
+        val safetyStartMs = SystemClock.elapsedRealtime()
         recomputeReplayGain()
         val statusBeforeCommand = _state.value.status
         val isActivelyPlayingOrPreparing =
@@ -979,13 +1124,17 @@ class AudioOutputEngine(
                     pendingRouteReconfigureOnPlay.set(true)
                     stopWorkerFlag.set(true)
                 }
-                pauseInternal(clearFocus = true, notice = AudioSafetyController.formatAutoPauseNotice(command.autoPauseReason))
+                applyImmediatePauseState(notice = AudioSafetyController.formatAutoPauseNotice(command.autoPauseReason))
+                val uiUpdateMs = (SystemClock.elapsedRealtime() - safetyStartMs).coerceAtLeast(0L)
                 enqueueSafetyReconfigure(
                     action = reconfigureAction,
                     clearPreferredMixer = command.requiresClearPreferredMixerAttributes,
                     releaseRing = false,
                     autoResume = false,
                     preserveAutoPauseNotice = true,
+                    autoPauseReason = command.autoPauseReason,
+                    safetyStartMs = safetyStartMs,
+                    uiUpdateMs = uiUpdateMs,
                 )
             }
             SafetyEventType.MODE_CHANGED_TO_SAFE -> {
@@ -1032,30 +1181,74 @@ class AudioOutputEngine(
         releaseRing: Boolean,
         autoResume: Boolean,
         preserveAutoPauseNotice: Boolean,
+        autoPauseReason: AutoPauseReason? = null,
+        safetyStartMs: Long = 0L,
+        uiUpdateMs: Long = 0L,
     ) {
         enqueueControlTask {
             if (releasedFlag.get()) return@enqueueControlTask
             engineLock.withLock {
+                var pauseIpcMs = 0L
+                var abandonFocusMs = 0L
+                var clearMixerMs = 0L
                 if (releaseRing) scratchRunner.releaseRingBuffer()
                 when (action) {
                     SafetyReconfigureAction.RECONFIGURE_NOW -> {
-                        if (clearPreferredMixer) routeAndMixerManager.clearPreferredMixerAttributesAsyncOnApi34(null)
+                        if (clearPreferredMixer) {
+                            val clearStart = SystemClock.elapsedRealtime()
+                            routeAndMixerManager.clearPreferredMixerAttributesAsyncOnApi34(null)
+                            clearMixerMs = (SystemClock.elapsedRealtime() - clearStart).coerceAtLeast(0L)
+                        }
                         reconfigureTrackIfLoadedLocked(autoResume, preserveAutoPauseNotice)
                     }
-                    SafetyReconfigureAction.PAUSE_IN_PLACE_KEEP_TRACK ->
-                        pauseInPlaceKeepTrackLocked(clearPreferredMixer)
-                    SafetyReconfigureAction.TEARDOWN_AND_REBIND_ON_PLAY ->
-                        teardownRouteInvalidatedSessionLocked(clearPreferredMixer)
+                    SafetyReconfigureAction.PAUSE_IN_PLACE_KEEP_TRACK -> {
+                        val metrics = pauseInPlaceKeepTrackLocked(clearPreferredMixer)
+                        pauseIpcMs = metrics.first
+                        abandonFocusMs = metrics.second
+                        clearMixerMs = metrics.third
+                    }
+                    SafetyReconfigureAction.TEARDOWN_AND_REBIND_ON_PLAY -> {
+                        val metrics = teardownRouteInvalidatedSessionLocked(clearPreferredMixer)
+                        pauseIpcMs = metrics.first
+                        abandonFocusMs = metrics.second
+                        clearMixerMs = metrics.third
+                    }
                     SafetyReconfigureAction.DEFER_RECONFIGURE_UNTIL_PLAY -> {
-                        if (clearPreferredMixer) routeAndMixerManager.clearPreferredMixerAttributesAsyncOnApi34(null)
-                        deferRouteReconfigureWhilePausedLocked()
+                        if (clearPreferredMixer) {
+                            val clearStart = SystemClock.elapsedRealtime()
+                            routeAndMixerManager.clearPreferredMixerAttributesAsyncOnApi34(null)
+                            clearMixerMs = (SystemClock.elapsedRealtime() - clearStart).coerceAtLeast(0L)
+                        }
+                        pauseIpcMs = deferRouteReconfigureWhilePausedLocked()
                     }
                     SafetyReconfigureAction.DIAGNOSTICS_ONLY -> {
-                        if (clearPreferredMixer) routeAndMixerManager.clearPreferredMixerAttributesAsyncOnApi34(null)
+                        if (clearPreferredMixer) {
+                            val clearStart = SystemClock.elapsedRealtime()
+                            routeAndMixerManager.clearPreferredMixerAttributesAsyncOnApi34(null)
+                            clearMixerMs = (SystemClock.elapsedRealtime() - clearStart).coerceAtLeast(0L)
+                        }
                         preloadController.clearPreloadedNextLocked()
                         _state.update { it.copy(safetyState = safetyController.state()) }
                         publishDiagnostics()
                     }
+                }
+                if (autoPauseReason != null && safetyStartMs > 0L) {
+                    val totalMs = (SystemClock.elapsedRealtime() - safetyStartMs).coerceAtLeast(0L)
+                    val sr = activeDecoder?.format?.sampleRateHz ?: audioTrackActualSampleRateHz
+                    diagnosticLogger?.logPerf("AUTO_PAUSE_LATENCY") {
+                        linkedMapOf(
+                            "reason" to autoPauseReason.name,
+                            "action" to action.name,
+                            "uiUpdateMs" to uiUpdateMs,
+                            "pauseIpcMs" to pauseIpcMs,
+                            "abandonFocusMs" to abandonFocusMs,
+                            "clearMixerMs" to clearMixerMs,
+                            "totalMs" to totalMs,
+                            "sr" to sr,
+                            "mode" to safetyController.state().mode.name,
+                        )
+                    }
+                    diagnosticLogger?.requestFlush()
                 }
             }
         }
@@ -1065,16 +1258,26 @@ class AudioOutputEngine(
      * Pauses an unpinned Safe-Mode session without destroying `AudioTrack` or `MediaCodec`,
      * avoiding HyperOS's multi-second USB HAL teardown stalls on `192 kHz` unplug/replug while
      * leaving [AudioOutputEngine.playLocked] + `DeadAudioTrack` recovery ready if HAL invalidates
-     * the underlying track.
+     * the underlying track. Returns `(pauseIpcMs, abandonFocusMs, clearMixerMs)`.
      */
-    private fun pauseInPlaceKeepTrackLocked(clearPreferredMixer: Boolean) {
+    private fun pauseInPlaceKeepTrackLocked(clearPreferredMixer: Boolean): Triple<Long, Long, Long> {
+        var clearMixerMs = 0L
         if (clearPreferredMixer && routeAndMixerManager.hasActivePreferredMixer) {
+            val clearStart = SystemClock.elapsedRealtime()
             routeAndMixerManager.clearPreferredMixerAttributesAsyncOnApi34(null)
+            clearMixerMs = (SystemClock.elapsedRealtime() - clearStart).coerceAtLeast(0L)
         }
         preloadController.clearPreloadedNextLocked()
         isPausedFlag.set(true)
-        activeAudioTrack?.let { trackWriter.safePause(it) }
+        val pauseStart = SystemClock.elapsedRealtime()
+        activeAudioTrack?.let { track ->
+            logUnderrunDeltaIfAny(track, trigger = "auto_pause_in_place")
+            trackWriter.safePause(track)
+        }
+        val pauseIpcMs = (SystemClock.elapsedRealtime() - pauseStart).coerceAtLeast(0L)
+        val focusStart = SystemClock.elapsedRealtime()
         routeAndMixerManager.abandonAudioFocusLocked()
+        val abandonFocusMs = (SystemClock.elapsedRealtime() - focusStart).coerceAtLeast(0L)
         scratchRunner.markRouteChangedWhilePaused()
         _state.update { current ->
             val safeStatus = if (current.status == PlaybackStatus.PLAYING || current.status == PlaybackStatus.PREPARING) {
@@ -1090,17 +1293,23 @@ class AudioOutputEngine(
             )
         }
         publishDiagnostics()
+        return Triple(pauseIpcMs, abandonFocusMs, clearMixerMs)
     }
 
     /**
      * Tears down the invalidated worker thread, dead `AudioTrack`, and decoder after a USB plug/unplug
      * or `BECOMING_NOISY` auto-pause while preserving [currentRequest] and exact [_playbackPositionMs]
      * so the very first Play tap cleanly rebinds on the active output route in `< 500 ms`.
+     * Returns `(pauseIpcMs, abandonFocusMs, clearMixerMs)`.
      */
-    private fun teardownRouteInvalidatedSessionLocked(clearPreferredMixer: Boolean) {
+    private fun teardownRouteInvalidatedSessionLocked(clearPreferredMixer: Boolean): Triple<Long, Long, Long> {
         preloadController.clearPreloadedNextLocked()
+        val teardownStart = SystemClock.elapsedRealtime()
         stopWorkerAndReleaseTrackLocked(clearMixer = clearPreferredMixer, asyncMixerClear = true)
+        val pauseIpcMs = (SystemClock.elapsedRealtime() - teardownStart).coerceAtLeast(0L)
+        val focusStart = SystemClock.elapsedRealtime()
         routeAndMixerManager.abandonAudioFocusLocked()
+        val abandonFocusMs = (SystemClock.elapsedRealtime() - focusStart).coerceAtLeast(0L)
         if (currentRequest != null) {
             pendingRouteReconfigureOnPlay.set(true)
         }
@@ -1118,13 +1327,16 @@ class AudioOutputEngine(
             )
         }
         publishDiagnostics()
+        return Triple(pauseIpcMs, abandonFocusMs, 0L)
     }
 
-    private fun deferRouteReconfigureWhilePausedLocked() {
+    private fun deferRouteReconfigureWhilePausedLocked(): Long {
         preloadController.clearPreloadedNextLocked()
         // Guard against a narrow race where an earlier queued play() started right before this task ran.
         isPausedFlag.set(true)
+        val pauseStart = SystemClock.elapsedRealtime()
         activeAudioTrack?.let { trackWriter.safePause(it) }
+        val pauseIpcMs = (SystemClock.elapsedRealtime() - pauseStart).coerceAtLeast(0L)
         if (currentRequest != null) {
             pendingRouteReconfigureOnPlay.set(true)
         }
@@ -1142,6 +1354,7 @@ class AudioOutputEngine(
             )
         }
         publishDiagnostics()
+        return pauseIpcMs
     }
 
     private fun reconfigureTrackIfLoadedLocked(autoResume: Boolean, preserveAutoPauseNotice: Boolean) {
@@ -1161,13 +1374,14 @@ class AudioOutputEngine(
         )
     }
 
-    private fun pauseInternal(clearFocus: Boolean, notice: String?) {
+    /**
+     * Immediately transitions the observable playback state and worker `isPausedFlag` to paused
+     * on the calling thread with zero Binder IPC (`AudioTrack.pause()` is offloaded to
+     * [controlExecutor] so Main-thread UI updates and route broadcasts never block on AudioFlinger).
+     */
+    private fun applyImmediatePauseState(notice: String?) {
         scratchRunner.abortScratch()
         val wasPaused = isPausedFlag.getAndSet(true)
-        activeAudioTrack?.let { track ->
-            logUnderrunDeltaIfAny(track, trigger = "pause")
-            trackWriter.safePause(track)
-        }
         val currentStatus = _state.value.status
         val needsStateUpdate = !wasPaused ||
             currentStatus == PlaybackStatus.PLAYING ||
@@ -1190,12 +1404,6 @@ class AudioOutputEngine(
                 )
             }
             publishDiagnostics()
-        }
-        diagnosticLogger?.requestFlush()
-        if (clearFocus && routeAndMixerManager.hasAudioFocus) {
-            enqueueControlTask {
-                if (!releasedFlag.get()) engineLock.withLock { routeAndMixerManager.abandonAudioFocusLocked() }
-            }
         }
     }
 
@@ -1243,8 +1451,14 @@ class AudioOutputEngine(
             CoalescedControlIntent.Play -> playLocked()
             CoalescedControlIntent.Pause -> {
                 routeAndMixerManager.resumeAfterTransientFocusLoss = false
-                pauseInternal(clearFocus = false, notice = null)
+                isPausedFlag.set(true)
+                activeAudioTrack?.let { track ->
+                    logUnderrunDeltaIfAny(track, trigger = "pause")
+                    trackWriter.safePause(track)
+                }
                 routeAndMixerManager.abandonAudioFocusLocked()
+                applyImmediatePauseState(notice = null)
+                diagnosticLogger?.requestFlush()
             }
             CoalescedControlIntent.Stop -> {
                 teardownFullEngineResourcesLocked(asyncMixerClear = true)
@@ -1274,6 +1488,18 @@ class AudioOutputEngine(
                     "(sr=${sampleRateHz}Hz, mode=${safetyController.state().mode})",
             )
         }
+        if (AudioStartPathPolicy.shouldRecordSlowAudioStage(elapsedMs)) {
+            val safety = safetyController.state()
+            diagnosticLogger?.logPerf("SLOW_AUDIO_STAGE") {
+                linkedMapOf(
+                    "stage" to "audioTrackBuildAndStart",
+                    "elapsedMs" to elapsedMs,
+                    "sr" to sampleRateHz,
+                    "mode" to safety.mode.name,
+                    "usb" to safety.isUsbAudioConnected,
+                )
+            }
+        }
     }
 
     private fun enqueueControlTask(block: () -> Unit) {
@@ -1285,6 +1511,7 @@ class AudioOutputEngine(
         audioTrackActualSampleRateHz = configured.actualSampleRateHz
         audioTrackActualEncodingLabel = configured.actualEncodingLabel
         activeTrackUsesBitPerfectOrPreferredRoute = isBitPerfectOrPreferredRoute(configured)
+        activeTrackPinnedToPreferredUsbDevice = configured.isPinnedToPreferredUsbDevice
         lastReportedUnderrunCount = 0
         return configured.track
     }
@@ -1299,16 +1526,24 @@ class AudioOutputEngine(
         forceAudioFocus: Boolean = false,
         clearPendingSeek: Boolean = true,
     ): WorkerStartResult {
+        lastWorkerStartFocusMs = 0L
+        lastWorkerStartTrackPlayMs = 0L
         val decoder = activeDecoder ?: return WorkerStartResult.AUDIO_TRACK_FAILED
-        val track = activeAudioTrack ?: return WorkerStartResult.AUDIO_TRACK_FAILED
-        if (!trackWriter.isTrackHealthy(track)) return WorkerStartResult.AUDIO_TRACK_FAILED
-        if (!routeAndMixerManager.requestAudioFocusLocked(forceRequest = forceAudioFocus)) {
+        val track = activeAudioTrack?.takeIf { trackWriter.isTrackHealthy(it) }
+            ?: return WorkerStartResult.AUDIO_TRACK_FAILED
+        val focusStartMs = SystemClock.elapsedRealtime()
+        val focusGranted = routeAndMixerManager.requestAudioFocusLocked(forceRequest = forceAudioFocus)
+        lastWorkerStartFocusMs = (SystemClock.elapsedRealtime() - focusStartMs).coerceAtLeast(0L)
+        if (!focusGranted) {
             isPausedFlag.set(true)
             trackWriter.safePause(track)
             _state.update { it.copy(status = PlaybackStatus.PAUSED, errorMessage = "Audio focus denied") }
             return WorkerStartResult.AUDIO_FOCUS_DENIED
         }
-        if (!trackWriter.safePlay(track)) {
+        val playStartMs = SystemClock.elapsedRealtime()
+        val playOk = trackWriter.safePlay(track)
+        lastWorkerStartTrackPlayMs = (SystemClock.elapsedRealtime() - playStartMs).coerceAtLeast(0L)
+        if (!playOk) {
             isPausedFlag.set(true)
             return WorkerStartResult.AUDIO_TRACK_FAILED
         }
@@ -1562,6 +1797,7 @@ class AudioOutputEngine(
         audioTrackActualSampleRateHz = 0
         audioTrackActualEncodingLabel = "None"
         activeTrackUsesBitPerfectOrPreferredRoute = false
+        activeTrackPinnedToPreferredUsbDevice = false
         lastReportedUnderrunCount = 0
     }
 

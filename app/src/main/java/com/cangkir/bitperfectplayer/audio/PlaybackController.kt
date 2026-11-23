@@ -557,6 +557,50 @@ class PlaybackController(
         PlaybackForegroundService.stopService(appContext)
     }
 
+    /**
+     * Stops playback and completely clears the active Now Playing session, playback queue,
+     * foreground media notification, and persisted last-session state so `MiniPlayerBar`
+     * disappears immediately and is not re-seeded until the user starts a new track.
+     */
+    fun dismissActiveSession(source: String = "MINI_PLAYER_SWIPE") {
+        foregroundHandshakeJob?.cancel()
+        queueReorderSyncJob?.cancel()
+        positionPersistenceJob?.cancel()
+        positionPersistenceJob = null
+        fingerprintJob?.cancel()
+        fingerprintJob = null
+        foregroundPlaybackGate.cancelPendingHandshake()
+        hasRecordedHistoryForActiveTrack = false
+        hasRestoredInitialSession = true
+        playCountTracker.clearSession()?.let { persistPlayCountFlush(it) }
+        val emptySnapshot = queueManager.clear()
+        engine.logSessionCleared(source = source)
+        _state.update { current ->
+            current.copy(
+                queue = emptySnapshot,
+                queueContext = QueueContext.allSongs(),
+                activeTrack = null,
+                activeFingerprint = null,
+                engineState = current.engineState.copy(
+                    status = PlaybackStatus.IDLE,
+                    activeTrackUri = null,
+                    durationMs = 0L,
+                    errorMessage = null,
+                    lastAutoPauseNotice = null,
+                    isPreparingPlayback = false,
+                    preservePlayingUiDuringTransition = false,
+                ),
+            )
+        }
+        engine.preparePendingTrackPosition(0L)
+        engine.setNextTrack(null)
+        engine.stop()
+        PlaybackForegroundService.stopService(appContext)
+        scope.launch(Dispatchers.IO) {
+            runCatching { preferencesRepository.clearLastPlaybackState() }
+        }
+    }
+
     fun toggleShuffle() {
         val nextEnabled = !queueManager.snapshot().shuffleEnabled
         val snapshot = queueManager.setShuffle(nextEnabled)
@@ -1088,16 +1132,18 @@ class PlaybackController(
                 }
             }
 
-            val qCtx = _state.value.queueContext
-            runCatching {
-                preferencesRepository.saveLastPlaybackState(
-                    trackUri = track.uriString,
-                    contentFingerprint = resolvedFp,
-                    positionMs = playbackPositionMs.value,
-                    queueSourceType = qCtx.sourceType,
-                    queueSourceKey = qCtx.sourceKey,
-                    queueSourceLabel = qCtx.sourceLabel,
-                )
+            if (_state.value.activeTrack?.uriString == track.uriString) {
+                val qCtx = _state.value.queueContext
+                runCatching {
+                    preferencesRepository.saveLastPlaybackState(
+                        trackUri = track.uriString,
+                        contentFingerprint = resolvedFp,
+                        positionMs = playbackPositionMs.value,
+                        queueSourceType = qCtx.sourceType,
+                        queueSourceKey = qCtx.sourceKey,
+                        queueSourceLabel = qCtx.sourceLabel,
+                    )
+                }
             }
         }
     }

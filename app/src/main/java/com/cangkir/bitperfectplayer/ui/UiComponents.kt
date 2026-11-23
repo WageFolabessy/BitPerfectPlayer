@@ -1,11 +1,16 @@
 package com.cangkir.bitperfectplayer.ui
 
 import android.graphics.Bitmap
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -38,16 +43,26 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChanged
+import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -69,6 +84,9 @@ import com.cangkir.bitperfectplayer.ui.theme.OnAmberIndicatedContainer
 import com.cangkir.bitperfectplayer.ui.theme.OnEmeraldSafeContainer
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
+
+const val MINI_PLAYER_BAR_TEST_TAG = "mini_player_bar"
 
 fun formatDurationMs(durationMs: Long): String = AudioFormatFormatter.formatDurationMs(durationMs)
 
@@ -348,7 +366,8 @@ private fun MiniPlayerProgressBar(
 }
 
 /**
- * Minimalist persistent bottom mini-player bar with local album art thumbnail and >= 48 dp targets.
+ * Minimalist persistent bottom mini-player bar with local album art thumbnail, `>= 48 dp` targets,
+ * and right-to-left swipe-to-dismiss (stopping playback and clearing the active Now Playing session).
  */
 @Composable
 fun MiniPlayerBar(
@@ -359,8 +378,29 @@ fun MiniPlayerBar(
     onTogglePlayPause: () -> Unit,
     onNext: () -> Unit,
     modifier: Modifier = Modifier,
+    onDismissPlayback: () -> Unit = {},
 ) {
     val track = playbackState.activeTrack ?: return
+    val currentOnDismissPlayback by rememberUpdatedState(onDismissPlayback)
+    val coroutineScope = rememberCoroutineScope()
+    val density = LocalDensity.current
+    val minDismissThresholdPx = with(density) { MiniPlayerSwipeMath.MIN_DISMISS_THRESHOLD_DP.dp.toPx() }
+    val maxDismissThresholdPx = with(density) { MiniPlayerSwipeMath.MAX_DISMISS_THRESHOLD_DP.dp.toPx() }
+    val flingVelocityThresholdPxPerSec =
+        with(density) { MiniPlayerSwipeMath.FLING_VELOCITY_THRESHOLD_DP_PER_SEC.dp.toPx() }
+    val minFlingDragPx = with(density) { MiniPlayerSwipeMath.MIN_FLING_DRAG_DP.dp.toPx() }
+
+    var containerWidthPx by remember { mutableFloatStateOf(0f) }
+    val translationX = remember { Animatable(0f) }
+    LaunchedEffect(track.uriString) {
+        translationX.snapTo(0f)
+    }
+    val dismissThresholdPx = MiniPlayerSwipeMath.computeDismissThresholdPx(
+        containerWidthPx = containerWidthPx,
+        minThresholdPx = minDismissThresholdPx,
+        maxThresholdPx = maxDismissThresholdPx,
+    )
+
     val engineTrackUri = playbackState.engineState.activeTrackUri?.toString()
     val diagnosticsMatchTrack = TrackTransitionStatePolicy.isEngineSyncedToActiveTrack(
         activeTrack = track,
@@ -385,7 +425,118 @@ fun MiniPlayerBar(
     }
 
     Surface(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag(MINI_PLAYER_BAR_TEST_TAG)
+            .onSizeChanged { containerWidthPx = it.width.toFloat() }
+            .pointerInput(
+                track.uriString,
+                minDismissThresholdPx,
+                maxDismissThresholdPx,
+                flingVelocityThresholdPxPerSec,
+                minFlingDragPx,
+            ) {
+                val touchSlop = viewConfiguration.touchSlop
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    val pointerId = down.id
+                    val velocityTracker = VelocityTracker()
+                    velocityTracker.addPosition(down.uptimeMillis, down.position)
+
+                    var prevPos = down.position
+                    var totalDx = 0f
+                    var totalDy = 0f
+                    var rawDragX = 0f
+                    var horizontalLocked = false
+                    var gestureAborted = false
+                    var dragEnded = false
+
+                    while (!dragEnded && !gestureAborted) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull { it.id == pointerId } ?: event.changes.firstOrNull()
+                        if (change == null || !change.pressed) {
+                            dragEnded = true
+                        } else {
+                            velocityTracker.addPosition(change.uptimeMillis, change.position)
+                            val stepDx = change.position.x - prevPos.x
+                            val stepDy = change.position.y - prevPos.y
+                            prevPos = change.position
+                            totalDx += stepDx
+                            totalDy += stepDy
+
+                            if (!horizontalLocked) {
+                                when {
+                                    change.isConsumed ||
+                                        MiniPlayerSwipeMath.shouldAbortForVerticalDrag(totalDx, totalDy, touchSlop) -> {
+                                        gestureAborted = true
+                                    }
+                                    MiniPlayerSwipeMath.shouldLockHorizontalDrag(totalDx, totalDy, touchSlop) -> {
+                                        horizontalLocked = true
+                                        rawDragX = totalDx
+                                        if (change.positionChanged()) {
+                                            change.consume()
+                                        }
+                                        val clamped = MiniPlayerSwipeMath.clampLeftwardTranslationPx(
+                                            rawDragX = rawDragX,
+                                            containerWidthPx = size.width.toFloat(),
+                                        )
+                                        coroutineScope.launch { translationX.snapTo(clamped) }
+                                    }
+                                }
+                            } else {
+                                rawDragX += stepDx
+                                if (change.positionChanged()) {
+                                    change.consume()
+                                }
+                                val clamped = MiniPlayerSwipeMath.clampLeftwardTranslationPx(
+                                    rawDragX = rawDragX,
+                                    containerWidthPx = size.width.toFloat(),
+                                )
+                                coroutineScope.launch { translationX.snapTo(clamped) }
+                            }
+                        }
+                    }
+
+                    if (horizontalLocked && !gestureAborted) {
+                        val effectiveThresholdPx = MiniPlayerSwipeMath.computeDismissThresholdPx(
+                            containerWidthPx = size.width.toFloat(),
+                            minThresholdPx = minDismissThresholdPx,
+                            maxThresholdPx = maxDismissThresholdPx,
+                        )
+                        val velocityX = velocityTracker.calculateVelocity().x
+                        val shouldDismiss = MiniPlayerSwipeMath.shouldDismissOnRelease(
+                            totalDragX = rawDragX,
+                            velocityXPxPerSec = velocityX,
+                            dismissThresholdPx = effectiveThresholdPx,
+                            flingVelocityThresholdPxPerSec = flingVelocityThresholdPxPerSec,
+                            minFlingDragPx = minFlingDragPx,
+                        )
+                        if (shouldDismiss) {
+                            coroutineScope.launch { translationX.snapTo(0f) }
+                            currentOnDismissPlayback()
+                        } else {
+                            coroutineScope.launch {
+                                translationX.animateTo(
+                                    targetValue = 0f,
+                                    animationSpec = spring(
+                                        dampingRatio = Spring.DampingRatioNoBouncy,
+                                        stiffness = Spring.StiffnessMediumLow,
+                                    ),
+                                )
+                            }
+                        }
+                    } else if (translationX.value != 0f) {
+                        coroutineScope.launch { translationX.snapTo(0f) }
+                    }
+                }
+            }
+            .graphicsLayer {
+                this.translationX = translationX.value
+                this.alpha = MiniPlayerSwipeMath.computeAlpha(
+                    translationX = translationX.value,
+                    dismissThresholdPx = dismissThresholdPx,
+                )
+            },
         color = MaterialTheme.colorScheme.surfaceVariant,
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {

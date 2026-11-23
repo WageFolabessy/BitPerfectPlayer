@@ -58,6 +58,8 @@ import com.cangkir.bitperfectplayer.diagnostics.DiagnosticLogStats
 import com.cangkir.bitperfectplayer.library.LibrarySnapshot
 import com.cangkir.bitperfectplayer.ui.SleepTimerBottomSheet
 import com.cangkir.bitperfectplayer.ui.WindowLayoutMetrics
+import com.cangkir.bitperfectplayer.ui.nowplaying.NowPlayingSwipeExclusionBounds
+import com.cangkir.bitperfectplayer.ui.nowplaying.SettingsTabSwipeContainer
 import com.cangkir.bitperfectplayer.ui.theme.AmberIndicated
 import com.cangkir.bitperfectplayer.ui.theme.EmeraldSafe
 import kotlinx.coroutines.flow.StateFlow
@@ -99,6 +101,7 @@ fun SettingsScreen(
     onImportLocalBackup: (Uri) -> Unit,
     onOpenDiagnostics: () -> Unit,
     onBack: (() -> Unit)? = null,
+    onSwipeToNowPlaying: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     var showSleepTimerSheet by remember { mutableStateOf(false) }
@@ -229,111 +232,122 @@ fun SettingsScreen(
             )
         },
     ) { innerPadding ->
-        Box(
+        val swipeExclusionBounds = remember { NowPlayingSwipeExclusionBounds() }
+        SettingsTabSwipeContainer(
+            exclusionBounds = swipeExclusionBounds,
+            onSwipeLeftToRight = onSwipeToNowPlaying ?: onBack,
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding),
-            contentAlignment = Alignment.TopCenter,
         ) {
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .widthIn(max = WindowLayoutMetrics.EXPANDED_CONTENT_MAX_WIDTH_DP.dp),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.TopCenter,
             ) {
-                item(key = "section_audio_engine", contentType = "settings_group") {
-                    val audioEngineUiState = SettingsAudioEngineUiState(
-                        gaplessEnabled = playbackState.gaplessEnabled,
-                        isBitPerfectOptIn = isBitPerfectOptIn,
-                        isBitPerfectMixerActive = diagnostics.isBitPerfectMixerActive,
-                        rgConfig = rgConfig,
-                        modeLabel = modeLabel,
-                        modeDotColor = modeDotColor,
-                        activeDeviceName = safetyState.activeDeviceName,
-                    )
-                    val audioEngineCallbacks = remember(
-                        onSetGaplessEnabled,
-                        onSetReplayGainMode,
-                        onSetReplayGainPreampDb,
-                        onSetReplayGainPreventClipping,
-                        onOpenDiagnostics,
-                    ) {
-                        SettingsAudioEngineCallbacks(
-                            onSetGaplessEnabled = onSetGaplessEnabled,
-                            onSetReplayGainMode = onSetReplayGainMode,
-                            onSetReplayGainPreampDb = onSetReplayGainPreampDb,
-                            onSetReplayGainPreventClipping = onSetReplayGainPreventClipping,
-                            onOpenSleepTimer = { showSleepTimerSheet = true },
-                            onOpenDiagnostics = onOpenDiagnostics,
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .widthIn(max = WindowLayoutMetrics.EXPANDED_CONTENT_MAX_WIDTH_DP.dp),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    item(key = "section_audio_engine", contentType = "settings_group") {
+                        val audioEngineUiState = SettingsAudioEngineUiState(
+                            gaplessEnabled = playbackState.gaplessEnabled,
+                            isBitPerfectOptIn = isBitPerfectOptIn,
+                            isBitPerfectMixerActive = diagnostics.isBitPerfectMixerActive,
+                            rgConfig = rgConfig,
+                            modeLabel = modeLabel,
+                            modeDotColor = modeDotColor,
+                            activeDeviceName = safetyState.activeDeviceName,
+                        )
+                        val audioEngineCallbacks = remember(
+                            onSetGaplessEnabled,
+                            onSetReplayGainMode,
+                            onSetReplayGainPreampDb,
+                            onSetReplayGainPreventClipping,
+                            onOpenDiagnostics,
+                            swipeExclusionBounds,
+                        ) {
+                            SettingsAudioEngineCallbacks(
+                                onSetGaplessEnabled = onSetGaplessEnabled,
+                                onSetReplayGainMode = onSetReplayGainMode,
+                                onSetReplayGainPreampDb = onSetReplayGainPreampDb,
+                                onSetReplayGainPreventClipping = onSetReplayGainPreventClipping,
+                                onOpenSleepTimer = { showSleepTimerSheet = true },
+                                onOpenDiagnostics = onOpenDiagnostics,
+                                onPreampSliderBoundsInRootChanged = { rect ->
+                                    swipeExclusionBounds.seekSliderRectInRoot = rect
+                                },
+                            )
+                        }
+                        SettingsAudioEngineSection(
+                            uiState = audioEngineUiState,
+                            sleepTimerStateFlow = sleepTimerStateFlow,
+                            callbacks = audioEngineCallbacks,
                         )
                     }
-                    SettingsAudioEngineSection(
-                        uiState = audioEngineUiState,
-                        sleepTimerStateFlow = sleepTimerStateFlow,
-                        callbacks = audioEngineCallbacks,
-                    )
-                }
 
-                item(key = "section_display", contentType = "settings_group") {
-                    SettingsDisplaySection(
-                        defaultHomepage = defaultHomepage,
-                        onOpenDefaultHomepagePicker = { showDefaultHomepageSheet = true },
-                        artworkStyle = artworkStyle,
-                        onSetArtworkStyle = onSetArtworkStyle,
-                        spectrumVisualizerEnabled = spectrumVisualizerEnabled,
-                        onSetSpectrumVisualizerEnabled = onSetSpectrumVisualizerEnabled,
-                        spectrumColorStyle = spectrumColorStyle,
-                        onSetSpectrumColorStyle = onSetSpectrumColorStyle,
-                        spectrumSparksEnabled = spectrumSparksEnabled,
-                        onSetSpectrumSparksEnabled = onSetSpectrumSparksEnabled,
-                        dynamicCoverThemeEnabled = dynamicCoverThemeEnabled,
-                        onSetDynamicCoverThemeEnabled = onSetDynamicCoverThemeEnabled,
-                    )
-                }
+                    item(key = "section_display", contentType = "settings_group") {
+                        SettingsDisplaySection(
+                            defaultHomepage = defaultHomepage,
+                            onOpenDefaultHomepagePicker = { showDefaultHomepageSheet = true },
+                            artworkStyle = artworkStyle,
+                            onSetArtworkStyle = onSetArtworkStyle,
+                            spectrumVisualizerEnabled = spectrumVisualizerEnabled,
+                            onSetSpectrumVisualizerEnabled = onSetSpectrumVisualizerEnabled,
+                            spectrumColorStyle = spectrumColorStyle,
+                            onSetSpectrumColorStyle = onSetSpectrumColorStyle,
+                            spectrumSparksEnabled = spectrumSparksEnabled,
+                            onSetSpectrumSparksEnabled = onSetSpectrumSparksEnabled,
+                            dynamicCoverThemeEnabled = dynamicCoverThemeEnabled,
+                            onSetDynamicCoverThemeEnabled = onSetDynamicCoverThemeEnabled,
+                        )
+                    }
 
-                item(key = "section_library_storage", contentType = "settings_group") {
-                    SettingsLibraryStorageSection(
-                        sortedFolders = sortedFolders,
-                        onAddFolderClick = { folderPickerLauncher.launch(null) },
-                        onRefreshLibrary = onRefreshLibrary,
-                        onRemoveSafFolder = onRemoveSafFolder,
-                    )
-                }
+                    item(key = "section_library_storage", contentType = "settings_group") {
+                        SettingsLibraryStorageSection(
+                            sortedFolders = sortedFolders,
+                            onAddFolderClick = { folderPickerLauncher.launch(null) },
+                            onRefreshLibrary = onRefreshLibrary,
+                            onRemoveSafFolder = onRemoveSafFolder,
+                        )
+                    }
 
-                item(key = "section_local_backup", contentType = "settings_group") {
-                    SettingsLocalBackupSection(
-                        onExportClick = {
-                            backupExportLauncher.launch(LocalBackupRepository.suggestBackupFileName())
-                        },
-                        onImportClick = {
-                            backupImportLauncher.launch(arrayOf("application/json", "*/*"))
-                        },
-                    )
-                }
+                    item(key = "section_local_backup", contentType = "settings_group") {
+                        SettingsLocalBackupSection(
+                            onExportClick = {
+                                backupExportLauncher.launch(LocalBackupRepository.suggestBackupFileName())
+                            },
+                            onImportClick = {
+                                backupImportLauncher.launch(arrayOf("application/json", "*/*"))
+                            },
+                        )
+                    }
 
-                item(key = "section_diagnostic_logging", contentType = "settings_group") {
-                    SettingsDiagnosticLoggingSection(
-                        enabled = diagnosticLoggingEnabled,
-                        logStats = diagnosticLogStats,
-                        onSetEnabled = onSetDiagnosticLoggingEnabled,
-                        onExportClick = {
-                            diagnosticExportLauncher.launch(DiagnosticLogExporter.suggestZipFileName(appVersionName))
-                        },
-                        onShareClick = onShareDiagnosticLogs,
-                        onClearClick = onClearDiagnosticLogs,
-                    )
-                }
+                    item(key = "section_diagnostic_logging", contentType = "settings_group") {
+                        SettingsDiagnosticLoggingSection(
+                            enabled = diagnosticLoggingEnabled,
+                            logStats = diagnosticLogStats,
+                            onSetEnabled = onSetDiagnosticLoggingEnabled,
+                            onExportClick = {
+                                diagnosticExportLauncher.launch(DiagnosticLogExporter.suggestZipFileName(appVersionName))
+                            },
+                            onShareClick = onShareDiagnosticLogs,
+                            onClearClick = onClearDiagnosticLogs,
+                        )
+                    }
 
-                item(key = "section_about_privacy", contentType = "settings_group") {
-                    SettingsAboutPrivacySection(
-                        appVersionName = appVersionName,
-                        indexedLocalTrackCount = libraryState.allSongs.size,
-                    )
-                }
+                    item(key = "section_about_privacy", contentType = "settings_group") {
+                        SettingsAboutPrivacySection(
+                            appVersionName = appVersionName,
+                            indexedLocalTrackCount = libraryState.allSongs.size,
+                        )
+                    }
 
-                item(key = "settings_bottom_spacer", contentType = "spacer") {
-                    Spacer(modifier = Modifier.height(8.dp))
+                    item(key = "settings_bottom_spacer", contentType = "spacer") {
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
                 }
             }
         }

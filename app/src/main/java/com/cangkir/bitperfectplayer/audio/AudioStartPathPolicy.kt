@@ -23,6 +23,7 @@ enum class TogglePlayPauseAction {
 object AudioStartPathPolicy {
     const val API_34_UPSIDE_DOWN_CAKE = 34
     const val SLOW_AUDIO_STAGE_THRESHOLD_MS = 150L
+    const val WRITE_BLOCKING_STALL_THRESHOLD_MS = 250L
     const val PREPARING_INDICATOR_DELAY_MS = 250L
 
     fun decideMixerNegotiationStrategy(
@@ -48,7 +49,11 @@ object AudioStartPathPolicy {
 
     fun shouldScanReplayGainMetadata(mode: ReplayGainMode): Boolean = mode != ReplayGainMode.OFF
 
-    fun shouldLogSlowAudioStage(isDebugBuild: Boolean, elapsedMs: Long): Boolean = isDebugBuild && elapsedMs > SLOW_AUDIO_STAGE_THRESHOLD_MS
+    fun shouldRecordSlowAudioStage(elapsedMs: Long): Boolean = elapsedMs > SLOW_AUDIO_STAGE_THRESHOLD_MS
+
+    fun shouldLogSlowAudioStage(isDebugBuild: Boolean, elapsedMs: Long): Boolean = isDebugBuild && shouldRecordSlowAudioStage(elapsedMs)
+
+    fun isSlowBlockingWrite(elapsedMs: Long): Boolean = elapsedMs >= WRITE_BLOCKING_STALL_THRESHOLD_MS
 
     fun resolveTogglePlayPauseAction(
         isPlaying: Boolean,

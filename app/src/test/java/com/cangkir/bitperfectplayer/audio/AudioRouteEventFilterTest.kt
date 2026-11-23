@@ -194,4 +194,95 @@ class AudioRouteEventFilterTest {
         assertEquals(usbIemSink.id, filter.suppressedNoisyExternalDeviceId(nowElapsedMs = 9_000L))
         assertNull(filter.suppressedNoisyExternalDeviceId(nowElapsedMs = 9_001L))
     }
+
+    @Test
+    fun hasUsbAudioInterface_matchesOnlyUsbClassAudioDevices() {
+        assertTrue(AudioRouteEventFilter.hasUsbAudioInterface(intArrayOf(1)))
+        assertTrue(AudioRouteEventFilter.hasUsbAudioInterface(intArrayOf(3, 1, 255)))
+        assertEquals(false, AudioRouteEventFilter.hasUsbAudioInterface(intArrayOf()))
+        assertEquals(false, AudioRouteEventFilter.hasUsbAudioInterface(intArrayOf(8))) // Mass storage
+        assertEquals(false, AudioRouteEventFilter.hasUsbAudioInterface(intArrayOf(3, 10))) // HID + CDC
+    }
+
+    @Test
+    fun earlyUsbAudioAttach_triggersSingleDeviceConnected_andCoalescesDelayedOnAudioDevicesAdded() {
+        val filter = AudioRouteEventFilter(coalesceWindowMs = 8_000L)
+        filter.initialize(internalSpeaker)
+        filter.onDevicesAdded(listOf(internalSpeaker), preferredActiveAfterAdd = internalSpeaker)
+
+        // T+0ms: UsbManager.ACTION_USB_DEVICE_ATTACHED arrives before AudioPolicyService enumerates sink
+        val earlyDecision = filter.onUsbAudioAttachedEarly(
+            usbDeviceName = "KZ EDX Pro 2 USB-C",
+            nowElapsedMs = 1_000L,
+        )
+        assertTrue(earlyDecision is RouteFilterDecision.DeviceConnected)
+        earlyDecision as RouteFilterDecision.DeviceConnected
+        assertEquals(AudioRouteEventFilter.EARLY_USB_PROVISIONAL_DEVICE_ID, earlyDecision.device.id)
+        assertEquals("KZ EDX Pro 2 USB-C", earlyDecision.device.name)
+        assertTrue(earlyDecision.device.isUsbOutput)
+
+        // Duplicate early attach broadcast within coalesce window is ignored
+        assertEquals(
+            RouteFilterDecision.Ignore,
+            filter.onUsbAudioAttachedEarly(usbDeviceName = "KZ EDX Pro 2 USB-C", nowElapsedMs = 1_100L),
+        )
+
+        // T+3,200ms: Delayed AudioDeviceCallback.onAudioDevicesAdded arrives with real AudioDeviceInfo ID 42
+        val delayedAddDecision = filter.onDevicesAdded(
+            addedDevices = listOf(usbIemSink, usbIemMicSource),
+            preferredActiveAfterAdd = usbIemSink,
+            nowElapsedMs = 4_200L,
+        )
+        assertEquals(
+            RouteFilterDecision.CoalescedUsbConnectMetadataSync(device = usbIemSink),
+            delayedAddDecision,
+        )
+        assertEquals(usbIemSink, filter.currentActiveDevice())
+    }
+
+    @Test
+    fun earlyUsbAudioDetach_triggersImmediateDisconnect_andCoalescesDelayedNoisyAndDevicesRemoved() {
+        val filter = AudioRouteEventFilter(coalesceWindowMs = 8_000L)
+        filter.initialize(usbIemSink)
+        filter.onDevicesAdded(listOf(usbIemSink), preferredActiveAfterAdd = usbIemSink)
+
+        // T+0ms: UsbManager.ACTION_USB_DEVICE_DETACHED fires immediately on physical unplug
+        val earlyDetach = filter.onUsbAudioDetachedEarly(
+            nowElapsedMs = 2_000L,
+            resolvedFallbackDevice = internalSpeaker,
+        )
+        assertEquals(
+            RouteFilterDecision.UsbDisconnected(
+                removedUsbDeviceId = usbIemSink.id,
+                fallbackDevice = internalSpeaker,
+            ),
+            earlyDetach,
+        )
+        assertEquals(internalSpeaker, filter.currentActiveDevice())
+        assertEquals(usbIemSink.id, filter.suppressedNoisyExternalDeviceId(nowElapsedMs = 2_500L))
+
+        // T+400ms: Delayed ACTION_AUDIO_BECOMING_NOISY arrives -> already handled by early detach, coalesced cleanup only
+        assertEquals(
+            RouteFilterDecision.CoalescedDisconnectCleanup(
+                removedUsbDeviceId = usbIemSink.id,
+                refreshedDevice = internalSpeaker,
+            ),
+            filter.onBecomingNoisy(nowElapsedMs = 2_400L, resolvedFallbackDevice = internalSpeaker),
+        )
+
+        // T+3,800ms: Delayed AudioDeviceCallback.onAudioDevicesRemoved arrives -> coalesced cleanup only
+        val delayedRemove = filter.onDevicesRemoved(
+            removedDevices = listOf(usbIemSink, usbIemMicSource),
+            preferredActiveAfterRemove = internalSpeaker,
+            nowElapsedMs = 5_800L,
+        )
+        assertEquals(
+            RouteFilterDecision.CoalescedDisconnectCleanup(
+                removedUsbDeviceId = usbIemSink.id,
+                refreshedDevice = internalSpeaker,
+            ),
+            delayedRemove,
+        )
+        assertNull(filter.suppressedNoisyExternalDeviceId(nowElapsedMs = 6_000L))
+    }
 }

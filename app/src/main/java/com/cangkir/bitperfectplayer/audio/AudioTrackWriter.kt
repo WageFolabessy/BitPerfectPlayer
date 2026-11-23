@@ -32,6 +32,8 @@ internal class AudioTrackWriter(
     private val pendingSeekMs: AtomicLong,
     private val loadGeneration: AtomicLong,
     private val diagnosticLogger: LocalDiagnosticLogger? = null,
+    private val safetyModeProvider: () -> AudioOutputMode = { AudioOutputMode.SAFE_VOLUME_MODE },
+    private val isUsbConnectedProvider: () -> Boolean = { false },
 ) {
     // Strictly read-only, lifecycle-gated PCM tap (~192 KB) for the radial FFT spectrum visualizer.
     // Allocated lazily ONLY when active; released immediately when disabled, backgrounded, or stopped.
@@ -246,18 +248,50 @@ internal class AudioTrackWriter(
         Result.failure(e)
     }
 
-    fun safePlay(track: AudioTrack): Boolean = runCatching {
-        if (track.state != AudioTrack.STATE_INITIALIZED) return@runCatching false
-        if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
-            track.play()
+    fun safePlay(track: AudioTrack): Boolean {
+        val startMs = SystemClock.elapsedRealtime()
+        val ok = runCatching {
+            if (track.state != AudioTrack.STATE_INITIALIZED) return@runCatching false
+            if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
+                track.play()
+            }
+            track.playState == AudioTrack.PLAYSTATE_PLAYING
+        }.getOrDefault(false)
+        val elapsedMs = (SystemClock.elapsedRealtime() - startMs).coerceAtLeast(0L)
+        if (AudioStartPathPolicy.shouldRecordSlowAudioStage(elapsedMs)) {
+            val sr = runCatching { track.sampleRate }.getOrDefault(0)
+            diagnosticLogger?.logPerf("SLOW_AUDIO_STAGE") {
+                linkedMapOf(
+                    "stage" to "audioTrackPlay",
+                    "elapsedMs" to elapsedMs,
+                    "ok" to ok,
+                    "sr" to sr,
+                    "mode" to safetyModeProvider().name,
+                    "usb" to isUsbConnectedProvider(),
+                )
+            }
         }
-        track.playState == AudioTrack.PLAYSTATE_PLAYING
-    }.getOrDefault(false)
+        return ok
+    }
 
     fun safePause(track: AudioTrack) {
+        val startMs = SystemClock.elapsedRealtime()
         runCatching {
             if (track.state == AudioTrack.STATE_INITIALIZED && track.playState == AudioTrack.PLAYSTATE_PLAYING) {
                 track.pause()
+            }
+        }
+        val elapsedMs = (SystemClock.elapsedRealtime() - startMs).coerceAtLeast(0L)
+        if (AudioStartPathPolicy.shouldRecordSlowAudioStage(elapsedMs)) {
+            val sr = runCatching { track.sampleRate }.getOrDefault(0)
+            diagnosticLogger?.logPerf("SLOW_AUDIO_STAGE") {
+                linkedMapOf(
+                    "stage" to "audioTrackPause",
+                    "elapsedMs" to elapsedMs,
+                    "sr" to sr,
+                    "mode" to safetyModeProvider().name,
+                    "usb" to isUsbConnectedProvider(),
+                )
             }
         }
     }
@@ -479,22 +513,28 @@ internal class AudioTrackWriter(
     private fun writeFloatArrayChunk(track: AudioTrack, floatBuffer: FloatArray, totalFloats: Int, expectedGeneration: Long): Int {
         var floatOffset = 0
         var zeroWriteStartMs = -1L
+        var zeroWrites = 0
         while (floatOffset < totalFloats && canContinueWrite(expectedGeneration)) {
+            val writeStartMs = SystemClock.elapsedRealtime()
             val written = track.write(
                 floatBuffer,
                 floatOffset,
                 totalFloats - floatOffset,
                 AudioTrack.WRITE_BLOCKING,
             )
+            val writeMs = (SystemClock.elapsedRealtime() - writeStartMs).coerceAtLeast(0L)
             if (written < 0) {
                 throw classifyWriteFailure("AudioTrack float write failed with code $written", written)
             }
             if (written == 0) {
+                zeroWrites++
                 if (isPausedFlag.get() || !canContinueWrite(expectedGeneration)) return floatOffset
-                zeroWriteStartMs = checkZeroWriteStall(track, zeroWriteStartMs)
+                zeroWriteStartMs = checkZeroWriteStall(track, zeroWriteStartMs, zeroWrites)
                 if (!sleepUninterrupted(2L)) return floatOffset
             } else {
+                logWriteStallIfNeeded(track, writeMs, written * 4, zeroWrites)
                 zeroWriteStartMs = -1L
+                zeroWrites = 0
                 floatOffset += written
             }
         }
@@ -529,21 +569,27 @@ internal class AudioTrackWriter(
             directBuffer.flip()
 
             var zeroWriteStartMs = -1L
+            var zeroWrites = 0
             while (directBuffer.hasRemaining() && canContinueWrite(expectedGeneration)) {
+                val writeStartMs = SystemClock.elapsedRealtime()
                 val written = track.write(
                     directBuffer,
                     directBuffer.remaining(),
                     AudioTrack.WRITE_BLOCKING,
                 )
+                val writeMs = (SystemClock.elapsedRealtime() - writeStartMs).coerceAtLeast(0L)
                 if (written < 0) {
                     throw classifyWriteFailure("AudioTrack ByteBuffer write failed with code $written", written)
                 }
                 if (written == 0) {
+                    zeroWrites++
                     if (isPausedFlag.get() || !canContinueWrite(expectedGeneration)) return totalBytesWritten
-                    zeroWriteStartMs = checkZeroWriteStall(track, zeroWriteStartMs)
+                    zeroWriteStartMs = checkZeroWriteStall(track, zeroWriteStartMs, zeroWrites)
                     if (!sleepUninterrupted(2L)) return totalBytesWritten
                 } else {
+                    logWriteStallIfNeeded(track, writeMs, written, zeroWrites)
                     zeroWriteStartMs = -1L
+                    zeroWrites = 0
                     totalBytesWritten += written
                 }
             }
@@ -594,26 +640,63 @@ internal class AudioTrackWriter(
     private fun writeScratchFloatChunk(track: AudioTrack, srcFloats: FloatArray, totalFloats: Int, expectedGeneration: Long): Int {
         var floatOffset = 0
         var zeroWriteStartMs = -1L
+        var zeroWrites = 0
         while (floatOffset < totalFloats && canContinueWrite(expectedGeneration)) {
+            val writeStartMs = SystemClock.elapsedRealtime()
             val written = track.write(
                 srcFloats,
                 floatOffset,
                 totalFloats - floatOffset,
                 AudioTrack.WRITE_BLOCKING,
             )
+            val writeMs = (SystemClock.elapsedRealtime() - writeStartMs).coerceAtLeast(0L)
             if (written < 0) {
                 throw classifyWriteFailure("AudioTrack float scratch write failed with code $written", written)
             }
             if (written == 0) {
+                zeroWrites++
                 if (isPausedFlag.get() || !canContinueWrite(expectedGeneration)) return floatOffset
-                zeroWriteStartMs = checkZeroWriteStall(track, zeroWriteStartMs)
+                zeroWriteStartMs = checkZeroWriteStall(track, zeroWriteStartMs, zeroWrites)
                 if (!sleepUninterrupted(2L)) return floatOffset
             } else {
+                logWriteStallIfNeeded(track, writeMs, written * 4, zeroWrites)
                 zeroWriteStartMs = -1L
+                zeroWrites = 0
                 floatOffset += written
             }
         }
         return floatOffset
+    }
+
+    private fun logWriteStallIfNeeded(track: AudioTrack, writeMs: Long, bytes: Int, zeroWrites: Int) {
+        val slowWrite = AudioStartPathPolicy.isSlowBlockingWrite(writeMs)
+        if (!slowWrite && zeroWrites <= 0) return
+        val sr = runCatching { track.sampleRate }.getOrDefault(0)
+        val modeName = safetyModeProvider().name
+        val usb = isUsbConnectedProvider()
+        diagnosticLogger?.logPerf("AUDIOTRACK_WRITE_STALL") {
+            linkedMapOf(
+                "writeMs" to writeMs,
+                "bytes" to bytes,
+                "zeroWrites" to zeroWrites,
+                "sr" to sr,
+                "mode" to modeName,
+                "usb" to usb,
+            )
+        }
+        if (slowWrite) {
+            diagnosticLogger?.logPerf("SLOW_AUDIO_STAGE") {
+                linkedMapOf(
+                    "stage" to "writeBlocking",
+                    "elapsedMs" to writeMs,
+                    "bytes" to bytes,
+                    "zeroWrites" to zeroWrites,
+                    "sr" to sr,
+                    "mode" to modeName,
+                    "usb" to usb,
+                )
+            }
+        }
     }
 
     private fun canContinueWrite(expectedGeneration: Long): Boolean = isGenerationActive(expectedGeneration) && pendingSeekMs.get() < 0L
@@ -625,15 +708,17 @@ internal class AudioTrackWriter(
         else -> AudioDecodeException.IoError(message)
     }
 
-    private fun checkZeroWriteStall(track: AudioTrack, zeroWriteStartMs: Long): Long {
+    private fun checkZeroWriteStall(track: AudioTrack, zeroWriteStartMs: Long, zeroWrites: Int): Long {
         val nowMs = SystemClock.elapsedRealtime()
         val startMs = if (zeroWriteStartMs < 0L) nowMs else zeroWriteStartMs
         if (track.state != AudioTrack.STATE_INITIALIZED) {
             throw AudioDecodeException.DeadAudioTrack("AudioTrack uninitialized during write")
         }
-        if (nowMs - startMs >= PlaybackSeekAndRecoveryPolicy.MAX_ZERO_WRITE_STALL_MS) {
+        val stalledMs = (nowMs - startMs).coerceAtLeast(0L)
+        if (stalledMs >= PlaybackSeekAndRecoveryPolicy.MAX_ZERO_WRITE_STALL_MS) {
+            logWriteStallIfNeeded(track, stalledMs, 0, zeroWrites)
             throw AudioDecodeException.DeadAudioTrack(
-                "AudioTrack stalled writing 0 bytes for ${nowMs - startMs} ms",
+                "AudioTrack stalled writing 0 bytes for $stalledMs ms",
             )
         }
         return startMs

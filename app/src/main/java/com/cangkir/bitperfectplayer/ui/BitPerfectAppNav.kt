@@ -5,8 +5,6 @@ import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -226,6 +224,7 @@ private fun BitPerfectAppRootContent(viewModel: MainViewModel, startupHomepage: 
                 onOpenNowPlaying = openNowPlaying,
                 onTogglePlayPause = viewModel::togglePlayPause,
                 onNext = viewModel::next,
+                onDismissPlayback = viewModel::dismissActiveSession,
             )
         },
         libraryContent = { initialLibraryTab ->
@@ -289,32 +288,16 @@ private fun BitPerfectAppRootContent(viewModel: MainViewModel, startupHomepage: 
                 libraryState = libraryState,
                 playbackState = playbackState,
                 onOpenDiagnostics = openDiagnostics,
+                onSwipeToNowPlaying = if (playbackState.activeTrack != null) openNowPlaying else null,
             )
         },
     ) {
         composable(
             route = Routes.NOW_PLAYING,
-            exitTransition = {
-                if (targetState.destination.route == Routes.NOW_PLAYING_SETTINGS) {
-                    slideOutHorizontally(animationSpec = tween(durationMillis = 180)) { -it / 3 } +
-                        fadeOut(animationSpec = tween(durationMillis = 140))
-                } else {
-                    fadeOut(animationSpec = tween(durationMillis = 90))
-                }
-            },
-            popEnterTransition = {
-                if (initialState.destination.route == Routes.NOW_PLAYING_SETTINGS) {
-                    slideInHorizontally(animationSpec = tween(durationMillis = 180)) { -it / 3 } +
-                        fadeIn(animationSpec = tween(durationMillis = 140))
-                } else {
-                    fadeIn(animationSpec = tween(durationMillis = 120))
-                }
-            },
-            popExitTransition = {
-                val offsetSign = if (targetState.destination.route == Routes.SETTINGS) -1 else 1
-                slideOutHorizontally(animationSpec = tween(durationMillis = 180)) { width -> offsetSign * (width / 2) } +
-                    fadeOut(animationSpec = tween(durationMillis = 120))
-            },
+            enterTransition = { fadeIn(animationSpec = tween(durationMillis = 90)) },
+            exitTransition = { fadeOut(animationSpec = tween(durationMillis = 90)) },
+            popEnterTransition = { fadeIn(animationSpec = tween(durationMillis = 90)) },
+            popExitTransition = { fadeOut(animationSpec = tween(durationMillis = 90)) },
         ) {
             val nowPlayingArtworkStyle by viewModel.nowPlayingArtworkStyle.collectAsStateWithLifecycle()
             val spectrumVisualizerEnabled by viewModel.spectrumVisualizerEnabled.collectAsStateWithLifecycle()
@@ -372,14 +355,10 @@ private fun BitPerfectAppRootContent(viewModel: MainViewModel, startupHomepage: 
 
         composable(
             route = Routes.NOW_PLAYING_SETTINGS,
-            enterTransition = {
-                slideInHorizontally(animationSpec = tween(durationMillis = 180)) { it / 2 } +
-                    fadeIn(animationSpec = tween(durationMillis = 140))
-            },
-            popExitTransition = {
-                slideOutHorizontally(animationSpec = tween(durationMillis = 180)) { it / 2 } +
-                    fadeOut(animationSpec = tween(durationMillis = 120))
-            },
+            enterTransition = { fadeIn(animationSpec = tween(durationMillis = 90)) },
+            exitTransition = { fadeOut(animationSpec = tween(durationMillis = 90)) },
+            popEnterTransition = { fadeIn(animationSpec = tween(durationMillis = 90)) },
+            popExitTransition = { fadeOut(animationSpec = tween(durationMillis = 90)) },
         ) {
             BitPerfectSettingsDestination(
                 viewModel = viewModel,
@@ -473,6 +452,7 @@ private fun BitPerfectSettingsDestination(
     playbackState: PlaybackControllerState,
     onOpenDiagnostics: () -> Unit,
     onBack: (() -> Unit)? = null,
+    onSwipeToNowPlaying: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val defaultHomepage by viewModel.defaultHomepage.collectAsStateWithLifecycle()
@@ -526,6 +506,7 @@ private fun BitPerfectSettingsDestination(
         onImportLocalBackup = viewModel::importLocalBackup,
         onOpenDiagnostics = onOpenDiagnostics,
         onBack = onBack,
+        onSwipeToNowPlaying = onSwipeToNowPlaying,
     )
 }
 
