@@ -12,6 +12,9 @@ object TrackTransitionStatePolicy {
         return engineTrackUri == null || engineTrackUri == activeTrack.uriString
     }
 
+    fun shouldSyncEngineStateOnGaplessTransition(targetTrackUri: String, latestEngineTrackUri: String?): Boolean =
+        latestEngineTrackUri == targetTrackUri
+
     fun shouldPreservePlayingUiOnTrackSwitch(wasPlaying: Boolean, autoPlay: Boolean): Boolean = wasPlaying && autoPlay
 
     fun isEffectivelyPlayingForUi(status: PlaybackStatus, preservePlayingUiDuringTransition: Boolean): Boolean =

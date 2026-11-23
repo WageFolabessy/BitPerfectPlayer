@@ -32,6 +32,7 @@ data class SafetyCommand(
     val autoPauseReason: AutoPauseReason? = null,
     val requiresClearPreferredMixerAttributes: Boolean = false,
     val warningMessage: String? = null,
+    val wasBitPerfectMode: Boolean = false,
 )
 
 /**
@@ -119,6 +120,7 @@ class AudioSafetyController {
         return SafetyCommand(
             type = SafetyEventType.MODE_CHANGED_TO_SAFE,
             requiresClearPreferredMixerAttributes = wasBitPerfect || currentState.isUsbAudioConnected,
+            wasBitPerfectMode = wasBitPerfect,
         )
     }
 
@@ -147,11 +149,13 @@ class AudioSafetyController {
             type = SafetyEventType.AUTO_PAUSE,
             autoPauseReason = reason,
             requiresClearPreferredMixerAttributes = wasBitPerfect || isUsbAudio,
+            wasBitPerfectMode = wasBitPerfect,
         )
     }
 
     @Synchronized
     fun onUsbDisconnected(fallbackDeviceName: String = "Internal Speaker"): SafetyCommand {
+        val wasBitPerfect = currentState.mode == AudioOutputMode.BIT_PERFECT_OPT_IN
         currentState = currentState.copy(
             mode = AudioOutputMode.SAFE_VOLUME_MODE,
             isPendingSafetyWarning = false,
@@ -164,6 +168,7 @@ class AudioSafetyController {
             type = SafetyEventType.AUTO_PAUSE,
             autoPauseReason = AutoPauseReason.USB_DISCONNECTED,
             requiresClearPreferredMixerAttributes = true,
+            wasBitPerfectMode = wasBitPerfect,
         )
     }
 
@@ -185,6 +190,7 @@ class AudioSafetyController {
             type = SafetyEventType.AUTO_PAUSE,
             autoPauseReason = AutoPauseReason.BECOMING_NOISY,
             requiresClearPreferredMixerAttributes = wasBitPerfect || wasUsb,
+            wasBitPerfectMode = wasBitPerfect,
         )
     }
 
@@ -216,6 +222,7 @@ class AudioSafetyController {
             type = SafetyEventType.AUTO_PAUSE,
             autoPauseReason = AutoPauseReason.OUTPUT_ROUTE_CHANGED,
             requiresClearPreferredMixerAttributes = wasBitPerfect || !isUsbAudio,
+            wasBitPerfectMode = wasBitPerfect,
         )
     }
 

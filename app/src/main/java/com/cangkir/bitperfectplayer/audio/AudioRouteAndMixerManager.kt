@@ -87,6 +87,12 @@ internal class AudioRouteAndMixerManager(
     @Volatile
     var resumeAfterTransientFocusLoss: Boolean = false
 
+    val hasActivePreferredMixer: Boolean
+        get() = mixerSessionTracker.hasActivePreference
+
+    fun shouldBindPreferredUsbDevice(hasUsbSink: Boolean): Boolean =
+        AudioStartPathPolicy.shouldBindPreferredUsbDevice(safetyController.state().mode, hasUsbSink)
+
     private var receiversRegistered: Boolean = false
 
     private val focusChangeListener = AudioManager.OnAudioFocusChangeListener { focusChange ->

@@ -5,6 +5,8 @@ import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -60,10 +62,12 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.cangkir.bitperfectplayer.audio.PlaybackControllerState
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
 import com.cangkir.bitperfectplayer.audio.QueueContext
 import com.cangkir.bitperfectplayer.audio.QueueSourceType
 import com.cangkir.bitperfectplayer.data.DefaultHomepage
+import com.cangkir.bitperfectplayer.library.LibrarySnapshot
 import com.cangkir.bitperfectplayer.ui.library.LibraryScreen
 import com.cangkir.bitperfectplayer.ui.nowplaying.NowPlayingScreen
 import com.cangkir.bitperfectplayer.ui.playlists.AddToPlaylistDialog
@@ -71,14 +75,30 @@ import com.cangkir.bitperfectplayer.ui.playlists.PlaylistsScreen
 import com.cangkir.bitperfectplayer.ui.settings.SettingsScreen
 import com.cangkir.bitperfectplayer.ui.theme.TextMuted
 
+internal const val NOW_PLAYING_ROUTE = "now_playing"
+internal const val NOW_PLAYING_SETTINGS_ROUTE = "now_playing_settings"
+
 private object Routes {
     const val LIBRARY = "library"
     const val PLAYLISTS = "playlists"
     const val SETTINGS = "settings"
-    const val NOW_PLAYING = "now_playing"
+    const val NOW_PLAYING = NOW_PLAYING_ROUTE
+    const val NOW_PLAYING_SETTINGS = NOW_PLAYING_SETTINGS_ROUTE
     const val QUEUE = "queue"
     const val LYRICS = "lyrics"
     const val DIAGNOSTICS = "diagnostics"
+}
+
+/**
+ * Navigates to Settings from `NowPlayingScreen` without stacking a duplicate `Settings` entry
+ * when the user opened Now Playing while already viewing the top-level `Settings` tab.
+ */
+internal fun navigateToSettingsFromNowPlaying(navController: NavHostController) {
+    if (navController.previousBackStackEntry?.destination?.route == Routes.SETTINGS) {
+        navController.popBackStack()
+    } else {
+        navController.navigate(Routes.NOW_PLAYING_SETTINGS) { launchSingleTop = true }
+    }
 }
 
 internal fun DefaultHomepage.toStartDestinationRoute(): String = if (isPlaylistsRoute) Routes.PLAYLISTS else Routes.LIBRARY
@@ -155,6 +175,9 @@ private fun BitPerfectAppRootContent(viewModel: MainViewModel, startupHomepage: 
     }
     val openDiagnostics = remember(navController) {
         { navController.navigate(Routes.DIAGNOSTICS) { launchSingleTop = true } }
+    }
+    val openSettingsFromNowPlaying = remember(navController) {
+        { navigateToSettingsFromNowPlaying(navController) }
     }
     val popBack = remember(navController) {
         {
@@ -261,61 +284,38 @@ private fun BitPerfectAppRootContent(viewModel: MainViewModel, startupHomepage: 
             )
         },
         settingsContent = {
-            val context = LocalContext.current
-            val defaultHomepage by viewModel.defaultHomepage.collectAsStateWithLifecycle()
-            val nowPlayingArtworkStyle by viewModel.nowPlayingArtworkStyle.collectAsStateWithLifecycle()
-            val spectrumVisualizerEnabled by viewModel.spectrumVisualizerEnabled.collectAsStateWithLifecycle()
-            val spectrumColorStyle by viewModel.spectrumColorStyle.collectAsStateWithLifecycle()
-            val spectrumSparksEnabled by viewModel.spectrumSparksEnabled.collectAsStateWithLifecycle()
-            val dynamicCoverThemeEnabled by viewModel.dynamicCoverThemeEnabled.collectAsStateWithLifecycle()
-            val diagnosticLoggingEnabled by viewModel.diagnosticLoggingEnabled.collectAsStateWithLifecycle()
-            val diagnosticLogStats by viewModel.diagnosticLogStats.collectAsStateWithLifecycle()
-            SettingsScreen(
+            BitPerfectSettingsDestination(
+                viewModel = viewModel,
                 libraryState = libraryState,
                 playbackState = playbackState,
-                sleepTimerStateFlow = viewModel.sleepTimerState,
-                defaultHomepage = defaultHomepage,
-                onSetDefaultHomepage = viewModel::setDefaultHomepage,
-                artworkStyle = nowPlayingArtworkStyle,
-                onSetArtworkStyle = viewModel::setNowPlayingArtworkStyle,
-                spectrumVisualizerEnabled = spectrumVisualizerEnabled,
-                onSetSpectrumVisualizerEnabled = viewModel::setSpectrumVisualizerEnabled,
-                spectrumColorStyle = spectrumColorStyle,
-                onSetSpectrumColorStyle = viewModel::setSpectrumColorStyle,
-                spectrumSparksEnabled = spectrumSparksEnabled,
-                onSetSpectrumSparksEnabled = viewModel::setSpectrumSparksEnabled,
-                dynamicCoverThemeEnabled = dynamicCoverThemeEnabled,
-                onSetDynamicCoverThemeEnabled = viewModel::setDynamicCoverThemeEnabled,
-                diagnosticLoggingEnabled = diagnosticLoggingEnabled,
-                diagnosticLogStats = diagnosticLogStats,
-                onSetDiagnosticLoggingEnabled = viewModel::setDiagnosticLoggingEnabled,
-                onExportDiagnosticLogs = viewModel::exportDiagnosticLogs,
-                onShareDiagnosticLogs = {
-                    viewModel.shareDiagnosticLogs { shareIntent ->
-                        runCatching {
-                            context.startActivity(shareIntent)
-                        }.onFailure {
-                            viewModel.showUiMessage("No app available to share diagnostic logs")
-                        }
-                    }
-                },
-                onClearDiagnosticLogs = viewModel::clearDiagnosticLogs,
-                onRefreshDiagnosticLogStats = viewModel::refreshDiagnosticLogStats,
-                onImportFolder = viewModel::importSafFolder,
-                onRemoveSafFolder = viewModel::removeSafFolder,
-                onRefreshLibrary = viewModel::refreshLibrary,
-                onSetGaplessEnabled = viewModel::setGaplessEnabled,
-                onSetReplayGainMode = viewModel::setReplayGainMode,
-                onSetReplayGainPreampDb = viewModel::setReplayGainPreampDb,
-                onSetReplayGainPreventClipping = viewModel::setReplayGainPreventClipping,
-                onSelectSleepTimerPreset = viewModel::setSleepTimerPreset,
-                onExportLocalBackup = viewModel::exportLocalBackup,
-                onImportLocalBackup = viewModel::importLocalBackup,
                 onOpenDiagnostics = openDiagnostics,
             )
         },
     ) {
-        composable(Routes.NOW_PLAYING) {
+        composable(
+            route = Routes.NOW_PLAYING,
+            exitTransition = {
+                if (targetState.destination.route == Routes.NOW_PLAYING_SETTINGS) {
+                    slideOutHorizontally(animationSpec = tween(durationMillis = 180)) { -it / 3 } +
+                        fadeOut(animationSpec = tween(durationMillis = 140))
+                } else {
+                    fadeOut(animationSpec = tween(durationMillis = 90))
+                }
+            },
+            popEnterTransition = {
+                if (initialState.destination.route == Routes.NOW_PLAYING_SETTINGS) {
+                    slideInHorizontally(animationSpec = tween(durationMillis = 180)) { -it / 3 } +
+                        fadeIn(animationSpec = tween(durationMillis = 140))
+                } else {
+                    fadeIn(animationSpec = tween(durationMillis = 120))
+                }
+            },
+            popExitTransition = {
+                val offsetSign = if (targetState.destination.route == Routes.SETTINGS) -1 else 1
+                slideOutHorizontally(animationSpec = tween(durationMillis = 180)) { width -> offsetSign * (width / 2) } +
+                    fadeOut(animationSpec = tween(durationMillis = 120))
+            },
+        ) {
             val nowPlayingArtworkStyle by viewModel.nowPlayingArtworkStyle.collectAsStateWithLifecycle()
             val spectrumVisualizerEnabled by viewModel.spectrumVisualizerEnabled.collectAsStateWithLifecycle()
             val spectrumColorStyle by viewModel.spectrumColorStyle.collectAsStateWithLifecycle()
@@ -366,6 +366,27 @@ private fun BitPerfectAppRootContent(viewModel: MainViewModel, startupHomepage: 
                     navController.navigate(Routes.LYRICS) { launchSingleTop = true }
                 },
                 onOpenDiagnostics = openDiagnostics,
+                onOpenSettings = openSettingsFromNowPlaying,
+            )
+        }
+
+        composable(
+            route = Routes.NOW_PLAYING_SETTINGS,
+            enterTransition = {
+                slideInHorizontally(animationSpec = tween(durationMillis = 180)) { it / 2 } +
+                    fadeIn(animationSpec = tween(durationMillis = 140))
+            },
+            popExitTransition = {
+                slideOutHorizontally(animationSpec = tween(durationMillis = 180)) { it / 2 } +
+                    fadeOut(animationSpec = tween(durationMillis = 120))
+            },
+        ) {
+            BitPerfectSettingsDestination(
+                viewModel = viewModel,
+                libraryState = libraryState,
+                playbackState = playbackState,
+                onOpenDiagnostics = openDiagnostics,
+                onBack = popBack,
             )
         }
 
@@ -443,6 +464,69 @@ private fun BitPerfectAppRootContent(viewModel: MainViewModel, startupHomepage: 
             )
         }
     }
+}
+
+@Composable
+private fun BitPerfectSettingsDestination(
+    viewModel: MainViewModel,
+    libraryState: LibrarySnapshot,
+    playbackState: PlaybackControllerState,
+    onOpenDiagnostics: () -> Unit,
+    onBack: (() -> Unit)? = null,
+) {
+    val context = LocalContext.current
+    val defaultHomepage by viewModel.defaultHomepage.collectAsStateWithLifecycle()
+    val nowPlayingArtworkStyle by viewModel.nowPlayingArtworkStyle.collectAsStateWithLifecycle()
+    val spectrumVisualizerEnabled by viewModel.spectrumVisualizerEnabled.collectAsStateWithLifecycle()
+    val spectrumColorStyle by viewModel.spectrumColorStyle.collectAsStateWithLifecycle()
+    val spectrumSparksEnabled by viewModel.spectrumSparksEnabled.collectAsStateWithLifecycle()
+    val dynamicCoverThemeEnabled by viewModel.dynamicCoverThemeEnabled.collectAsStateWithLifecycle()
+    val diagnosticLoggingEnabled by viewModel.diagnosticLoggingEnabled.collectAsStateWithLifecycle()
+    val diagnosticLogStats by viewModel.diagnosticLogStats.collectAsStateWithLifecycle()
+    SettingsScreen(
+        libraryState = libraryState,
+        playbackState = playbackState,
+        sleepTimerStateFlow = viewModel.sleepTimerState,
+        defaultHomepage = defaultHomepage,
+        onSetDefaultHomepage = viewModel::setDefaultHomepage,
+        artworkStyle = nowPlayingArtworkStyle,
+        onSetArtworkStyle = viewModel::setNowPlayingArtworkStyle,
+        spectrumVisualizerEnabled = spectrumVisualizerEnabled,
+        onSetSpectrumVisualizerEnabled = viewModel::setSpectrumVisualizerEnabled,
+        spectrumColorStyle = spectrumColorStyle,
+        onSetSpectrumColorStyle = viewModel::setSpectrumColorStyle,
+        spectrumSparksEnabled = spectrumSparksEnabled,
+        onSetSpectrumSparksEnabled = viewModel::setSpectrumSparksEnabled,
+        dynamicCoverThemeEnabled = dynamicCoverThemeEnabled,
+        onSetDynamicCoverThemeEnabled = viewModel::setDynamicCoverThemeEnabled,
+        diagnosticLoggingEnabled = diagnosticLoggingEnabled,
+        diagnosticLogStats = diagnosticLogStats,
+        onSetDiagnosticLoggingEnabled = viewModel::setDiagnosticLoggingEnabled,
+        onExportDiagnosticLogs = viewModel::exportDiagnosticLogs,
+        onShareDiagnosticLogs = {
+            viewModel.shareDiagnosticLogs { shareIntent ->
+                runCatching {
+                    context.startActivity(shareIntent)
+                }.onFailure {
+                    viewModel.showUiMessage("No app available to share diagnostic logs")
+                }
+            }
+        },
+        onClearDiagnosticLogs = viewModel::clearDiagnosticLogs,
+        onRefreshDiagnosticLogStats = viewModel::refreshDiagnosticLogStats,
+        onImportFolder = viewModel::importSafFolder,
+        onRemoveSafFolder = viewModel::removeSafFolder,
+        onRefreshLibrary = viewModel::refreshLibrary,
+        onSetGaplessEnabled = viewModel::setGaplessEnabled,
+        onSetReplayGainMode = viewModel::setReplayGainMode,
+        onSetReplayGainPreampDb = viewModel::setReplayGainPreampDb,
+        onSetReplayGainPreventClipping = viewModel::setReplayGainPreventClipping,
+        onSelectSleepTimerPreset = viewModel::setSleepTimerPreset,
+        onExportLocalBackup = viewModel::exportLocalBackup,
+        onImportLocalBackup = viewModel::importLocalBackup,
+        onOpenDiagnostics = onOpenDiagnostics,
+        onBack = onBack,
+    )
 }
 
 @Composable

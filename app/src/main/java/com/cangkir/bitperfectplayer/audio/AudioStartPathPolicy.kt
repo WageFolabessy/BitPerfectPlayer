@@ -43,6 +43,11 @@ object AudioStartPathPolicy {
         return MixerNegotiationStrategy.APPLY_BIT_PERFECT_USB
     }
 
+    fun shouldBindPreferredUsbDevice(mode: AudioOutputMode, hasUsbSink: Boolean): Boolean =
+        mode == AudioOutputMode.BIT_PERFECT_OPT_IN && hasUsbSink
+
+    fun shouldScanReplayGainMetadata(mode: ReplayGainMode): Boolean = mode != ReplayGainMode.OFF
+
     fun shouldLogSlowAudioStage(isDebugBuild: Boolean, elapsedMs: Long): Boolean = isDebugBuild && elapsedMs > SLOW_AUDIO_STAGE_THRESHOLD_MS
 
     fun resolveTogglePlayPauseAction(

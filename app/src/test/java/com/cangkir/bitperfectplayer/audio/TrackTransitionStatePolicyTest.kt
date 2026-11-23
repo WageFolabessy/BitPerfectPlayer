@@ -189,4 +189,64 @@ class TrackTransitionStatePolicyTest {
             ),
         )
     }
+
+    @Test
+    fun gaplessTransition_syncingEngineUriRestoresSeekSliderAndDurationImmediately() {
+        // Before PlaybackController syncs engineState on GAPLESS_SWAP, activeTrack == trackB while
+        // engineState still holds trackA URI -> display position stays stuck at 00:00 despite seeks.
+        assertFalse(
+            TrackTransitionStatePolicy.shouldSyncEngineStateOnGaplessTransition(
+                targetTrackUri = trackB.uriString,
+                latestEngineTrackUri = trackA.uriString,
+            ),
+        )
+        assertFalse(
+            TrackTransitionStatePolicy.shouldSyncEngineStateOnGaplessTransition(
+                targetTrackUri = trackB.uriString,
+                latestEngineTrackUri = null,
+            ),
+        )
+        assertEquals(
+            0L,
+            TrackTransitionStatePolicy.resolveDisplayPositionMs(
+                activeTrack = trackB,
+                engineTrackUri = trackA.uriString,
+                livePositionMs = 120_000L,
+            ),
+        )
+
+        // Once handleGaplessTransition adopts engine.state.value matching trackB, seeks & slider sync immediately.
+        assertTrue(
+            TrackTransitionStatePolicy.shouldSyncEngineStateOnGaplessTransition(
+                targetTrackUri = trackB.uriString,
+                latestEngineTrackUri = trackB.uriString,
+            ),
+        )
+        assertEquals(
+            120_000L,
+            TrackTransitionStatePolicy.resolveDisplayPositionMs(
+                activeTrack = trackB,
+                engineTrackUri = trackB.uriString,
+                livePositionMs = 120_000L,
+            ),
+        )
+        assertEquals(
+            302_450L,
+            TrackTransitionStatePolicy.resolveDisplayDurationMs(
+                activeTrack = trackB,
+                engineTrackUri = trackB.uriString,
+                engineStatus = PlaybackStatus.PLAYING,
+                engineDurationMs = 302_450L,
+            ),
+        )
+        assertEquals(
+            "FLAC · 24-bit · 96,000 Hz",
+            TrackTransitionStatePolicy.resolveDisplayFormatSpec(
+                activeTrack = trackB,
+                engineTrackUri = trackB.uriString,
+                engineStatus = PlaybackStatus.PLAYING,
+                diagnosticsSourceFormatSummary = "FLAC · 24-bit · 96,000 Hz",
+            ),
+        )
+    }
 }

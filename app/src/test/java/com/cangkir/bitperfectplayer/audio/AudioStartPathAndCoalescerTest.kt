@@ -172,4 +172,15 @@ class AudioStartPathAndCoalescerTest {
             ),
         )
     }
+
+    @Test
+    fun audioStartPathPolicy_onlyPinsUsbDeviceInBitPerfectAndSkipsReplayGainScanWhenOff() {
+        assertFalse(AudioStartPathPolicy.shouldBindPreferredUsbDevice(AudioOutputMode.SAFE_VOLUME_MODE, hasUsbSink = true))
+        assertFalse(AudioStartPathPolicy.shouldBindPreferredUsbDevice(AudioOutputMode.BIT_PERFECT_OPT_IN, hasUsbSink = false))
+        assertTrue(AudioStartPathPolicy.shouldBindPreferredUsbDevice(AudioOutputMode.BIT_PERFECT_OPT_IN, hasUsbSink = true))
+
+        assertFalse(AudioStartPathPolicy.shouldScanReplayGainMetadata(ReplayGainMode.OFF))
+        assertTrue(AudioStartPathPolicy.shouldScanReplayGainMetadata(ReplayGainMode.TRACK))
+        assertTrue(AudioStartPathPolicy.shouldScanReplayGainMetadata(ReplayGainMode.ALBUM))
+    }
 }

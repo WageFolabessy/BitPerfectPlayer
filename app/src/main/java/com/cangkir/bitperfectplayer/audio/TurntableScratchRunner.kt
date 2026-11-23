@@ -148,6 +148,26 @@ internal class PlaybackLoopState(
         lastUiUpdateNano = 0L
     }
 
+    fun applyRouteHeadRebase(observedHeadFrames: Long) {
+        val rebase = RouteChangeReconfigurePolicy.computeRouteHeadRebase(
+            seekBaseMs = seekBaseMs,
+            headBaseFrames = headBaseFrames,
+            countHeadFrames = countHeadFrames,
+            totalFramesWrittenToTrack = totalFramesWrittenToTrack,
+            observedHeadFrames = observedHeadFrames,
+            sampleRateHz = sampleRate,
+        )
+        seekBaseMs = rebase.seekBaseMs
+        streamOriginMs = rebase.seekBaseMs
+        headBaseFrames = rebase.headBaseFrames
+        totalFramesWrittenToTrack = rebase.totalFramesWrittenToTrack
+        streamFramesWrittenToTrack = rebase.streamFramesWrittenToTrack
+        countHeadFrames = rebase.countHeadFrames
+        pendingFlushResetGuard = rebase.armAsyncFlushResetGuard
+        activeRingBuffer?.reset(0L)
+        lastUiUpdateNano = 0L
+    }
+
     fun transitionToSeamlessNextDecoder(nextDecoder: PcmAudioDecoder, nextRingBuffer: TurntablePcmRingBuffer?, currentHeadFrames: Long) {
         currentDecoder = nextDecoder
         observedFormatVersion = nextDecoder.formatVersion
@@ -281,9 +301,14 @@ internal class TurntableScratchRunner(
     private val turntableScratchRequested = AtomicBoolean(false)
     private val turntableTargetRateBits = AtomicInteger(0)
     private val turntableFallbackSeekMs = AtomicLong(-1L)
+    private val pendingRouteHeadRebase = AtomicBoolean(false)
 
     @Volatile
     private var turntableRingBuffer: TurntablePcmRingBuffer? = null
+
+    fun markRouteChangedWhilePaused() {
+        pendingRouteHeadRebase.set(true)
+    }
 
     fun isScratchRequested(): Boolean = turntableScratchRequested.get()
 
@@ -352,6 +377,7 @@ internal class TurntableScratchRunner(
         initialTrack: AudioTrack,
         initialSeekMs: Long,
     ): PlaybackLoopState {
+        pendingRouteHeadRebase.set(false)
         val initialChannels = initialDecoder.format.channelCount.coerceIn(1, 8)
         val initialRing = ensureSafeModeRingBuffer(initialChannels)?.also { it.reset(0L) }
         return PlaybackLoopState(
@@ -469,14 +495,20 @@ internal class TurntableScratchRunner(
     fun resumeFromPausedStepIfNeeded(state: PlaybackLoopState) {
         if (state.wasPausedInLoop) {
             val headFrames = trackWriter.readUnsignedPlaybackHeadFrames(state.currentTrack)
-            state.reconcileAsyncFlushReset(headFrames)
-            state.countHeadFrames = maxOf(headFrames, state.headBaseFrames)
+            if (pendingRouteHeadRebase.getAndSet(false)) {
+                state.applyRouteHeadRebase(headFrames)
+                trackWriter.resetSpectrumTapIfPresent(state.sampleRate, state.totalFramesWrittenToTrack)
+            } else {
+                state.reconcileAsyncFlushReset(headFrames)
+                state.countHeadFrames = maxOf(headFrames, state.headBaseFrames)
+            }
             state.wasPausedInLoop = false
         }
     }
 
     fun handlePendingSeekInLoop(state: PlaybackLoopState, requestedSeekMs: Long) {
         if (!trackWriter.isGenerationActive(state.expectedGeneration)) return
+        pendingRouteHeadRebase.set(false)
         val seekStartMs = SystemClock.elapsedRealtime()
         accumulateActivePlayTime(state, forceFlush = true)
         val wasPlaying = !isPausedFlag.get()

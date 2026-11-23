@@ -41,6 +41,7 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
@@ -51,12 +52,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
@@ -74,6 +79,8 @@ import com.cangkir.bitperfectplayer.ui.rememberDelayedPreparingIndicator
 import com.cangkir.bitperfectplayer.ui.theme.ObsidianBackground
 import com.cangkir.bitperfectplayer.ui.theme.TextMuted
 import kotlinx.coroutines.flow.StateFlow
+
+internal const val NOW_PLAYING_SQUARE_ARTWORK_TEST_TAG = "now_playing_square_artwork"
 
 internal fun extractAlbumPaletteFromBitmap(bitmap: Bitmap?): IntArray {
     val validBitmap = bitmap?.takeIf { !it.isRecycled && it.width > 0 && it.height > 0 }
@@ -103,7 +110,11 @@ internal fun SwipeableSquareArtwork(
     onPrevious: () -> Unit,
     onNext: () -> Unit,
     artworkSize: androidx.compose.ui.unit.Dp = 272.dp,
+    onBoundsInRootChanged: (Rect) -> Unit = {},
 ) {
+    DisposableEffect(Unit) {
+        onDispose { onBoundsInRootChanged(Rect.Zero) }
+    }
     val swipeThresholdPx = with(LocalDensity.current) { 76.dp.toPx() }
     var artworkDragOffsetPx by remember(track.uriString) { mutableFloatStateOf(0f) }
     var showBackCover by remember(track.uriString) { mutableStateOf(false) }
@@ -136,6 +147,8 @@ internal fun SwipeableSquareArtwork(
     Box(
         modifier = Modifier
             .size(artworkSize)
+            .testTag(NOW_PLAYING_SQUARE_ARTWORK_TEST_TAG)
+            .onGloballyPositioned { coords -> onBoundsInRootChanged(coords.boundsInRoot()) }
             .pointerInput(track.uriString, swipeThresholdPx) {
                 detectHorizontalDragGestures(
                     onDragEnd = {
@@ -218,7 +231,11 @@ internal fun NowPlayingSeekSection(
     playbackPositionMsFlow: StateFlow<Long>,
     externalScrubPreviewMsState: State<Long?>,
     onSeekTo: (Long) -> Unit,
+    onSliderBoundsInRootChanged: (Rect) -> Unit = {},
 ) {
+    DisposableEffect(Unit) {
+        onDispose { onSliderBoundsInRootChanged(Rect.Zero) }
+    }
     val livePositionMs by playbackPositionMsFlow.collectAsStateWithLifecycle()
     val maxPos = durationMs.coerceAtLeast(1L)
     val syncedPosMs = TrackTransitionStatePolicy.resolveDisplayPositionMs(
@@ -256,7 +273,9 @@ internal fun NowPlayingSeekSection(
             activeTrackColor = MaterialTheme.colorScheme.primary,
             inactiveTrackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
         ),
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .onGloballyPositioned { coords -> onSliderBoundsInRootChanged(coords.boundsInRoot()) },
     )
     Row(
         modifier = Modifier.fillMaxWidth(),

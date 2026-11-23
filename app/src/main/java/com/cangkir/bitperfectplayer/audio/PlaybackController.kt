@@ -788,14 +788,23 @@ class PlaybackController(
             }
             PostGaplessTransitionDirective.PAUSE_AND_PERSIST -> {
                 val target = nextTrack ?: return
+                val latestEngineState = engine.state.value
+                val shouldSyncEngine = TrackTransitionStatePolicy.shouldSyncEngineStateOnGaplessTransition(
+                    targetTrackUri = target.uriString,
+                    latestEngineTrackUri = latestEngineState.activeTrackUri?.toString(),
+                )
                 hasRecordedHistoryForActiveTrack = false
                 trackedTracksByUri[target.uriString] = target
                 playCountTracker.startSession(target.uriString, target.durationMs)?.let { persistPlayCountFlush(it) }
+                if (shouldSyncEngine && latestEngineState.durationMs > 0L) {
+                    playCountTracker.updateDuration(latestEngineState.durationMs)
+                }
                 _state.update {
                     it.copy(
                         queue = snapshot,
                         activeTrack = target,
                         activeFingerprint = target.contentFingerprint,
+                        engineState = if (shouldSyncEngine) latestEngineState else it.engineState,
                     )
                 }
                 engine.setNextTrack(null)
@@ -805,14 +814,23 @@ class PlaybackController(
             }
             PostGaplessTransitionDirective.CONTINUE_AND_SYNC_NEXT -> {
                 val target = nextTrack ?: return
+                val latestEngineState = engine.state.value
+                val shouldSyncEngine = TrackTransitionStatePolicy.shouldSyncEngineStateOnGaplessTransition(
+                    targetTrackUri = target.uriString,
+                    latestEngineTrackUri = latestEngineState.activeTrackUri?.toString(),
+                )
                 hasRecordedHistoryForActiveTrack = true
                 trackedTracksByUri[target.uriString] = target
                 playCountTracker.startSession(target.uriString, target.durationMs)?.let { persistPlayCountFlush(it) }
+                if (shouldSyncEngine && latestEngineState.durationMs > 0L) {
+                    playCountTracker.updateDuration(latestEngineState.durationMs)
+                }
                 _state.update {
                     it.copy(
                         queue = snapshot,
                         activeTrack = target,
                         activeFingerprint = target.contentFingerprint,
+                        engineState = if (shouldSyncEngine) latestEngineState else it.engineState,
                     )
                 }
                 syncNextTrackToEngine()

@@ -11,7 +11,12 @@ import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
-internal data class ConfiguredAudioTrack(val track: AudioTrack, val actualSampleRateHz: Int, val actualEncodingLabel: String)
+internal data class ConfiguredAudioTrack(
+    val track: AudioTrack,
+    val actualSampleRateHz: Int,
+    val actualEncodingLabel: String,
+    val isPinnedToPreferredUsbDevice: Boolean = false,
+)
 
 /**
  * Internal collaborator encapsulating [AudioTrack] creation/configuration
@@ -184,7 +189,8 @@ internal class AudioTrackWriter(
             }
         }
 
-        if (usbDevice != null) {
+        val bindPreferredUsb = usbDevice != null && routeAndMixerManager.shouldBindPreferredUsbDevice(hasUsbSink = true)
+        if (bindPreferredUsb) {
             runCatching { track.preferredDevice = usbDevice }
         }
 
@@ -198,7 +204,7 @@ internal class AudioTrackWriter(
                 "audioTrackEncoding=$actualEncodingLabel (const=$actualEncodingInt), " +
                 "sampleRate=${track.sampleRate}Hz, channels=${pcmFormat.channelCount}, " +
                 "bytesPerFrame=$bytesPerFrame, bufferBytes=$alignedBufSize, " +
-                "mixer=${routeAndMixerManager.activeNegotiatedMixerBehavior}",
+                "pinnedUsb=$bindPreferredUsb, mixer=${routeAndMixerManager.activeNegotiatedMixerBehavior}",
         )
         diagnosticLogger?.logAudio("AUDIOTRACK_CONFIG") {
             linkedMapOf(
@@ -209,6 +215,7 @@ internal class AudioTrackWriter(
                 "bufBytes" to alignedBufSize,
                 "bufFrames" to track.bufferSizeInFrames,
                 "usb" to (usbDevice != null),
+                "pinnedUsb" to bindPreferredUsb,
                 "mixer" to routeAndMixerManager.activeNegotiatedMixerBehavior.name,
             )
         }
@@ -216,6 +223,7 @@ internal class AudioTrackWriter(
             track = track,
             actualSampleRateHz = actualSampleRateHz,
             actualEncodingLabel = actualEncodingLabel,
+            isPinnedToPreferredUsbDevice = bindPreferredUsb,
         )
     }
 

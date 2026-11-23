@@ -134,6 +134,8 @@ class AudioOutputEngine(
 
     @Volatile private var lastReportedUnderrunCount: Int = 0
 
+    @Volatile private var activeTrackUsesBitPerfectOrPreferredRoute: Boolean = false
+
     private val routeAndMixerManager = AudioRouteAndMixerManager(
         appContext, audioManager, mainHandler, playbackAudioAttributes, safetyController,
         onSafetyCommand = ::handleSafetyCommand,
@@ -157,7 +159,12 @@ class AudioOutputEngine(
         loadGeneration,
         diagnosticLogger = diagnosticLogger,
     )
-    private val preloadController = GaplessPreloadController(appContext, releasedFlag, loadGeneration)
+    private val preloadController = GaplessPreloadController(
+        appContext = appContext,
+        releasedFlag = releasedFlag,
+        loadGeneration = loadGeneration,
+        shouldReadReplayGain = { AudioStartPathPolicy.shouldScanReplayGainMetadata(replayGainConfig.mode) },
+    )
     private val scratchRunner = TurntableScratchRunner(
         safetyController, trackWriter, preloadController, stopWorkerFlag, releasedFlag, isPausedFlag, pendingSeekMs,
         playbackPositionMs = _playbackPositionMs,
@@ -179,6 +186,33 @@ class AudioOutputEngine(
         replayGainConfig = config
         recomputeReplayGain()
         publishDiagnostics()
+        val targetReq = currentRequest
+        if (AudioStartPathPolicy.shouldScanReplayGainMetadata(config.mode) &&
+            activeTrackReplayGainMetadata == null &&
+            targetReq != null
+        ) {
+            val targetGen = loadGeneration.get()
+            enqueueControlTask {
+                if (releasedFlag.get() || loadGeneration.get() != targetGen) return@enqueueControlTask
+                val loadedMeta = preloadController.readReplayGainMetadata(
+                    uri = targetReq.uri,
+                    fileName = targetReq.fileName,
+                    mimeType = targetReq.mimeType,
+                )
+                engineLock.withLock {
+                    if (shouldApplyLazyReplayGainLocked(targetReq, targetGen)) {
+                        activeTrackReplayGainMetadata = loadedMeta
+                        recomputeReplayGain()
+                        publishDiagnostics()
+                    }
+                }
+            }
+        }
+    }
+
+    private fun shouldApplyLazyReplayGainLocked(targetReq: EngineTrackRequest, targetGen: Long): Boolean {
+        val sameGeneration = !releasedFlag.get() && loadGeneration.get() == targetGen
+        return sameGeneration && currentRequest?.uri == targetReq.uri && activeTrackReplayGainMetadata == null
     }
 
     fun setNextTrack(request: EngineTrackRequest?) {
@@ -622,10 +656,14 @@ class AudioOutputEngine(
                 clearStagedPreloadedTrack(asyncClose = true)
                 null
             }
+            val shouldReadRg = AudioStartPathPolicy.shouldScanReplayGainMetadata(replayGainConfig.mode)
             if (preloaded != null) {
                 preloadController.consumeQueuedNextRequestIfMatches(request.uri)
-                activeTrackReplayGainMetadata = preloaded.replayGainMetadata
-                    ?: preloadController.readReplayGainMetadata(request.uri, request.fileName, request.mimeType)
+                activeTrackReplayGainMetadata = preloaded.replayGainMetadata ?: if (shouldReadRg) {
+                    preloadController.readReplayGainMetadata(request.uri, request.fileName, request.mimeType)
+                } else {
+                    null
+                }
                 decoder = preloaded.decoder
             } else {
                 preloadController.clearPreloadedNextLocked()
@@ -636,8 +674,11 @@ class AudioOutputEngine(
                     clearPreparingFlagsIfUnbound(request.uri)
                     return
                 }
-                activeTrackReplayGainMetadata =
+                activeTrackReplayGainMetadata = if (shouldReadRg) {
                     preloadController.readReplayGainMetadata(request.uri, request.fileName, request.mimeType)
+                } else {
+                    null
+                }
                 decoder = opened
             }
         } finally {
@@ -749,6 +790,7 @@ class AudioOutputEngine(
             .onSuccess { configured ->
                 audioTrackActualSampleRateHz = configured.actualSampleRateHz
                 audioTrackActualEncodingLabel = configured.actualEncodingLabel
+                activeTrackUsesBitPerfectOrPreferredRoute = isBitPerfectOrPreferredRoute(configured)
                 lastReportedUnderrunCount = 0
             }
             .onFailure { error ->
@@ -879,6 +921,7 @@ class AudioOutputEngine(
             .onSuccess { configured ->
                 audioTrackActualSampleRateHz = configured.actualSampleRateHz
                 audioTrackActualEncodingLabel = configured.actualEncodingLabel
+                activeTrackUsesBitPerfectOrPreferredRoute = isBitPerfectOrPreferredRoute(configured)
                 lastReportedUnderrunCount = 0
             }
             .getOrNull()?.track ?: return WorkerStartResult.AUDIO_TRACK_FAILED
@@ -905,10 +948,19 @@ class AudioOutputEngine(
                     statusBeforeCommand == PlaybackStatus.PREPARING ||
                     pendingRouteReconfigureOnPlay.get()
                 )
+        val canPauseInPlace = RouteChangeReconfigurePolicy.canKeepSafeModeTrackOnRouteChange(
+            wasBitPerfectMode = command.wasBitPerfectMode,
+            hasActivePreferredMixerOrPinnedRoute = activeTrackUsesBitPerfectOrPreferredRoute ||
+                routeAndMixerManager.hasActivePreferredMixer,
+            isPreparing = statusBeforeCommand == PlaybackStatus.PREPARING,
+            hasActiveDecoder = activeDecoder != null,
+            hasHealthyAudioTrack = trackWriter.isTrackHealthy(activeAudioTrack),
+        )
         val reconfigureAction = RouteChangeReconfigurePolicy.decideAction(
             commandType = command.type,
             isActivelyPlayingOrPreparing = isActivelyPlayingOrPreparing,
             hasLoadedTrack = hasLoadedTrack,
+            canPauseInPlaceOnSafeRoute = canPauseInPlace,
         )
         when (command.type) {
             SafetyEventType.AUTO_PAUSE -> {
@@ -990,6 +1042,8 @@ class AudioOutputEngine(
                         if (clearPreferredMixer) routeAndMixerManager.clearPreferredMixerAttributesAsyncOnApi34(null)
                         reconfigureTrackIfLoadedLocked(autoResume, preserveAutoPauseNotice)
                     }
+                    SafetyReconfigureAction.PAUSE_IN_PLACE_KEEP_TRACK ->
+                        pauseInPlaceKeepTrackLocked(clearPreferredMixer)
                     SafetyReconfigureAction.TEARDOWN_AND_REBIND_ON_PLAY ->
                         teardownRouteInvalidatedSessionLocked(clearPreferredMixer)
                     SafetyReconfigureAction.DEFER_RECONFIGURE_UNTIL_PLAY -> {
@@ -1005,6 +1059,37 @@ class AudioOutputEngine(
                 }
             }
         }
+    }
+
+    /**
+     * Pauses an unpinned Safe-Mode session without destroying `AudioTrack` or `MediaCodec`,
+     * avoiding HyperOS's multi-second USB HAL teardown stalls on `192 kHz` unplug/replug while
+     * leaving [AudioOutputEngine.playLocked] + `DeadAudioTrack` recovery ready if HAL invalidates
+     * the underlying track.
+     */
+    private fun pauseInPlaceKeepTrackLocked(clearPreferredMixer: Boolean) {
+        if (clearPreferredMixer && routeAndMixerManager.hasActivePreferredMixer) {
+            routeAndMixerManager.clearPreferredMixerAttributesAsyncOnApi34(null)
+        }
+        preloadController.clearPreloadedNextLocked()
+        isPausedFlag.set(true)
+        activeAudioTrack?.let { trackWriter.safePause(it) }
+        routeAndMixerManager.abandonAudioFocusLocked()
+        scratchRunner.markRouteChangedWhilePaused()
+        _state.update { current ->
+            val safeStatus = if (current.status == PlaybackStatus.PLAYING || current.status == PlaybackStatus.PREPARING) {
+                PlaybackStatus.PAUSED
+            } else {
+                current.status
+            }
+            current.copy(
+                status = safeStatus,
+                safetyState = safetyController.state(),
+                isPreparingPlayback = false,
+                preservePlayingUiDuringTransition = false,
+            )
+        }
+        publishDiagnostics()
     }
 
     /**
@@ -1199,9 +1284,14 @@ class AudioOutputEngine(
         val configured = trackWriter.createConfiguredAudioTrackLocked(pcmFormat, routeAndMixerManager)
         audioTrackActualSampleRateHz = configured.actualSampleRateHz
         audioTrackActualEncodingLabel = configured.actualEncodingLabel
+        activeTrackUsesBitPerfectOrPreferredRoute = isBitPerfectOrPreferredRoute(configured)
         lastReportedUnderrunCount = 0
         return configured.track
     }
+
+    private fun isBitPerfectOrPreferredRoute(configured: ConfiguredAudioTrack): Boolean = configured.isPinnedToPreferredUsbDevice ||
+        routeAndMixerManager.activeNegotiatedMixerBehavior == NegotiatedMixerBehavior.BIT_PERFECT ||
+        routeAndMixerManager.activeNegotiatedMixerBehavior == NegotiatedMixerBehavior.DEFAULT_NATIVE_RATE
 
     private fun startPlaybackWorkerLocked(
         initialSeekMs: Long,
@@ -1471,6 +1561,7 @@ class AudioOutputEngine(
         }
         audioTrackActualSampleRateHz = 0
         audioTrackActualEncodingLabel = "None"
+        activeTrackUsesBitPerfectOrPreferredRoute = false
         lastReportedUnderrunCount = 0
     }
 

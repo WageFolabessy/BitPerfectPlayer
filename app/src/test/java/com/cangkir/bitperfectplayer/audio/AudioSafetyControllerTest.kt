@@ -225,4 +225,28 @@ class AudioSafetyControllerTest {
         assertFalse(state.isUsbAudioConnected)
         assertEquals(null, state.lastAutoPauseReason)
     }
+
+    @Test
+    fun wasBitPerfectModeFlag_capturesPreviousModeStrictlyAcrossSafetyTransitions() {
+        val controller = AudioSafetyController()
+        controller.syncInitialOutputDevice("USB DAC", isUsbAudio = true)
+
+        val safeNoisy = controller.onBecomingNoisy("Internal Speaker", fallbackIsUsbAudio = false)
+        assertFalse(safeNoisy.wasBitPerfectMode)
+
+        controller.requestBitPerfectMode()
+        controller.confirmBitPerfectWarning()
+        assertEquals(AudioOutputMode.BIT_PERFECT_OPT_IN, controller.state().mode)
+
+        val bpDisconnect = controller.onUsbDisconnected("Internal Speaker")
+        assertTrue(bpDisconnect.wasBitPerfectMode)
+
+        controller.requestBitPerfectMode()
+        controller.confirmBitPerfectWarning()
+        val bpSwitchSafe = controller.switchToSafeMode()
+        assertTrue(bpSwitchSafe.wasBitPerfectMode)
+
+        val safeRouteChange = controller.onOutputRouteChanged("Speaker", isUsbAudio = false)
+        assertFalse(safeRouteChange.wasBitPerfectMode)
+    }
 }

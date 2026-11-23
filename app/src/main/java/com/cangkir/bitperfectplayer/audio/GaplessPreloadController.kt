@@ -27,6 +27,7 @@ internal class GaplessPreloadController(
     private val appContext: Context,
     private val releasedFlag: AtomicBoolean,
     private val loadGeneration: AtomicLong,
+    private val shouldReadReplayGain: () -> Boolean = { true },
 ) {
     private val preloadLock = Any()
     private val preloadExecutor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
@@ -255,11 +256,15 @@ internal class GaplessPreloadController(
             return
         }
 
-        val rgMeta = readReplayGainMetadata(
-            uri = request.uri,
-            fileName = request.fileName,
-            mimeType = request.mimeType,
-        )
+        val rgMeta = if (shouldReadReplayGain()) {
+            readReplayGainMetadata(
+                uri = request.uri,
+                fileName = request.fileName,
+                mimeType = request.mimeType,
+            )
+        } else {
+            null
+        }
         val openedDecoder = openDecoderForPreload(request, expectedGeneration)
         if (openedDecoder == null) {
             clearPreloadingUri(request.uri)
