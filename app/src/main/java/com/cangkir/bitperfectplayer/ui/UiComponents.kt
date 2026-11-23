@@ -2,8 +2,10 @@ package com.cangkir.bitperfectplayer.ui
 
 import android.graphics.Bitmap
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -391,9 +393,11 @@ fun MiniPlayerBar(
     val minFlingDragPx = with(density) { MiniPlayerSwipeMath.MIN_FLING_DRAG_DP.dp.toPx() }
 
     var containerWidthPx by remember { mutableFloatStateOf(0f) }
+    var isDismissing by remember(track.uriString) { mutableStateOf(false) }
     val translationX = remember { Animatable(0f) }
     LaunchedEffect(track.uriString) {
         translationX.snapTo(0f)
+        isDismissing = false
     }
     val dismissThresholdPx = MiniPlayerSwipeMath.computeDismissThresholdPx(
         containerWidthPx = containerWidthPx,
@@ -439,6 +443,7 @@ fun MiniPlayerBar(
                 val touchSlop = viewConfiguration.touchSlop
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
+                    if (isDismissing) return@awaitEachGesture
                     val pointerId = down.id
                     val velocityTracker = VelocityTracker()
                     velocityTracker.addPosition(down.uptimeMillis, down.position)
@@ -512,8 +517,19 @@ fun MiniPlayerBar(
                             minFlingDragPx = minFlingDragPx,
                         )
                         if (shouldDismiss) {
-                            coroutineScope.launch { translationX.snapTo(0f) }
-                            currentOnDismissPlayback()
+                            isDismissing = true
+                            val targetOffscreenX = -size.width.toFloat().coerceAtLeast(1f)
+                            coroutineScope.launch {
+                                try {
+                                    translationX.animateTo(
+                                        targetValue = targetOffscreenX,
+                                        animationSpec = tween(durationMillis = 140, easing = FastOutSlowInEasing),
+                                    )
+                                    currentOnDismissPlayback()
+                                } finally {
+                                    isDismissing = false
+                                }
+                            }
                         } else {
                             coroutineScope.launch {
                                 translationX.animateTo(
@@ -553,7 +569,7 @@ fun MiniPlayerBar(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable(onClick = onOpenNowPlaying)
+                    .clickable(enabled = !isDismissing, onClick = onOpenNowPlaying)
                     .semantics { contentDescription = "Open Now Playing for ${track.title}" }
                     .padding(start = 14.dp, end = 6.dp, top = 8.dp, bottom = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,

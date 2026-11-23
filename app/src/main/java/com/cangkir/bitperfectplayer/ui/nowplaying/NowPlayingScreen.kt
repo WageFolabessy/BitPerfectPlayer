@@ -1,5 +1,10 @@
 package com.cangkir.bitperfectplayer.ui.nowplaying
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -49,6 +54,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -118,7 +124,7 @@ fun NowPlayingScreen(
     onOpenQueue: () -> Unit,
     onOpenLyrics: () -> Unit,
     onOpenDiagnostics: () -> Unit,
-    onOpenSettings: () -> Unit = {},
+    isPageActive: Boolean = true,
 ) {
     val track = playbackState.activeTrack
     val safetyState = playbackState.engineState.safetyState
@@ -126,15 +132,17 @@ fun NowPlayingScreen(
     val durationMs = playbackState.durationMs.coerceAtLeast(0L)
 
     // Strict lifecycle gate: activate read-only PCM spectrum tap ONLY while NowPlayingScreen
-    // is foreground-visible (ON_START..ON_STOP) AND spectrumVisualizerEnabled is ON.
+    // is the visible foreground page (isPageActive && ON_START..ON_STOP) AND enabled.
     val lifecycleOwner = LocalLifecycleOwner.current
     val latestSetSpectrumActive by rememberUpdatedState(onSetSpectrumVisualizerActive)
-    DisposableEffect(lifecycleOwner, spectrumVisualizerEnabled) {
+    DisposableEffect(lifecycleOwner, spectrumVisualizerEnabled, isPageActive) {
         val lifecycle = lifecycleOwner.lifecycle
-        latestSetSpectrumActive(spectrumVisualizerEnabled && lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))
+        latestSetSpectrumActive(
+            isPageActive && spectrumVisualizerEnabled && lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED),
+        )
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
-                Lifecycle.Event.ON_START -> latestSetSpectrumActive(spectrumVisualizerEnabled)
+                Lifecycle.Event.ON_START -> latestSetSpectrumActive(isPageActive && spectrumVisualizerEnabled)
                 Lifecycle.Event.ON_STOP -> latestSetSpectrumActive(false)
                 else -> Unit
             }
@@ -270,11 +278,8 @@ fun NowPlayingScreen(
             )
         },
     ) { innerPadding ->
-        val swipeExclusionBounds = remember { NowPlayingSwipeExclusionBounds() }
-        NowPlayingSwipeContainer(
-            exclusionBounds = swipeExclusionBounds,
-            onSwipeBack = onBack,
-            onSwipeSettings = onOpenSettings,
+        val swipeExclusionBounds = LocalSwipeExclusionBounds.current ?: remember { NowPlayingSwipeExclusionBounds() }
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding),
@@ -296,7 +301,7 @@ fun NowPlayingScreen(
                         textAlign = TextAlign.Center,
                     )
                 }
-                return@NowPlayingSwipeContainer
+                return@Box
             }
 
             val isSafe = safetyState.mode == AudioOutputMode.SAFE_VOLUME_MODE
@@ -358,7 +363,7 @@ fun NowPlayingScreen(
                                 NowPlayingHeroCenterpiece(
                                     track = track,
                                     artworkStyle = artworkStyle,
-                                    isPlaying = playbackState.isPlaying,
+                                    isPlaying = playbackState.isPlaying && isPageActive,
                                     isSafeMode = isSafe,
                                     durationMs = durationMs,
                                     discContainerDiameter = discContainerDp.dp,
@@ -389,14 +394,6 @@ fun NowPlayingScreen(
                                 horizontalAlignment = Alignment.CenterHorizontally,
                                 verticalArrangement = Arrangement.Center,
                             ) {
-                                playbackState.engineState.lastAutoPauseNotice?.let { notice ->
-                                    SafetyAlertBanner(message = notice, isError = false, onDismiss = onClearAutoPauseNotice)
-                                    Spacer(modifier = Modifier.height(12.dp))
-                                }
-                                playbackState.engineState.errorMessage?.let { err ->
-                                    SafetyAlertBanner(message = err, isError = true, onDismiss = null)
-                                    Spacer(modifier = Modifier.height(12.dp))
-                                }
                                 NowPlayingTrackControlsSection(
                                     track = track,
                                     formatSpecText = formatSpecText,
@@ -427,21 +424,13 @@ fun NowPlayingScreen(
                         modifier = Modifier
                             .fillMaxSize()
                             .verticalScroll(rememberScrollState())
-                            .padding(horizontal = 24.dp, vertical = 12.dp),
+                            .padding(horizontal = 24.dp, vertical = 10.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
-                        playbackState.engineState.lastAutoPauseNotice?.let { notice ->
-                            SafetyAlertBanner(message = notice, isError = false, onDismiss = onClearAutoPauseNotice)
-                            Spacer(modifier = Modifier.height(12.dp))
-                        }
-                        playbackState.engineState.errorMessage?.let { err ->
-                            SafetyAlertBanner(message = err, isError = true, onDismiss = null)
-                            Spacer(modifier = Modifier.height(12.dp))
-                        }
                         NowPlayingHeroCenterpiece(
                             track = track,
                             artworkStyle = artworkStyle,
-                            isPlaying = playbackState.isPlaying,
+                            isPlaying = playbackState.isPlaying && isPageActive,
                             isSafeMode = isSafe,
                             durationMs = durationMs,
                             discContainerDiameter = discContainerDp.dp,
@@ -463,7 +452,7 @@ fun NowPlayingScreen(
                             onUpdateTurntableScratchRate = onUpdateTurntableScratchRate,
                             onEndTurntableScratch = onEndTurntableScratch,
                         )
-                        Spacer(modifier = Modifier.height(24.dp))
+                        Spacer(modifier = Modifier.height(16.dp))
                         NowPlayingTrackControlsSection(
                             track = track,
                             formatSpecText = formatSpecText,
@@ -485,6 +474,29 @@ fun NowPlayingScreen(
                             onOpenQueue = onOpenQueue,
                             onOpenLyrics = onOpenLyrics,
                             onOpenDiagnostics = onOpenDiagnostics,
+                        )
+                    }
+                }
+
+                // Floating top alert overlay prevents auto-pause/error notices from shifting the vinyl disc or transport buttons.
+                val alertError = playbackState.engineState.errorMessage
+                val alertNotice = playbackState.engineState.lastAutoPauseNotice
+                val bannerMessage = alertError ?: alertNotice
+                AnimatedVisibility(
+                    visible = bannerMessage != null,
+                    enter = fadeIn(animationSpec = tween(durationMillis = 120)) +
+                        slideInVertically(animationSpec = tween(durationMillis = 120)) { -it / 3 },
+                    exit = ExitTransition.None,
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp, vertical = 4.dp),
+                ) {
+                    bannerMessage?.let { msg ->
+                        SafetyAlertBanner(
+                            message = msg,
+                            isError = alertError != null,
+                            onDismiss = if (alertError != null) null else onClearAutoPauseNotice,
                         )
                     }
                 }
@@ -626,18 +638,28 @@ private fun NowPlayingTrackControlsSection(
     onOpenLyrics: () -> Unit,
     onOpenDiagnostics: () -> Unit,
 ) {
+    val titleStyle = MaterialTheme.typography.headlineSmall
+    val fixedTitleSlotHeight = with(LocalDensity.current) { (titleStyle.lineHeight * 2).toDp() }
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text(
-            text = track.title,
-            style = MaterialTheme.typography.headlineSmall,
-            color = MaterialTheme.colorScheme.onSurface,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            textAlign = TextAlign.Center,
-        )
+        // Reserve a constant 2-line height so rapid Next/Previous taps keep transport buttons stationary.
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(fixedTitleSlotHeight),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = track.title,
+                style = titleStyle,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+            )
+        }
         Spacer(modifier = Modifier.height(if (compactVerticalSpacing) 2.dp else 4.dp))
         Text(
             text = track.artistAlbumLine,
@@ -661,7 +683,7 @@ private fun NowPlayingTrackControlsSection(
                 .padding(horizontal = 8.dp, vertical = 4.dp),
         )
 
-        Spacer(modifier = Modifier.height(if (compactVerticalSpacing) 6.dp else 18.dp))
+        Spacer(modifier = Modifier.height(if (compactVerticalSpacing) 6.dp else 14.dp))
 
         // Isolated 20 Hz Seekable Progress Leaf (hero art & controls do NOT recompose on ticks)
         NowPlayingSeekSection(
@@ -674,7 +696,7 @@ private fun NowPlayingTrackControlsSection(
             onSliderBoundsInRootChanged = { swipeExclusionBounds.seekSliderRectInRoot = it },
         )
 
-        Spacer(modifier = Modifier.height(if (compactVerticalSpacing) 6.dp else 14.dp))
+        Spacer(modifier = Modifier.height(if (compactVerticalSpacing) 6.dp else 12.dp))
 
         NowPlayingTransportRow(
             isPlaying = playbackState.isPlaying,
@@ -688,7 +710,7 @@ private fun NowPlayingTrackControlsSection(
             onCycleRepeatMode = onCycleRepeatMode,
         )
 
-        Spacer(modifier = Modifier.height(if (compactVerticalSpacing) 10.dp else 22.dp))
+        Spacer(modifier = Modifier.height(if (compactVerticalSpacing) 10.dp else 18.dp))
 
         NowPlayingAudioModeStrip(
             modeDotColor = modeDotColor,
@@ -697,7 +719,7 @@ private fun NowPlayingTrackControlsSection(
             onClick = onOpenAudioModeSheet,
         )
 
-        Spacer(modifier = Modifier.height(if (compactVerticalSpacing) 6.dp else 14.dp))
+        Spacer(modifier = Modifier.height(if (compactVerticalSpacing) 6.dp else 12.dp))
 
         NowPlayingUtilityStrip(
             onOpenQueue = onOpenQueue,

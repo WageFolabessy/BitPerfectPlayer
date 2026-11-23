@@ -266,6 +266,7 @@ internal fun SafetyAlertBanner(message: String, isError: Boolean, onDismiss: (()
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(10.dp),
+        shadowElevation = 6.dp,
         color = if (isError) CoralWarningContainer else AmberIndicatedContainer,
         border = BorderStroke(
             0.5.dp,

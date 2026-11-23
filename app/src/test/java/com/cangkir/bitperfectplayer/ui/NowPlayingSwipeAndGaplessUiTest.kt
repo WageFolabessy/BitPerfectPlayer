@@ -20,6 +20,7 @@ import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -29,8 +30,6 @@ import androidx.compose.ui.test.swipe
 import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.test.swipeRight
 import androidx.compose.ui.unit.dp
-import androidx.navigation.compose.composable
-import androidx.navigation.compose.rememberNavController
 import androidx.test.core.app.ApplicationProvider
 import com.cangkir.bitperfectplayer.audio.AudioOutputMode
 import com.cangkir.bitperfectplayer.audio.AudioSafetyState
@@ -52,11 +51,13 @@ import com.cangkir.bitperfectplayer.ui.library.LibraryScreen
 import com.cangkir.bitperfectplayer.ui.nowplaying.NOW_PLAYING_SQUARE_ARTWORK_TEST_TAG
 import com.cangkir.bitperfectplayer.ui.nowplaying.NOW_PLAYING_SWIPE_CONTAINER_TEST_TAG
 import com.cangkir.bitperfectplayer.ui.nowplaying.NowPlayingScreen
+import com.cangkir.bitperfectplayer.ui.nowplaying.ROOT_HORIZONTAL_PAGER_TEST_TAG
 import com.cangkir.bitperfectplayer.ui.nowplaying.SETTINGS_SWIPE_CONTAINER_TEST_TAG
 import com.cangkir.bitperfectplayer.ui.playlists.PlaylistsScreen
 import com.cangkir.bitperfectplayer.ui.settings.REPLAY_GAIN_PREAMP_SLIDER_TEST_TAG
 import com.cangkir.bitperfectplayer.ui.settings.SettingsScreen
 import com.cangkir.bitperfectplayer.ui.theme.BitPerfectPlayerTheme
+import kotlin.math.abs
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -104,6 +105,11 @@ class NowPlayingSwipeAndGaplessUiTest {
         codec = "FLAC",
     )
 
+    private val trackLongTitle = trackB.copy(
+        uriString = "content://test/audio/track_long.flac",
+        title = "Boulevard of Broken Dreams (Extended 24-Bit Studio Remaster)",
+    )
+
     @Before
     fun setUp() {
         val app = ApplicationProvider.getApplicationContext<Application>()
@@ -129,7 +135,7 @@ class NowPlayingSwipeAndGaplessUiTest {
         ),
     )
 
-    private fun advanceSettle(ms: Long = 260L) {
+    private fun advanceSettle(ms: Long = 600L) {
         composeRule.mainClock.advanceTimeBy(ms)
     }
 
@@ -139,7 +145,6 @@ class NowPlayingSwipeAndGaplessUiTest {
         posFlow: MutableStateFlow<Long>,
         artworkStyle: NowPlayingArtworkStyle = NowPlayingArtworkStyle.VINYL_DISC,
         onBack: () -> Unit = {},
-        onOpenSettings: () -> Unit = {},
         onPrevious: () -> Unit = {},
         onNext: () -> Unit = {},
         onSeekTo: (Long) -> Unit = {},
@@ -171,7 +176,150 @@ class NowPlayingSwipeAndGaplessUiTest {
             onOpenQueue = {},
             onOpenLyrics = {},
             onOpenDiagnostics = {},
-            onOpenSettings = onOpenSettings,
+        )
+    }
+
+    @Composable
+    private fun RenderRootPagerNavHost(
+        state: PlaybackControllerState,
+        posFlow: MutableStateFlow<Long>,
+        showMiniPlayerButton: Boolean,
+        artworkStyle: NowPlayingArtworkStyle = NowPlayingArtworkStyle.VINYL_DISC,
+        onPrevious: () -> Unit = {},
+        onNext: () -> Unit = {},
+        onSeekTo: (Long) -> Unit = {},
+        onSetReplayGainPreampDb: (Float) -> Unit = {},
+    ) {
+        val navigator = rememberRootPagerNavigator()
+        BitPerfectStartupNavHost(
+            startupHomepage = DefaultHomepage.ALL_SONGS,
+            hasActiveTrack = state.activeTrack != null,
+            rootPagerNavigator = navigator,
+            miniPlayerContent = {
+                if (showMiniPlayerButton && state.activeTrack != null) {
+                    Button(onClick = { navigator.openNowPlaying() }) {
+                        Text("Open Test Player")
+                    }
+                } else {
+                    Spacer(modifier = Modifier.height(0.dp))
+                }
+            },
+            libraryContent = { initialTab ->
+                if (showMiniPlayerButton) {
+                    Text("Library Placeholder")
+                } else {
+                    LibraryScreen(
+                        libraryState = LibrarySnapshot(allSongs = listOf(trackA, trackB)),
+                        favoriteTrackUris = emptySet(),
+                        playbackState = state,
+                        albumArtworkLoader = artworkLoader,
+                        onRefreshLibrary = {},
+                        onImportFolder = {},
+                        onPlayTracks = { _, _, _ -> navigator.openNowPlaying() },
+                        onEnqueueTrack = {},
+                        onEnqueueNext = {},
+                        onEnqueueTracks = { _, _ -> },
+                        onEnqueueTracksNext = { _, _ -> },
+                        onSetTrackSort = { _, _ -> },
+                        onSetGroupSort = { _, _ -> },
+                        onAddToPlaylist = {},
+                        onShowTrackInfo = {},
+                        onToggleFavorite = {},
+                        onOpenDiagnostics = {},
+                        onOpenQueue = {},
+                        initialTab = initialTab,
+                    )
+                }
+            },
+            playlistsContent = {
+                PlaylistsScreen(
+                    playlistsState = PlaylistsUiSnapshot(),
+                    activeTrackUri = null,
+                    albumArtworkLoader = artworkLoader,
+                    onPlayTracks = { _, _, _ -> },
+                    onEnqueueTracks = { _, _ -> },
+                    onEnqueueTracksNext = { _, _ -> },
+                    onSetPlaylistSort = { _, _ -> },
+                    onCreatePlaylist = {},
+                    onRenamePlaylist = { _, _ -> },
+                    onDeletePlaylist = { _, _ -> },
+                    onRemovePlaylistEntry = { _, _ -> },
+                    onMovePlaylistEntry = { _, _, _ -> },
+                    onExportPlaylist = { _, _ -> },
+                    onImportPlaylist = {},
+                    onOpenQueue = {},
+                )
+            },
+            settingsContent = {
+                RenderRootPagerSettingsScreen(
+                    state = state,
+                    onSetReplayGainPreampDb = onSetReplayGainPreampDb,
+                    onBack = null,
+                )
+            },
+            nowPlayingContent = { isPageActive, onBack, _ ->
+                NowPlayingScreen(
+                    playbackState = state,
+                    playbackPositionMsFlow = posFlow,
+                    sleepTimerStateFlow = MutableStateFlow(SleepTimerState()),
+                    albumArtworkLoader = artworkLoader,
+                    isFavorite = false,
+                    artworkStyle = artworkStyle,
+                    spectrumVisualizerEnabled = false,
+                    onBack = onBack,
+                    onToggleFavorite = {},
+                    onAddToPlaylist = {},
+                    onShowTrackInfo = {},
+                    onSelectSleepTimerPreset = {},
+                    onTogglePlayPause = {},
+                    onPrevious = onPrevious,
+                    onNext = onNext,
+                    onSeekTo = onSeekTo,
+                    onToggleShuffle = {},
+                    onCycleRepeatMode = {},
+                    onRequestBitPerfectMode = {},
+                    onConfirmBitPerfectWarning = {},
+                    onDismissSafetyWarning = {},
+                    onSwitchToSafeMode = {},
+                    onClearAutoPauseNotice = {},
+                    onOpenQueue = {},
+                    onOpenLyrics = {},
+                    onOpenDiagnostics = {},
+                    isPageActive = isPageActive,
+                )
+            },
+            settingsFromNowPlayingContent = { onBack ->
+                RenderRootPagerSettingsScreen(
+                    state = state,
+                    onSetReplayGainPreampDb = onSetReplayGainPreampDb,
+                    onBack = onBack,
+                )
+            },
+        )
+    }
+
+    @Composable
+    private fun RenderRootPagerSettingsScreen(
+        state: PlaybackControllerState,
+        onSetReplayGainPreampDb: (Float) -> Unit,
+        onBack: (() -> Unit)?,
+    ) {
+        SettingsScreen(
+            libraryState = LibrarySnapshot(),
+            playbackState = state,
+            sleepTimerStateFlow = MutableStateFlow(SleepTimerState()),
+            onImportFolder = {},
+            onRemoveSafFolder = {},
+            onRefreshLibrary = {},
+            onSetGaplessEnabled = {},
+            onSetReplayGainMode = {},
+            onSetReplayGainPreampDb = onSetReplayGainPreampDb,
+            onSetReplayGainPreventClipping = {},
+            onSelectSleepTimerPreset = {},
+            onExportLocalBackup = {},
+            onImportLocalBackup = {},
+            onOpenDiagnostics = {},
+            onBack = onBack,
         )
     }
 
@@ -199,7 +347,6 @@ class NowPlayingSwipeAndGaplessUiTest {
         }
         advanceSettle(48L)
 
-        // Simulate synced GAPLESS_SWAP to Track B (activeTrack + engineState.activeTrackUri both Track B)
         composeRule.runOnIdle {
             playbackState = buildState(active = trackB, engineUri = trackB.uriString)
             posFlow.value = 0L
@@ -209,7 +356,6 @@ class NowPlayingSwipeAndGaplessUiTest {
         composeRule.onNodeWithText("Jesus of Suburbia").assertIsDisplayed()
         composeRule.onNodeWithText("05:00").assertIsDisplayed()
 
-        // Clicking midpoint of Slider must invoke onSeekTo AND update displayed timestamp (not stuck at 00:00)
         composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.SetProgress))
             .performTouchInput { click(center) }
         advanceSettle(48L)
@@ -222,111 +368,211 @@ class NowPlayingSwipeAndGaplessUiTest {
 
     @Test
     @Config(qualifiers = "w411dp-h915dp")
-    fun nowPlayingScreen_bodySwipeRightGoesBackAndSwipeLeftOpensSettings() {
+    fun nowPlayingScreen_floatingAutoPauseBannerDoesNotShiftTransportButtons() {
         composeRule.mainClock.autoAdvance = false
-        var backCalls by mutableIntStateOf(0)
-        var settingsCalls by mutableIntStateOf(0)
-
+        var state by mutableStateOf(buildState(active = trackA))
         composeRule.setContent {
             BitPerfectPlayerTheme {
                 RenderTestNowPlaying(
-                    state = buildState(active = trackA),
-                    posFlow = MutableStateFlow(12_000L),
-                    onBack = { backCalls++ },
-                    onOpenSettings = { settingsCalls++ },
+                    state = state,
+                    posFlow = MutableStateFlow(10_000L),
                 )
             }
         }
         advanceSettle(48L)
 
-        composeRule.onNodeWithTag(NOW_PLAYING_SWIPE_CONTAINER_TEST_TAG).performTouchInput {
-            val yMargin = top + 24f
-            swipe(
-                start = Offset(width * 0.08f, yMargin),
-                end = Offset(width * 0.88f, yMargin),
-                durationMillis = 150L,
+        val nextTopWithoutBanner = composeRule.onNodeWithContentDescription("Next track")
+            .fetchSemanticsNode().boundsInRoot.top
+
+        composeRule.runOnIdle {
+            state = state.copy(
+                engineState = state.engineState.copy(
+                    status = PlaybackStatus.PAUSED,
+                    lastAutoPauseNotice = "Auto-paused: USB audio device connected in Safe Mode.",
+                ),
             )
         }
-        advanceSettle(48L)
-        assertEquals(1, backCalls)
-        assertEquals(0, settingsCalls)
+        advanceSettle(200L)
+        composeRule.onNodeWithText("Auto-paused: USB audio device connected in Safe Mode.").assertIsDisplayed()
 
-        composeRule.onNodeWithTag(NOW_PLAYING_SWIPE_CONTAINER_TEST_TAG).performTouchInput {
-            val yMargin = top + 24f
-            swipe(
-                start = Offset(width * 0.92f, yMargin),
-                end = Offset(width * 0.12f, yMargin),
-                durationMillis = 150L,
-            )
-        }
-        advanceSettle(48L)
-        assertEquals(1, backCalls)
-        assertEquals(1, settingsCalls)
-    }
-
-    @Test
-    @Config(qualifiers = "w411dp-h915dp")
-    fun nowPlayingScreen_swipeInsideVinylDiscIncludingSpindle_doesNotTriggerNavigation() {
-        composeRule.mainClock.autoAdvance = false
-        var backCalls by mutableIntStateOf(0)
-        var settingsCalls by mutableIntStateOf(0)
-
-        composeRule.setContent {
-            BitPerfectPlayerTheme {
-                RenderTestNowPlaying(
-                    state = buildState(active = trackA),
-                    posFlow = MutableStateFlow(45_000L),
-                    onBack = { backCalls++ },
-                    onOpenSettings = { settingsCalls++ },
-                )
-            }
-        }
-        advanceSettle(48L)
-
-        val vinylNode = composeRule.onNodeWithContentDescription(
-            "Vinyl disc turntable for ${trackA.title}. Drag circularly to seek.",
+        val nextTopWithBanner = composeRule.onNodeWithContentDescription("Next track")
+            .fetchSemanticsNode().boundsInRoot.top
+        assertTrue(
+            "Floating safety alert banner must not shift transport controls (before=$nextTopWithoutBanner, after=$nextTopWithBanner)",
+            abs(nextTopWithoutBanner - nextTopWithBanner) < 1f,
         )
-
-        // Horizontal drag across center spindle (both right and left) must NOT navigate away
-        vinylNode.performTouchInput {
-            swipe(start = center, end = Offset(right - 12f, centerY), durationMillis = 150L)
-        }
-        advanceSettle(48L)
-        vinylNode.performTouchInput {
-            swipe(start = center, end = Offset(left + 12f, centerY), durationMillis = 150L)
-        }
-        advanceSettle(48L)
-
-        // Horizontal drag across upper vinyl scrub groove ring must scrub, never navigate
-        vinylNode.performTouchInput {
-            swipe(
-                start = Offset(centerX - width * 0.28f, centerY - height * 0.22f),
-                end = Offset(centerX + width * 0.28f, centerY - height * 0.22f),
-                durationMillis = 150L,
-            )
-        }
-        advanceSettle(48L)
-
-        assertEquals(0, backCalls)
-        assertEquals(0, settingsCalls)
     }
 
     @Test
     @Config(qualifiers = "w411dp-h915dp")
-    fun nowPlayingScreen_swipeOnSeekSlider_seeksWithoutTriggeringNavigation() {
+    fun nowPlayingScreen_twoLineLongTitleKeepsTransportNextButtonStationary() {
         composeRule.mainClock.autoAdvance = false
-        var backCalls by mutableIntStateOf(0)
-        var settingsCalls by mutableIntStateOf(0)
-        var seekCalls by mutableIntStateOf(0)
-        val posFlow = MutableStateFlow(60_000L)
-
+        var state by mutableStateOf(buildState(active = trackA))
         composeRule.setContent {
             BitPerfectPlayerTheme {
                 RenderTestNowPlaying(
-                    state = buildState(active = trackB),
+                    state = state,
+                    posFlow = MutableStateFlow(10_000L),
+                )
+            }
+        }
+        advanceSettle(48L)
+
+        val nextTopShortTitle = composeRule.onNodeWithContentDescription("Next track")
+            .fetchSemanticsNode().boundsInRoot.top
+
+        composeRule.runOnIdle {
+            state = buildState(active = trackLongTitle)
+        }
+        advanceSettle(48L)
+        composeRule.onNodeWithText(trackLongTitle.title).assertIsDisplayed()
+
+        val nextTopLongTitle = composeRule.onNodeWithContentDescription("Next track")
+            .fetchSemanticsNode().boundsInRoot.top
+        assertTrue(
+            "Fixed 2-line title slot must keep Next button stationary (short=$nextTopShortTitle, long=$nextTopLongTitle)",
+            abs(nextTopShortTitle - nextTopLongTitle) < 1f,
+        )
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h915dp")
+    fun rootPager_liveAdjacentPagesSlideOneToOneWithoutEmptyBlackScreens() {
+        composeRule.mainClock.autoAdvance = false
+        val state = buildState(active = trackA)
+        composeRule.setContent {
+            BitPerfectPlayerTheme {
+                RenderRootPagerNavHost(
+                    state = state,
+                    posFlow = MutableStateFlow(12_000L),
+                    showMiniPlayerButton = true,
+                )
+            }
+        }
+        advanceSettle()
+
+        // Enter Now Playing (Page 1)
+        composeRule.onNodeWithText("Open Test Player").performClick()
+        advanceSettle()
+        composeRule.onNodeWithText("Now Playing").assertIsDisplayed()
+        composeRule.onNodeWithText("Back").assertDoesNotExist()
+        composeRule.onNodeWithText("Settings").assertDoesNotExist()
+
+        // Mid-drag left -> right toward Library (Page 0): BOTH Now Playing and Library Placeholder are composed side-by-side!
+        composeRule.onNodeWithTag(NOW_PLAYING_SWIPE_CONTAINER_TEST_TAG).performTouchInput {
+            val yMargin = top + 24f
+            down(Offset(width * 0.1f, yMargin))
+            moveBy(Offset(width * 0.35f, 0f))
+        }
+        advanceSettle(16L)
+        assertTrue(composeRule.onAllNodesWithText("Now Playing").fetchSemanticsNodes().isNotEmpty())
+        assertTrue(composeRule.onAllNodesWithText("Library Placeholder").fetchSemanticsNodes().isNotEmpty())
+        composeRule.onNodeWithTag(NOW_PLAYING_SWIPE_CONTAINER_TEST_TAG).performTouchInput { up() }
+        advanceSettle()
+        composeRule.onNodeWithText("Now Playing").assertIsDisplayed()
+
+        // Swipe right -> left from Now Playing opens full-screen Settings (Page 2)
+        composeRule.onNodeWithTag(NOW_PLAYING_SWIPE_CONTAINER_TEST_TAG).performTouchInput {
+            val yMargin = top + 24f
+            swipe(Offset(width * 0.92f, yMargin), Offset(width * 0.08f, yMargin), durationMillis = 150L)
+        }
+        advanceSettle()
+        composeRule.onNodeWithContentDescription("Back").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Bottom navigation bar").assertDoesNotExist()
+
+        // Swipe left -> right on Settings slides back to Now Playing (Page 1), then left -> right again returns to Library (Page 0)
+        composeRule.onNodeWithTag(SETTINGS_SWIPE_CONTAINER_TEST_TAG).performTouchInput {
+            val yMargin = top + 24f
+            swipe(Offset(width * 0.08f, yMargin), Offset(width * 0.92f, yMargin), durationMillis = 150L)
+        }
+        advanceSettle()
+        composeRule.onNodeWithText("Now Playing").assertIsDisplayed()
+
+        composeRule.onNodeWithTag(NOW_PLAYING_SWIPE_CONTAINER_TEST_TAG).performTouchInput {
+            val yMargin = top + 24f
+            swipe(Offset(width * 0.08f, yMargin), Offset(width * 0.92f, yMargin), durationMillis = 150L)
+        }
+        advanceSettle()
+        composeRule.onNodeWithContentDescription("Bottom navigation bar").assertIsDisplayed()
+        composeRule.onNodeWithText("Library Placeholder").assertIsDisplayed()
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h915dp")
+    fun rootPager_bottomNavSettingsSwipeOpensNowPlayingAndContinuesCleanlyToLibrary() {
+        composeRule.mainClock.autoAdvance = false
+        var state by mutableStateOf(
+            buildState(active = trackA).copy(queue = QueueSnapshot(), activeTrack = null),
+        )
+        composeRule.setContent {
+            BitPerfectPlayerTheme {
+                RenderRootPagerNavHost(
+                    state = state,
+                    posFlow = MutableStateFlow(10_000L),
+                    showMiniPlayerButton = true,
+                )
+            }
+        }
+        advanceSettle()
+
+        // Go to bottom-nav Settings while activeTrack == null -> swipe left->right is a strict no-op
+        composeRule.onNodeWithContentDescription("Settings").performClick()
+        advanceSettle()
+        composeRule.onNodeWithTag(SETTINGS_SWIPE_CONTAINER_TEST_TAG).performTouchInput {
+            val yMargin = top + 24f
+            swipe(Offset(width * 0.08f, yMargin), Offset(width * 0.92f, yMargin), durationMillis = 150L)
+        }
+        advanceSettle()
+        composeRule.onNodeWithText("AUDIO ENGINE").assertIsDisplayed()
+        composeRule.onNodeWithText("Now Playing").assertDoesNotExist()
+
+        // Activate a track: swipe right->left stays at boundary (no-op); swipe left->right opens live Now Playing!
+        composeRule.runOnIdle { state = buildState(active = trackA) }
+        advanceSettle(48L)
+        composeRule.onNodeWithTag(SETTINGS_SWIPE_CONTAINER_TEST_TAG).performTouchInput {
+            val yMargin = top + 24f
+            swipe(Offset(width * 0.92f, yMargin), Offset(width * 0.08f, yMargin), durationMillis = 150L)
+        }
+        advanceSettle()
+        composeRule.onNodeWithText("AUDIO ENGINE").assertIsDisplayed()
+
+        composeRule.onNodeWithTag(SETTINGS_SWIPE_CONTAINER_TEST_TAG).performTouchInput {
+            val yMargin = top + 24f
+            swipe(Offset(width * 0.08f, yMargin), Offset(width * 0.92f, yMargin), durationMillis = 150L)
+        }
+        advanceSettle()
+        composeRule.onNodeWithText("Now Playing").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Bottom navigation bar").assertDoesNotExist()
+
+        // Continuing left->right from Now Playing goes cleanly to Library (NO loop back to Settings!)
+        composeRule.onNodeWithTag(NOW_PLAYING_SWIPE_CONTAINER_TEST_TAG).performTouchInput {
+            val yMargin = top + 24f
+            swipe(Offset(width * 0.08f, yMargin), Offset(width * 0.92f, yMargin), durationMillis = 150L)
+        }
+        advanceSettle()
+        composeRule.onNodeWithText("Library Placeholder").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Bottom navigation bar").assertIsDisplayed()
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h915dp")
+    fun rootPager_protectsVinylSpindleSeekSliderAndSquareArtworkFromPageSwipes() {
+        composeRule.mainClock.autoAdvance = false
+        var artworkStyle by mutableStateOf(NowPlayingArtworkStyle.VINYL_DISC)
+        var seekCalls by mutableIntStateOf(0)
+        var nextCalls by mutableIntStateOf(0)
+        var prevCalls by mutableIntStateOf(0)
+        val posFlow = MutableStateFlow(45_000L)
+
+        composeRule.setContent {
+            BitPerfectPlayerTheme {
+                RenderRootPagerNavHost(
+                    state = buildState(active = trackA),
                     posFlow = posFlow,
-                    onBack = { backCalls++ },
-                    onOpenSettings = { settingsCalls++ },
+                    showMiniPlayerButton = true,
+                    artworkStyle = artworkStyle,
+                    onPrevious = { prevCalls++ },
+                    onNext = { nextCalls++ },
                     onSeekTo = {
                         seekCalls++
                         posFlow.value = it
@@ -334,335 +580,57 @@ class NowPlayingSwipeAndGaplessUiTest {
                 )
             }
         }
-        advanceSettle(48L)
+        advanceSettle()
+        composeRule.onNodeWithText("Open Test Player").performClick()
+        advanceSettle()
 
-        val sliderNode = composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.SetProgress))
-        // Even edge-to-edge swipes starting on Slider's touch overhang must never trigger screen swipe
-        sliderNode.performTouchInput { swipeRight() }
-        advanceSettle(48L)
-        sliderNode.performTouchInput { swipeLeft() }
-        advanceSettle(48L)
-        // Dragging along the active track updates seek position without navigating
-        sliderNode.performTouchInput {
-            swipe(start = Offset(width * 0.25f, centerY), end = Offset(width * 0.75f, centerY), durationMillis = 150L)
+        val vinylNode = composeRule.onNodeWithContentDescription(
+            "Vinyl disc turntable for ${trackA.title}. Drag circularly to seek.",
+        )
+        vinylNode.performTouchInput {
+            swipe(start = center, end = Offset(right - 12f, centerY), durationMillis = 150L)
         }
-        advanceSettle(48L)
-
-        assertEquals(0, backCalls)
-        assertEquals(0, settingsCalls)
-        assertTrue(seekCalls > 0)
-    }
-
-    @Test
-    @Config(qualifiers = "w411dp-h915dp")
-    fun nowPlayingScreen_squareCoverSwipeChangesTrack_whileBodySwipeNavigates() {
-        composeRule.mainClock.autoAdvance = false
-        var backCalls by mutableIntStateOf(0)
-        var settingsCalls by mutableIntStateOf(0)
-        var nextCalls by mutableIntStateOf(0)
-        var prevCalls by mutableIntStateOf(0)
-
-        composeRule.setContent {
-            BitPerfectPlayerTheme {
-                RenderTestNowPlaying(
-                    state = buildState(active = trackA),
-                    posFlow = MutableStateFlow(15_000L),
-                    artworkStyle = NowPlayingArtworkStyle.SQUARE_COVER,
-                    onBack = { backCalls++ },
-                    onOpenSettings = { settingsCalls++ },
-                    onPrevious = { prevCalls++ },
-                    onNext = { nextCalls++ },
-                )
-            }
+        advanceSettle()
+        vinylNode.performTouchInput {
+            swipe(start = center, end = Offset(left + 12f, centerY), durationMillis = 150L)
         }
-        advanceSettle(48L)
-
-        composeRule.onNodeWithTag(NOW_PLAYING_SQUARE_ARTWORK_TEST_TAG).performTouchInput { swipeLeft() }
-        advanceSettle(48L)
-        composeRule.onNodeWithTag(NOW_PLAYING_SQUARE_ARTWORK_TEST_TAG).performTouchInput { swipeRight() }
-        advanceSettle(48L)
-
-        assertEquals(1, nextCalls)
-        assertEquals(1, prevCalls)
-        assertEquals(0, backCalls)
-        assertEquals(0, settingsCalls)
-
-        composeRule.onNodeWithTag(NOW_PLAYING_SWIPE_CONTAINER_TEST_TAG).performTouchInput {
-            val yMargin = top + 24f
+        advanceSettle()
+        vinylNode.performTouchInput {
             swipe(
-                start = Offset(width * 0.92f, yMargin),
-                end = Offset(width * 0.12f, yMargin),
+                start = Offset(centerX - width * 0.28f, centerY - height * 0.22f),
+                end = Offset(centerX + width * 0.28f, centerY - height * 0.22f),
                 durationMillis = 150L,
             )
         }
+        advanceSettle()
+        composeRule.onNodeWithText("Now Playing").assertIsDisplayed()
+
+        val sliderNode = composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.SetProgress))
+        sliderNode.performTouchInput { swipeRight() }
+        advanceSettle()
+        sliderNode.performTouchInput {
+            swipe(start = Offset(width * 0.25f, centerY), end = Offset(width * 0.75f, centerY), durationMillis = 150L)
+        }
+        advanceSettle()
+        assertTrue(seekCalls > 0)
+        composeRule.onNodeWithText("Now Playing").assertIsDisplayed()
+
+        composeRule.runOnIdle { artworkStyle = NowPlayingArtworkStyle.SQUARE_COVER }
         advanceSettle(48L)
-        assertEquals(1, settingsCalls)
-    }
-
-    @Composable
-    private fun RenderSwipeTestNavHost(state: PlaybackControllerState, posFlow: MutableStateFlow<Long>, showMiniPlayerButton: Boolean) {
-        val navController = rememberNavController()
-        BitPerfectStartupNavHost(
-            startupHomepage = DefaultHomepage.ALL_SONGS,
-            navController = navController,
-            miniPlayerContent = {
-                if (showMiniPlayerButton) {
-                    Button(onClick = { navController.navigate(NOW_PLAYING_ROUTE) { launchSingleTop = true } }) {
-                        Text("Open Test Player")
-                    }
-                } else {
-                    Spacer(modifier = Modifier.height(0.dp))
-                }
-            },
-            libraryContent = { initialTab ->
-                if (showMiniPlayerButton) {
-                    Text("Library Placeholder")
-                } else {
-                    LibraryScreen(
-                        libraryState = LibrarySnapshot(allSongs = listOf(trackA, trackB)),
-                        favoriteTrackUris = emptySet(),
-                        playbackState = state,
-                        albumArtworkLoader = artworkLoader,
-                        onRefreshLibrary = {},
-                        onImportFolder = {},
-                        onPlayTracks = { _, _, _ -> navController.navigate(NOW_PLAYING_ROUTE) { launchSingleTop = true } },
-                        onEnqueueTrack = {},
-                        onEnqueueNext = {},
-                        onEnqueueTracks = { _, _ -> },
-                        onEnqueueTracksNext = { _, _ -> },
-                        onSetTrackSort = { _, _ -> },
-                        onSetGroupSort = { _, _ -> },
-                        onAddToPlaylist = {},
-                        onShowTrackInfo = {},
-                        onToggleFavorite = {},
-                        onOpenDiagnostics = {},
-                        onOpenQueue = {},
-                        initialTab = initialTab,
-                    )
-                }
-            },
-            playlistsContent = {
-                if (showMiniPlayerButton) {
-                    Text("Playlists Placeholder")
-                } else {
-                    PlaylistsScreen(
-                        playlistsState = PlaylistsUiSnapshot(),
-                        activeTrackUri = null,
-                        albumArtworkLoader = artworkLoader,
-                        onPlayTracks = { _, _, _ -> },
-                        onEnqueueTracks = { _, _ -> },
-                        onEnqueueTracksNext = { _, _ -> },
-                        onSetPlaylistSort = { _, _ -> },
-                        onCreatePlaylist = {},
-                        onRenamePlaylist = { _, _ -> },
-                        onDeletePlaylist = { _, _ -> },
-                        onRemovePlaylistEntry = { _, _ -> },
-                        onMovePlaylistEntry = { _, _, _ -> },
-                        onExportPlaylist = { _, _ -> },
-                        onImportPlaylist = {},
-                        onOpenQueue = {},
-                    )
-                }
-            },
-            settingsContent = {
-                SettingsScreen(
-                    libraryState = LibrarySnapshot(),
-                    playbackState = state,
-                    sleepTimerStateFlow = MutableStateFlow(SleepTimerState()),
-                    onImportFolder = {},
-                    onRemoveSafFolder = {},
-                    onRefreshLibrary = {},
-                    onSetGaplessEnabled = {},
-                    onSetReplayGainMode = {},
-                    onSetReplayGainPreampDb = {},
-                    onSetReplayGainPreventClipping = {},
-                    onSelectSleepTimerPreset = {},
-                    onExportLocalBackup = {},
-                    onImportLocalBackup = {},
-                    onOpenDiagnostics = {},
-                    onBack = null,
-                    onSwipeToNowPlaying = if (state.activeTrack != null) {
-                        { navController.navigate(NOW_PLAYING_ROUTE) { launchSingleTop = true } }
-                    } else {
-                        null
-                    },
-                )
-            },
-        ) {
-            composable(NOW_PLAYING_ROUTE) {
-                RenderTestNowPlaying(
-                    state = state,
-                    posFlow = posFlow,
-                    onBack = { navController.popBackStack() },
-                    onOpenSettings = { navigateToSettingsFromNowPlaying(navController) },
-                )
-            }
-            composable(NOW_PLAYING_SETTINGS_ROUTE) {
-                SettingsScreen(
-                    libraryState = LibrarySnapshot(),
-                    playbackState = state,
-                    sleepTimerStateFlow = MutableStateFlow(SleepTimerState()),
-                    onImportFolder = {},
-                    onRemoveSafFolder = {},
-                    onRefreshLibrary = {},
-                    onSetGaplessEnabled = {},
-                    onSetReplayGainMode = {},
-                    onSetReplayGainPreampDb = {},
-                    onSetReplayGainPreventClipping = {},
-                    onSelectSleepTimerPreset = {},
-                    onExportLocalBackup = {},
-                    onImportLocalBackup = {},
-                    onOpenDiagnostics = {},
-                    onBack = { navController.popBackStack() },
-                )
-            }
-        }
+        composeRule.onNodeWithTag(NOW_PLAYING_SQUARE_ARTWORK_TEST_TAG).performTouchInput { swipeLeft() }
+        advanceSettle()
+        composeRule.onNodeWithTag(NOW_PLAYING_SQUARE_ARTWORK_TEST_TAG).performTouchInput { swipeRight() }
+        advanceSettle()
+        assertEquals(1, nextCalls)
+        assertEquals(1, prevCalls)
+        composeRule.onNodeWithTag(ROOT_HORIZONTAL_PAGER_TEST_TAG).assertIsDisplayed()
+        composeRule.onNodeWithText("Now Playing").assertIsDisplayed()
     }
 
     @Test
     @Config(qualifiers = "w411dp-h915dp")
-    fun navHost_nowPlayingHorizontalSwipesMaintainCleanSettingsAndLastScreenBackstack() {
+    fun rootPager_replayGainPreampSliderAdjustsValueWithoutSwipingSettingsBackToNowPlaying() {
         composeRule.mainClock.autoAdvance = false
-        val state = buildState(active = trackA)
-        val posFlow = MutableStateFlow(10_000L)
-        composeRule.setContent {
-            BitPerfectPlayerTheme {
-                RenderSwipeTestNavHost(state = state, posFlow = posFlow, showMiniPlayerButton = false)
-            }
-        }
-        advanceSettle()
-
-        // Flow A: Library -> NowPlaying -> swipe left to NowPlayingSettings -> swipe right back to NowPlaying -> swipe right to Library
-        composeRule.onNodeWithText("American Idiot").performClick()
-        advanceSettle()
-        composeRule.onNodeWithText("Now Playing").assertIsDisplayed()
-        // Zero floating "Back" or "Settings" pill text nodes exist on NowPlayingScreen
-        composeRule.onNodeWithText("Back").assertDoesNotExist()
-        composeRule.onNodeWithText("Settings").assertDoesNotExist()
-
-        composeRule.onNodeWithTag(NOW_PLAYING_SWIPE_CONTAINER_TEST_TAG).performTouchInput {
-            val yMargin = top + 24f
-            swipe(Offset(width * 0.92f, yMargin), Offset(width * 0.12f, yMargin), durationMillis = 150L)
-        }
-        advanceSettle()
-        composeRule.onNodeWithContentDescription("Back").assertIsDisplayed()
-        composeRule.onNodeWithContentDescription("Bottom navigation bar").assertDoesNotExist()
-
-        // Bidirectional horizontal swipe: swipe left -> right on NowPlayingSettings returns to NowPlaying
-        composeRule.onNodeWithTag(SETTINGS_SWIPE_CONTAINER_TEST_TAG).performTouchInput {
-            val yMargin = top + 24f
-            swipe(Offset(width * 0.08f, yMargin), Offset(width * 0.88f, yMargin), durationMillis = 150L)
-        }
-        advanceSettle()
-        composeRule.onNodeWithText("Now Playing").assertIsDisplayed()
-
-        composeRule.onNodeWithTag(NOW_PLAYING_SWIPE_CONTAINER_TEST_TAG).performTouchInput {
-            val yMargin = top + 24f
-            swipe(Offset(width * 0.08f, yMargin), Offset(width * 0.88f, yMargin), durationMillis = 150L)
-        }
-        advanceSettle()
-        composeRule.onNodeWithContentDescription("Bottom navigation bar").assertIsDisplayed()
-    }
-
-    @Test
-    @Config(qualifiers = "w411dp-h915dp")
-    fun navHost_nowPlayingOpenedFromSettingsAndSwipedLeft_popsCleanlyWithoutDuplicateSettings() {
-        composeRule.mainClock.autoAdvance = false
-        val state = buildState(active = trackA)
-        val posFlow = MutableStateFlow(10_000L)
-        composeRule.setContent {
-            BitPerfectPlayerTheme {
-                RenderSwipeTestNavHost(state = state, posFlow = posFlow, showMiniPlayerButton = true)
-            }
-        }
-        advanceSettle()
-
-        composeRule.onNodeWithContentDescription("Settings").performClick()
-        advanceSettle()
-        composeRule.onNodeWithContentDescription("Back").assertDoesNotExist()
-
-        composeRule.onNodeWithText("Open Test Player").performClick()
-        advanceSettle()
-        composeRule.onNodeWithText("Now Playing").assertIsDisplayed()
-
-        // Swipe right-to-left while previousBackStackEntry is top-level Settings -> pops cleanly to Settings tab
-        composeRule.onNodeWithTag(NOW_PLAYING_SWIPE_CONTAINER_TEST_TAG).performTouchInput {
-            val yMargin = top + 24f
-            swipe(Offset(width * 0.92f, yMargin), Offset(width * 0.12f, yMargin), durationMillis = 150L)
-        }
-        advanceSettle()
-        composeRule.onNodeWithContentDescription("Bottom navigation bar").assertIsDisplayed()
-        composeRule.onNodeWithContentDescription("Back").assertDoesNotExist()
-    }
-
-    @Test
-    @Config(qualifiers = "w411dp-h915dp")
-    fun bottomNavSettingsTab_swipeLeftToRightOpensNowPlayingOnlyWhenActiveTrackExists_andSwipeRightToLeftIsNoOp() {
-        composeRule.mainClock.autoAdvance = false
-        var state by mutableStateOf(
-            buildState(active = trackA).copy(
-                queue = QueueSnapshot(),
-                activeTrack = null,
-            ),
-        )
-        val posFlow = MutableStateFlow(10_000L)
-        composeRule.setContent {
-            BitPerfectPlayerTheme {
-                RenderSwipeTestNavHost(state = state, posFlow = posFlow, showMiniPlayerButton = true)
-            }
-        }
-        advanceSettle()
-
-        // Navigate to bottom-nav Settings tab while activeTrack == null
-        composeRule.onNodeWithContentDescription("Settings").performClick()
-        advanceSettle()
-        composeRule.onNodeWithText("AUDIO ENGINE").assertIsDisplayed()
-
-        // 1. With activeTrack == null, swiping left -> right on bottom-nav Settings must be a strict no-op
-        composeRule.onNodeWithTag(SETTINGS_SWIPE_CONTAINER_TEST_TAG).performTouchInput {
-            val yMargin = top + 24f
-            swipe(Offset(width * 0.08f, yMargin), Offset(width * 0.88f, yMargin), durationMillis = 150L)
-        }
-        advanceSettle()
-        composeRule.onNodeWithText("AUDIO ENGINE").assertIsDisplayed()
-        composeRule.onNodeWithText("Now Playing").assertDoesNotExist()
-
-        // 2. Activate a track, verify right -> left swipe on bottom-nav Settings is still a no-op
-        composeRule.runOnIdle {
-            state = buildState(active = trackA)
-        }
-        advanceSettle(48L)
-        composeRule.onNodeWithTag(SETTINGS_SWIPE_CONTAINER_TEST_TAG).performTouchInput {
-            val yMargin = top + 24f
-            swipe(Offset(width * 0.92f, yMargin), Offset(width * 0.12f, yMargin), durationMillis = 150L)
-        }
-        advanceSettle()
-        composeRule.onNodeWithText("AUDIO ENGINE").assertIsDisplayed()
-
-        // 3. With activeTrack != null, swiping left -> right on bottom-nav Settings opens Now Playing
-        composeRule.onNodeWithTag(SETTINGS_SWIPE_CONTAINER_TEST_TAG).performTouchInput {
-            val yMargin = top + 24f
-            swipe(Offset(width * 0.08f, yMargin), Offset(width * 0.88f, yMargin), durationMillis = 150L)
-        }
-        advanceSettle()
-        composeRule.onNodeWithText("Now Playing").assertIsDisplayed()
-        composeRule.onNodeWithContentDescription("Bottom navigation bar").assertDoesNotExist()
-
-        // 4. Round-trip: swiping right -> left on Now Playing pops back to bottom-nav Settings without duplicate Settings
-        composeRule.onNodeWithTag(NOW_PLAYING_SWIPE_CONTAINER_TEST_TAG).performTouchInput {
-            val yMargin = top + 24f
-            swipe(Offset(width * 0.92f, yMargin), Offset(width * 0.12f, yMargin), durationMillis = 150L)
-        }
-        advanceSettle()
-        composeRule.onNodeWithContentDescription("Bottom navigation bar").assertIsDisplayed()
-        composeRule.onNodeWithContentDescription("Back").assertDoesNotExist()
-    }
-
-    @Test
-    @Config(qualifiers = "w411dp-h915dp")
-    fun settingsScreen_swipeOnReplayGainPreampSlider_adjustsPreampWithoutTriggeringPageSwipe() {
-        composeRule.mainClock.autoAdvance = false
-        var swipeToNowPlayingCalls by mutableIntStateOf(0)
         var preampChangeCalls by mutableIntStateOf(0)
         var state by mutableStateOf(
             buildState(active = trackA).copy(
@@ -672,48 +640,37 @@ class NowPlayingSwipeAndGaplessUiTest {
 
         composeRule.setContent {
             BitPerfectPlayerTheme {
-                SettingsScreen(
-                    libraryState = LibrarySnapshot(),
-                    playbackState = state,
-                    sleepTimerStateFlow = MutableStateFlow(SleepTimerState()),
-                    onImportFolder = {},
-                    onRemoveSafFolder = {},
-                    onRefreshLibrary = {},
-                    onSetGaplessEnabled = {},
-                    onSetReplayGainMode = {},
+                RenderRootPagerNavHost(
+                    state = state,
+                    posFlow = MutableStateFlow(10_000L),
+                    showMiniPlayerButton = true,
                     onSetReplayGainPreampDb = { newDb ->
                         preampChangeCalls++
                         state = state.copy(replayGainConfig = state.replayGainConfig.copy(preampDb = newDb))
                     },
-                    onSetReplayGainPreventClipping = {},
-                    onSelectSleepTimerPreset = {},
-                    onExportLocalBackup = {},
-                    onImportLocalBackup = {},
-                    onOpenDiagnostics = {},
-                    onBack = null,
-                    onSwipeToNowPlaying = { swipeToNowPlayingCalls++ },
                 )
             }
         }
-        advanceSettle(48L)
+        advanceSettle()
+        composeRule.onNodeWithContentDescription("Settings").performClick()
+        advanceSettle()
 
         val sliderNode = composeRule.onNodeWithTag(REPLAY_GAIN_PREAMP_SLIDER_TEST_TAG)
         sliderNode.performTouchInput { swipeRight() }
-        advanceSettle(48L)
-        sliderNode.performTouchInput { swipeLeft() }
-        advanceSettle(48L)
+        advanceSettle()
         sliderNode.performTouchInput {
             swipe(start = Offset(width * 0.25f, centerY), end = Offset(width * 0.75f, centerY), durationMillis = 150L)
         }
-        advanceSettle(48L)
+        advanceSettle()
 
-        assertEquals(0, swipeToNowPlayingCalls)
         assertTrue(preampChangeCalls > 0)
+        composeRule.onNodeWithText("AUDIO ENGINE").assertIsDisplayed()
+        composeRule.onNodeWithText("Now Playing").assertDoesNotExist()
     }
 
     @Test
     @Config(qualifiers = "w411dp-h915dp")
-    fun miniPlayerBar_swipeRightToLeftDismissesAndClearsSession_whileLeftToRightShortSwipeAndTapsWork() {
+    fun miniPlayerBar_swipeRightToLeftAnimatesOutAndClearsSession_whileRightwardShortDragAndTapsWork() {
         composeRule.mainClock.autoAdvance = false
         var state by mutableStateOf(buildState(active = trackA))
         val posFlow = MutableStateFlow(30_000L)
@@ -740,7 +697,6 @@ class NowPlayingSwipeAndGaplessUiTest {
         }
         advanceSettle(48L)
 
-        // 1. Tapping Play/Pause, Next, and body still work normally
         composeRule.onNodeWithContentDescription("Pause playback").performClick()
         composeRule.onNodeWithContentDescription("Next track").performClick()
         composeRule.onNodeWithContentDescription("Open Now Playing for ${trackA.title}").performClick()
@@ -750,27 +706,27 @@ class NowPlayingSwipeAndGaplessUiTest {
         assertEquals(1, openCalls)
         assertEquals(0, dismissCalls)
 
-        // 2. Left-to-right swipe (wrong direction) must NOT dismiss MiniPlayerBar
+        // Left -> right swipe does not dismiss
         composeRule.onNodeWithTag(MINI_PLAYER_BAR_TEST_TAG).performTouchInput {
             swipe(start = Offset(width * 0.15f, centerY), end = Offset(width * 0.85f, centerY), durationMillis = 150L)
         }
-        advanceSettle(120L)
+        advanceSettle(240L)
         assertEquals(0, dismissCalls)
         composeRule.onNodeWithTag(MINI_PLAYER_BAR_TEST_TAG).assertIsDisplayed()
 
-        // 3. Short slow right-to-left drag below threshold springs back without dismissing
+        // Short slow drag below threshold springs back
         composeRule.onNodeWithTag(MINI_PLAYER_BAR_TEST_TAG).performTouchInput {
             swipe(start = Offset(width * 0.55f, centerY), end = Offset(width * 0.45f, centerY), durationMillis = 350L)
         }
-        advanceSettle(120L)
+        advanceSettle(240L)
         assertEquals(0, dismissCalls)
         composeRule.onNodeWithTag(MINI_PLAYER_BAR_TEST_TAG).assertIsDisplayed()
 
-        // 4. Full right-to-left swipe dismisses and clears activeTrack so MiniPlayerBar disappears
+        // Full right -> left swipe animates out (140 ms) and clears activeTrack
         composeRule.onNodeWithTag(MINI_PLAYER_BAR_TEST_TAG).performTouchInput {
             swipe(start = Offset(width * 0.88f, centerY), end = Offset(width * 0.12f, centerY), durationMillis = 150L)
         }
-        advanceSettle(120L)
+        advanceSettle(240L)
         assertEquals(1, dismissCalls)
         assertNull(state.activeTrack)
         composeRule.onNodeWithTag(MINI_PLAYER_BAR_TEST_TAG).assertDoesNotExist()
