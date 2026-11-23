@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -82,6 +83,7 @@ internal fun GroupListView(
     showArtworkThumbnail: Boolean,
     albumArtworkLoader: AlbumArtworkLoader,
     emptyMessage: String,
+    listState: LazyListState = rememberLazyListState(),
     onSelectGroup: (LibraryGroup) -> Unit,
     onPlayGroup: (LibraryGroup) -> Unit,
 ) {
@@ -101,7 +103,6 @@ internal fun GroupListView(
         return
     }
 
-    val listState = rememberLazyListState()
     var previousResetKey by remember { mutableStateOf(scrollResetKey) }
     LaunchedEffect(scrollResetKey) {
         if (previousResetKey != scrollResetKey) {
@@ -469,6 +470,7 @@ internal fun ArtistGroupListView(
     albumArtworkLoader: AlbumArtworkLoader,
     artistPhotoStore: ArtistPhotoStore?,
     artistPhotoRevision: Int,
+    listState: LazyListState = rememberLazyListState(),
     onOpenSort: () -> Unit,
     onSelectGroup: (LibraryGroup) -> Unit,
     onPlayGroup: (LibraryGroup) -> Unit,
@@ -478,7 +480,6 @@ internal fun ArtistGroupListView(
         return
     }
 
-    val listState = rememberLazyListState()
     var previousResetKey by remember { mutableStateOf(scrollResetKey) }
     LaunchedEffect(scrollResetKey) {
         if (previousResetKey != scrollResetKey) {
@@ -724,6 +725,7 @@ internal fun FolderGroupListView(
     scrollResetKey: Any,
     sortLabel: String,
     albumArtworkLoader: AlbumArtworkLoader,
+    listState: LazyListState = rememberLazyListState(),
     onOpenSort: () -> Unit,
     onSelectGroup: (LibraryGroup) -> Unit,
     onPlayGroup: (LibraryGroup) -> Unit,
@@ -733,7 +735,6 @@ internal fun FolderGroupListView(
         return
     }
 
-    val listState = rememberLazyListState()
     var previousResetKey by remember { mutableStateOf(scrollResetKey) }
     LaunchedEffect(scrollResetKey) {
         if (previousResetKey != scrollResetKey) {

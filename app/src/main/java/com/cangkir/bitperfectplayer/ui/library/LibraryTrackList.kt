@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
@@ -60,6 +61,8 @@ internal fun TrackListView(
     activeTrackUri: String?,
     favoriteTrackUris: Set<String>,
     favoriteFingerprints: Set<String>,
+    modifier: Modifier = Modifier,
+    listState: LazyListState = rememberLazyListState(),
     showTrackNumber: Boolean = false,
     onPlayTracks: (List<PlaybackTrack>, Int) -> Unit,
     onEnqueueTrack: (PlaybackTrack) -> Unit,
@@ -71,7 +74,7 @@ internal fun TrackListView(
 ) {
     if (tracks.isEmpty()) {
         Column(
-            modifier = Modifier
+            modifier = modifier
                 .fillMaxSize()
                 .padding(28.dp),
             verticalArrangement = Arrangement.Center,
@@ -114,7 +117,6 @@ internal fun TrackListView(
         return
     }
 
-    val listState = rememberLazyListState()
     var previousResetKey by remember { mutableStateOf(scrollResetKey) }
     LaunchedEffect(scrollResetKey) {
         if (previousResetKey != scrollResetKey) {
@@ -125,7 +127,7 @@ internal fun TrackListView(
 
     LazyColumn(
         state = listState,
-        modifier = Modifier.fillMaxSize(),
+        modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(bottom = 12.dp),
     ) {
         itemsIndexed(

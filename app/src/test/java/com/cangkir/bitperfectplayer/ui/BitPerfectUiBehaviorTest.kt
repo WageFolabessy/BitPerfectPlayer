@@ -20,6 +20,7 @@ import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.hasScrollToIndexAction
 import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
@@ -60,6 +61,7 @@ import com.cangkir.bitperfectplayer.library.SortDirection
 import com.cangkir.bitperfectplayer.library.TrackSortOption
 import com.cangkir.bitperfectplayer.library.TrackSortSpec
 import com.cangkir.bitperfectplayer.library.TrackTechnicalInfo
+import com.cangkir.bitperfectplayer.ui.library.LIBRARY_SUBTAB_PAGER_TEST_TAG
 import com.cangkir.bitperfectplayer.ui.library.LibraryScreen
 import com.cangkir.bitperfectplayer.ui.nowplaying.NowPlayingScreen
 import com.cangkir.bitperfectplayer.ui.playlists.PlaylistsScreen
@@ -385,7 +387,7 @@ class BitPerfectUiBehaviorTest {
 
         // Initial top item is Track 01; scroll deep into the list (index 18 -> Track 19)
         composeRule.onNodeWithText("Track 01").assertIsDisplayed()
-        composeRule.onNode(hasScrollToIndexAction()).performScrollToIndex(18)
+        composeRule.onNode(hasScrollToIndexAction() and !hasTestTag(LIBRARY_SUBTAB_PAGER_TEST_TAG)).performScrollToIndex(18)
         composeRule.waitForIdle()
         composeRule.onNodeWithText("Track 19").assertIsDisplayed()
 

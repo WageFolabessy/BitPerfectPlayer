@@ -9,6 +9,11 @@ enum class LibraryTab(val label: String) {
     ALBUMS("Albums"),
     RECENT("Recent"),
     FAVORITES("Favorites"),
+    ;
+
+    companion object {
+        fun fromPageIndex(pageIndex: Int): LibraryTab = entries[pageIndex.coerceIn(0, entries.lastIndex)]
+    }
 }
 
 /**

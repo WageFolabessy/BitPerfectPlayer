@@ -13,6 +13,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Album
 import androidx.compose.material3.LinearProgressIndicator
@@ -24,10 +28,13 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.cangkir.bitperfectplayer.audio.AudioOutputMode
@@ -53,6 +60,9 @@ import com.cangkir.bitperfectplayer.ui.theme.CoverThemeColorCache
 import com.cangkir.bitperfectplayer.ui.theme.CoverThemeLookup
 import com.cangkir.bitperfectplayer.ui.theme.EmeraldSafe
 import com.cangkir.bitperfectplayer.ui.theme.LocalActiveDynamicTokens
+import kotlinx.coroutines.launch
+
+internal const val LIBRARY_SUBTAB_PAGER_TEST_TAG = "library_subtab_pager"
 
 @Composable
 fun LibraryScreen(
@@ -84,7 +94,22 @@ fun LibraryScreen(
     onResetCustomArtistPhoto: (String) -> Unit = {},
 ) {
     val context = LocalContext.current
-    var selectedTab by rememberSaveable { mutableStateOf(initialTab) }
+    val pagerState = rememberPagerState(
+        initialPage = initialTab.ordinal,
+        pageCount = { LibraryTab.entries.size },
+    )
+    val coroutineScope = rememberCoroutineScope()
+    var pendingTapTabIndex by remember { mutableStateOf<Int?>(null) }
+    val selectedTab = LibraryTab.fromPageIndex(pagerState.currentPage)
+    val tabRowSelectedTab = LibraryTab.fromPageIndex(pendingTapTabIndex ?: pagerState.currentPage)
+
+    val allSongsListState = rememberLazyListState()
+    val foldersListState = rememberLazyListState()
+    val artistsListState = rememberLazyListState()
+    val albumsListState = rememberLazyListState()
+    val recentListState = rememberLazyListState()
+    val favoritesListState = rememberLazyListState()
+
     var searchQuery by rememberSaveable { mutableStateOf("") }
     var openedGroupName by rememberSaveable { mutableStateOf<String?>(null) }
     var openedArtistAlbumName by rememberSaveable { mutableStateOf<String?>(null) }
@@ -201,10 +226,13 @@ fun LibraryScreen(
     }
 
     val launchImportFolder = remember(folderPickerLauncher) { { folderPickerLauncher.launch(null) } }
-    val onSelectGroup = remember {
-        { group: LibraryGroup ->
+    val onSelectGroupForTab = remember(pagerState, coroutineScope) {
+        { tab: LibraryTab, group: LibraryGroup ->
             openedGroupName = group.name
             openedArtistAlbumName = null
+            if (pagerState.currentPage != tab.ordinal) {
+                coroutineScope.launch { pagerState.scrollToPage(tab.ordinal) }
+            }
         }
     }
     val navigateDetailBack = remember {
@@ -348,11 +376,22 @@ fun LibraryScreen(
 
                 if (effectiveDetailGroup == null) {
                     LibraryTabRow(
-                        selectedTab = selectedTab,
+                        selectedTab = tabRowSelectedTab,
                         onSelectTab = { tab ->
-                            selectedTab = tab
                             openedGroupName = null
                             openedArtistAlbumName = null
+                            if (pagerState.currentPage != tab.ordinal || pagerState.currentPageOffsetFraction != 0f) {
+                                pendingTapTabIndex = tab.ordinal
+                                coroutineScope.launch {
+                                    try {
+                                        pagerState.animateScrollToPage(tab.ordinal)
+                                    } finally {
+                                        if (pendingTapTabIndex == tab.ordinal) {
+                                            pendingTapTabIndex = null
+                                        }
+                                    }
+                                }
+                            }
                         },
                     )
                 }
@@ -379,157 +418,244 @@ fun LibraryScreen(
                         onToggleFavorite = onToggleFavorite,
                     )
                 } else {
-                    when (selectedTab) {
-                        LibraryTab.ALL_SONGS -> {
-                            val filtered = remember(libraryState.allSongs, searchQuery) {
-                                val q = searchQuery.trim()
-                                if (q.isEmpty()) {
-                                    libraryState.allSongs
-                                } else {
-                                    libraryState.allSongs.filter {
-                                        it.title.contains(q, ignoreCase = true) ||
-                                            it.artist.contains(q, ignoreCase = true) ||
-                                            it.album.contains(q, ignoreCase = true) ||
-                                            it.fileName.contains(q, ignoreCase = true)
-                                    }
-                                }
-                            }
-                            CompactSearchBarRow(
-                                query = searchQuery,
-                                shownCount = filtered.size,
-                                totalCount = libraryState.allSongs.size,
-                                sortLabel = sortPrefs.allSongs.compactLabel,
-                                onQueryChange = { searchQuery = it },
-                                onRefresh = onRefreshLibrary,
-                                onOpenSort = { activeTrackSortSheet = TrackSortScope.ALL_SONGS },
-                            )
-                            TrackListView(
-                                tracks = filtered,
-                                scrollResetKey = Pair(sortPrefs.allSongs, searchQuery.trim()),
-                                albumArtworkLoader = albumArtworkLoader,
-                                emptyTitle = if (searchQuery.isNotBlank()) "No matching tracks" else "No local audio tracks",
-                                emptySubtitle = if (searchQuery.isNotBlank()) {
-                                    "Try a different title, artist, album, or filename."
-                                } else {
-                                    "Grant local audio access or import a music folder via SAF."
-                                },
-                                activeTrackUri = playbackState.activeTrack?.uriString,
-                                favoriteTrackUris = favoriteTrackUris,
-                                favoriteFingerprints = libraryState.favoriteFingerprints,
-                                onPlayTracks = { displayedTracks, displayedIndex ->
-                                    val tappedTrack = displayedTracks.getOrNull(displayedIndex)
-                                    if (tappedTrack != null && searchQuery.isNotBlank()) {
-                                        val (fullQueue, fullIndex) = QueueContextResolver.resolveFullListPlaybackSelection(
-                                            fullTrackList = libraryState.allSongs,
-                                            tappedTrack = tappedTrack,
-                                            fallbackTracks = displayedTracks,
-                                            fallbackIndex = displayedIndex,
-                                        )
-                                        onPlayTracks(fullQueue, fullIndex, QueueContext.allSongs())
-                                    } else {
-                                        onPlayTracks(displayedTracks, displayedIndex, QueueContext.allSongs())
-                                    }
-                                },
-                                onEnqueueTrack = onEnqueueTrack,
-                                onEnqueueNext = onEnqueueNext,
-                                onAddToPlaylist = onAddToPlaylist,
-                                onShowTrackInfo = onShowTrackInfo,
-                                onToggleFavorite = onToggleFavorite,
-                                onImportFolder = if (searchQuery.isBlank()) launchImportFolder else null,
-                            )
-                        }
-                        LibraryTab.FOLDERS -> FolderGroupListView(
-                            groups = libraryState.folders,
-                            scrollResetKey = sortPrefs.foldersList,
-                            sortLabel = sortPrefs.foldersList.compactLabel,
-                            albumArtworkLoader = albumArtworkLoader,
-                            onOpenSort = { activeGroupSortSheet = GroupSortScope.FOLDERS_LIST },
-                            onSelectGroup = onSelectGroup,
-                            onPlayGroup = { group -> onPlayTracks(group.tracks, 0, QueueContext.folder(group.name)) },
-                        )
-                        LibraryTab.ARTISTS -> ArtistGroupListView(
-                            groups = libraryState.artists,
-                            scrollResetKey = sortPrefs.artistsList,
-                            sortLabel = sortPrefs.artistsList.compactLabel,
-                            albumTrackSortSpec = sortPrefs.albumDetail,
+                    HorizontalPager(
+                        state = pagerState,
+                        key = { page -> LibraryTab.fromPageIndex(page).name },
+                        verticalAlignment = Alignment.Top,
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .testTag(LIBRARY_SUBTAB_PAGER_TEST_TAG),
+                    ) { page ->
+                        LibraryPagerPageContent(
+                            tab = LibraryTab.fromPageIndex(page),
+                            libraryState = libraryState,
+                            searchQuery = searchQuery,
+                            onSearchQueryChange = { searchQuery = it },
+                            favoriteTrackUris = favoriteTrackUris,
+                            activeTrackUri = playbackState.activeTrack?.uriString,
                             albumArtworkLoader = albumArtworkLoader,
                             artistPhotoStore = artistPhotoStore,
                             artistPhotoRevision = artistPhotoRevision,
-                            onOpenSort = { activeGroupSortSheet = GroupSortScope.ARTISTS_LIST },
-                            onSelectGroup = onSelectGroup,
-                            onPlayGroup = { group -> onPlayTracks(group.tracks, 0, QueueContext.artist(group.name)) },
+                            allSongsListState = allSongsListState,
+                            foldersListState = foldersListState,
+                            artistsListState = artistsListState,
+                            albumsListState = albumsListState,
+                            recentListState = recentListState,
+                            favoritesListState = favoritesListState,
+                            onRefreshLibrary = onRefreshLibrary,
+                            onImportFolder = launchImportFolder,
+                            onOpenTrackSort = { activeTrackSortSheet = it },
+                            onOpenGroupSort = { activeGroupSortSheet = it },
+                            onSelectGroup = onSelectGroupForTab,
+                            onPlayTracks = onPlayTracks,
+                            onEnqueueTrack = onEnqueueTrack,
+                            onEnqueueNext = onEnqueueNext,
+                            onAddToPlaylist = onAddToPlaylist,
+                            onShowTrackInfo = onShowTrackInfo,
+                            onToggleFavorite = onToggleFavorite,
                         )
-                        LibraryTab.ALBUMS -> GroupListView(
-                            groups = libraryState.albums,
-                            scrollResetKey = sortPrefs.albumsList,
-                            singularUnit = "album",
-                            pluralUnit = "albums",
-                            sortLabel = sortPrefs.albumsList.compactLabel,
-                            onOpenSort = { activeGroupSortSheet = GroupSortScope.ALBUMS_LIST },
-                            icon = Icons.Filled.Album,
-                            showArtworkThumbnail = true,
-                            albumArtworkLoader = albumArtworkLoader,
-                            emptyMessage = "No albums found in local library.",
-                            onSelectGroup = onSelectGroup,
-                            onPlayGroup = { group -> onPlayTracks(group.tracks, 0, QueueContext.album(group.name)) },
-                        )
-                        LibraryTab.RECENT -> {
-                            if (libraryState.recentlyPlayed.isNotEmpty()) {
-                                val recentCount = libraryState.recentlyPlayed.size
-                                SubtleListSortHeaderRow(
-                                    countLabel = "$recentCount ${if (recentCount == 1) "track" else "tracks"}",
-                                    sortLabel = sortPrefs.recent.compactLabel,
-                                    onOpenSort = { activeTrackSortSheet = TrackSortScope.RECENT },
-                                )
-                            }
-                            TrackListView(
-                                tracks = libraryState.recentlyPlayed,
-                                scrollResetKey = sortPrefs.recent,
-                                albumArtworkLoader = albumArtworkLoader,
-                                emptyTitle = "No recently played tracks",
-                                emptySubtitle = "Tracks you play appear here locally.",
-                                activeTrackUri = playbackState.activeTrack?.uriString,
-                                favoriteTrackUris = favoriteTrackUris,
-                                favoriteFingerprints = libraryState.favoriteFingerprints,
-                                onPlayTracks = { tracks, index -> onPlayTracks(tracks, index, QueueContext.recent()) },
-                                onEnqueueTrack = onEnqueueTrack,
-                                onEnqueueNext = onEnqueueNext,
-                                onAddToPlaylist = onAddToPlaylist,
-                                onShowTrackInfo = onShowTrackInfo,
-                                onToggleFavorite = onToggleFavorite,
-                                onImportFolder = null,
-                            )
-                        }
-                        LibraryTab.FAVORITES -> {
-                            if (libraryState.favorites.isNotEmpty()) {
-                                val favCount = libraryState.favorites.size
-                                SubtleListSortHeaderRow(
-                                    countLabel = "$favCount ${if (favCount == 1) "track" else "tracks"}",
-                                    sortLabel = sortPrefs.favorites.compactLabel,
-                                    onOpenSort = { activeTrackSortSheet = TrackSortScope.FAVORITES },
-                                )
-                            }
-                            TrackListView(
-                                tracks = libraryState.favorites,
-                                scrollResetKey = sortPrefs.favorites,
-                                albumArtworkLoader = albumArtworkLoader,
-                                emptyTitle = "No favorite tracks yet",
-                                emptySubtitle = "Tap the heart icon on any track to save it locally.",
-                                activeTrackUri = playbackState.activeTrack?.uriString,
-                                favoriteTrackUris = favoriteTrackUris,
-                                favoriteFingerprints = libraryState.favoriteFingerprints,
-                                onPlayTracks = { tracks, index -> onPlayTracks(tracks, index, QueueContext.favorites()) },
-                                onEnqueueTrack = onEnqueueTrack,
-                                onEnqueueNext = onEnqueueNext,
-                                onAddToPlaylist = onAddToPlaylist,
-                                onShowTrackInfo = onShowTrackInfo,
-                                onToggleFavorite = onToggleFavorite,
-                                onImportFolder = null,
-                            )
-                        }
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun LibraryPagerPageContent(
+    tab: LibraryTab,
+    libraryState: LibrarySnapshot,
+    searchQuery: String,
+    onSearchQueryChange: (String) -> Unit,
+    favoriteTrackUris: Set<String>,
+    activeTrackUri: String?,
+    albumArtworkLoader: AlbumArtworkLoader,
+    artistPhotoStore: ArtistPhotoStore?,
+    artistPhotoRevision: Int,
+    allSongsListState: LazyListState,
+    foldersListState: LazyListState,
+    artistsListState: LazyListState,
+    albumsListState: LazyListState,
+    recentListState: LazyListState,
+    favoritesListState: LazyListState,
+    onRefreshLibrary: () -> Unit,
+    onImportFolder: () -> Unit,
+    onOpenTrackSort: (TrackSortScope) -> Unit,
+    onOpenGroupSort: (GroupSortScope) -> Unit,
+    onSelectGroup: (LibraryTab, LibraryGroup) -> Unit,
+    onPlayTracks: (List<PlaybackTrack>, Int, QueueContext) -> Unit,
+    onEnqueueTrack: (PlaybackTrack) -> Unit,
+    onEnqueueNext: (PlaybackTrack) -> Unit,
+    onAddToPlaylist: (PlaybackTrack) -> Unit,
+    onShowTrackInfo: (PlaybackTrack) -> Unit,
+    onToggleFavorite: (PlaybackTrack) -> Unit,
+) {
+    val sortPrefs = libraryState.sortPreferences
+    when (tab) {
+        LibraryTab.ALL_SONGS -> {
+            val filtered = remember(libraryState.allSongs, searchQuery) {
+                val q = searchQuery.trim()
+                if (q.isEmpty()) {
+                    libraryState.allSongs
+                } else {
+                    libraryState.allSongs.filter {
+                        it.title.contains(q, ignoreCase = true) ||
+                            it.artist.contains(q, ignoreCase = true) ||
+                            it.album.contains(q, ignoreCase = true) ||
+                            it.fileName.contains(q, ignoreCase = true)
+                    }
+                }
+            }
+            Column(modifier = Modifier.fillMaxSize()) {
+                CompactSearchBarRow(
+                    query = searchQuery,
+                    shownCount = filtered.size,
+                    totalCount = libraryState.allSongs.size,
+                    sortLabel = sortPrefs.allSongs.compactLabel,
+                    onQueryChange = onSearchQueryChange,
+                    onRefresh = onRefreshLibrary,
+                    onOpenSort = { onOpenTrackSort(TrackSortScope.ALL_SONGS) },
+                )
+                TrackListView(
+                    tracks = filtered,
+                    scrollResetKey = Pair(sortPrefs.allSongs, searchQuery.trim()),
+                    albumArtworkLoader = albumArtworkLoader,
+                    emptyTitle = if (searchQuery.isNotBlank()) "No matching tracks" else "No local audio tracks",
+                    emptySubtitle = if (searchQuery.isNotBlank()) {
+                        "Try a different title, artist, album, or filename."
+                    } else {
+                        "Grant local audio access or import a music folder via SAF."
+                    },
+                    activeTrackUri = activeTrackUri,
+                    favoriteTrackUris = favoriteTrackUris,
+                    favoriteFingerprints = libraryState.favoriteFingerprints,
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
+                    listState = allSongsListState,
+                    onPlayTracks = { displayedTracks, displayedIndex ->
+                        val tappedTrack = displayedTracks.getOrNull(displayedIndex)
+                        if (tappedTrack != null && searchQuery.isNotBlank()) {
+                            val (fullQueue, fullIndex) = QueueContextResolver.resolveFullListPlaybackSelection(
+                                fullTrackList = libraryState.allSongs,
+                                tappedTrack = tappedTrack,
+                                fallbackTracks = displayedTracks,
+                                fallbackIndex = displayedIndex,
+                            )
+                            onPlayTracks(fullQueue, fullIndex, QueueContext.allSongs())
+                        } else {
+                            onPlayTracks(displayedTracks, displayedIndex, QueueContext.allSongs())
+                        }
+                    },
+                    onEnqueueTrack = onEnqueueTrack,
+                    onEnqueueNext = onEnqueueNext,
+                    onAddToPlaylist = onAddToPlaylist,
+                    onShowTrackInfo = onShowTrackInfo,
+                    onToggleFavorite = onToggleFavorite,
+                    onImportFolder = if (searchQuery.isBlank()) onImportFolder else null,
+                )
+            }
+        }
+        LibraryTab.FOLDERS -> FolderGroupListView(
+            groups = libraryState.folders,
+            scrollResetKey = sortPrefs.foldersList,
+            sortLabel = sortPrefs.foldersList.compactLabel,
+            albumArtworkLoader = albumArtworkLoader,
+            listState = foldersListState,
+            onOpenSort = { onOpenGroupSort(GroupSortScope.FOLDERS_LIST) },
+            onSelectGroup = { group -> onSelectGroup(LibraryTab.FOLDERS, group) },
+            onPlayGroup = { group -> onPlayTracks(group.tracks, 0, QueueContext.folder(group.name)) },
+        )
+        LibraryTab.ARTISTS -> ArtistGroupListView(
+            groups = libraryState.artists,
+            scrollResetKey = sortPrefs.artistsList,
+            sortLabel = sortPrefs.artistsList.compactLabel,
+            albumTrackSortSpec = sortPrefs.albumDetail,
+            albumArtworkLoader = albumArtworkLoader,
+            artistPhotoStore = artistPhotoStore,
+            artistPhotoRevision = artistPhotoRevision,
+            listState = artistsListState,
+            onOpenSort = { onOpenGroupSort(GroupSortScope.ARTISTS_LIST) },
+            onSelectGroup = { group -> onSelectGroup(LibraryTab.ARTISTS, group) },
+            onPlayGroup = { group -> onPlayTracks(group.tracks, 0, QueueContext.artist(group.name)) },
+        )
+        LibraryTab.ALBUMS -> GroupListView(
+            groups = libraryState.albums,
+            scrollResetKey = sortPrefs.albumsList,
+            singularUnit = "album",
+            pluralUnit = "albums",
+            sortLabel = sortPrefs.albumsList.compactLabel,
+            onOpenSort = { onOpenGroupSort(GroupSortScope.ALBUMS_LIST) },
+            icon = Icons.Filled.Album,
+            showArtworkThumbnail = true,
+            albumArtworkLoader = albumArtworkLoader,
+            emptyMessage = "No albums found in local library.",
+            listState = albumsListState,
+            onSelectGroup = { group -> onSelectGroup(LibraryTab.ALBUMS, group) },
+            onPlayGroup = { group -> onPlayTracks(group.tracks, 0, QueueContext.album(group.name)) },
+        )
+        LibraryTab.RECENT -> Column(modifier = Modifier.fillMaxSize()) {
+            if (libraryState.recentlyPlayed.isNotEmpty()) {
+                val recentCount = libraryState.recentlyPlayed.size
+                SubtleListSortHeaderRow(
+                    countLabel = "$recentCount ${if (recentCount == 1) "track" else "tracks"}",
+                    sortLabel = sortPrefs.recent.compactLabel,
+                    onOpenSort = { onOpenTrackSort(TrackSortScope.RECENT) },
+                )
+            }
+            TrackListView(
+                tracks = libraryState.recentlyPlayed,
+                scrollResetKey = sortPrefs.recent,
+                albumArtworkLoader = albumArtworkLoader,
+                emptyTitle = "No recently played tracks",
+                emptySubtitle = "Tracks you play appear here locally.",
+                activeTrackUri = activeTrackUri,
+                favoriteTrackUris = favoriteTrackUris,
+                favoriteFingerprints = libraryState.favoriteFingerprints,
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                listState = recentListState,
+                onPlayTracks = { tracks, index -> onPlayTracks(tracks, index, QueueContext.recent()) },
+                onEnqueueTrack = onEnqueueTrack,
+                onEnqueueNext = onEnqueueNext,
+                onAddToPlaylist = onAddToPlaylist,
+                onShowTrackInfo = onShowTrackInfo,
+                onToggleFavorite = onToggleFavorite,
+                onImportFolder = null,
+            )
+        }
+        LibraryTab.FAVORITES -> Column(modifier = Modifier.fillMaxSize()) {
+            if (libraryState.favorites.isNotEmpty()) {
+                val favCount = libraryState.favorites.size
+                SubtleListSortHeaderRow(
+                    countLabel = "$favCount ${if (favCount == 1) "track" else "tracks"}",
+                    sortLabel = sortPrefs.favorites.compactLabel,
+                    onOpenSort = { onOpenTrackSort(TrackSortScope.FAVORITES) },
+                )
+            }
+            TrackListView(
+                tracks = libraryState.favorites,
+                scrollResetKey = sortPrefs.favorites,
+                albumArtworkLoader = albumArtworkLoader,
+                emptyTitle = "No favorite tracks yet",
+                emptySubtitle = "Tap the heart icon on any track to save it locally.",
+                activeTrackUri = activeTrackUri,
+                favoriteTrackUris = favoriteTrackUris,
+                favoriteFingerprints = libraryState.favoriteFingerprints,
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                listState = favoritesListState,
+                onPlayTracks = { tracks, index -> onPlayTracks(tracks, index, QueueContext.favorites()) },
+                onEnqueueTrack = onEnqueueTrack,
+                onEnqueueNext = onEnqueueNext,
+                onAddToPlaylist = onAddToPlaylist,
+                onShowTrackInfo = onShowTrackInfo,
+                onToggleFavorite = onToggleFavorite,
+                onImportFolder = null,
+            )
         }
     }
 }

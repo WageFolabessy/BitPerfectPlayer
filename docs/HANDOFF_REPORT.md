@@ -2,7 +2,7 @@
 
 - **Project:** `com.cangkir.bitperfectplayer` (Kotlin + Jetpack Compose, 100% Offline Android Music Player)
 - **Active Branch:** `feat/v1.3` *(branched from `main`; `versionName = "1.3"`, `versionCode = 4`, ready for final `v1.3` audit & POCO F4 testing)*
-- **Overall Status:** **`v1.3` Feature-Complete + Pre-Release POCO F4 Polish Fixes — Software-Verified (`versionName = "1.3"`, `versionCode = 4`)** *(327 / 327 automated tests passing across 52 suites with `ktlintCheck`, `detekt`, Android Lint `0` `app/src/` warnings, Debug APK, and R8 Release APK clean)*
+- **Overall Status:** **`v1.3` Feature-Complete + Pre-Release POCO F4 Polish Fixes & Library Sub-Tab Horizontal Swipe — Software-Verified (`versionName = "1.3"`, `versionCode = 4`)** *(366 / 366 automated tests passing across 57 suites with `ktlintCheck`, `detekt`, Android Lint `0` `app/src/` warnings, Debug APK, and R8 Release APK clean)*
 - **Tasks Completed:** **17 / 17** (`T0.1` through `T5.4` in `docs/TASKS.md`) + `v1.1` + `v1.2` + `v1.3` Prompts 1–6 verification
 - **Active Blockers:** None (`BLOCKED.md` not required)
 
@@ -1407,6 +1407,38 @@ Addressed the 3 minor findings observed in real-device POCO F4 video testing and
 - [ ] **Safe Mode Startup & Hot-Plug Play Recovery (POCO F4 + KZ EDX Pro 2 USB-C):** Connect/disconnect USB-C IEM during playback and tap Play repeatedly under heavy OS audio HAL churn; confirm instantaneous Safe Mode start (`0` blocking `IAudioService` / `IAudioPolicyService` mixer queries), debug-only `BitPerfectAudio` stage timing warnings when HAL stalls `> 150 ms`, delayed preparing halo if `> 250 ms`, and zero Play/Pause toggle bursts.
 - [ ] **Rapid `Next`/`Previous` Skipping & Vinyl `DISC` Visual Smoothness:** Rapidly skip through multi-artwork hi-res FLAC tracks on SAF storage; confirm solid Pause icon with zero flicker, preloaded decoder reuse responsiveness, matte-obsidian Vinyl placeholder on uncached tracks without Front Cover flash, and `0 ms` intra-album `DISC` slot hits.
 - [ ] **Minimalist Icon-Only Navigation & Utility Strip Layout:** Visually inspect phone portrait bottom bar, wide landscape `NavigationRail`, `Library` top bar (`"Safe Mode"` / `"Clean Native"` / `"Bit-Perfect USB"`), and `NowPlayingScreen` icon-only utility row on device.
+
+---
+
+## 42. `v1.3` Horizontal Swipe Navigation Across All 6 Library Sub-Tabs (`D12.15`)
+
+### Delivered Navigation & UI Upgrades
+1. **Built-In Compose `HorizontalPager` Across All 6 Library Sub-Tabs ([`LibraryTab.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/LibraryTab.kt), [`LibraryScreen.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/library/LibraryScreen.kt)):**
+   - Added pure-Kotlin `LibraryTab.fromPageIndex(pageIndex)` (`0` `android.*` / `androidx.*` imports) covering all 6 `LibraryTab.entries` (`All Songs`, `Folders`, `Artists`, `Albums`, `Recent`, `Favorites`).
+   - Replaced the static `when (selectedTab)` content body inside `LibraryScreen` with Compose Foundation's built-in `HorizontalPager` and `rememberPagerState(initialPage = initialTab.ordinal, pageCount = { LibraryTab.entries.size })` (`beyondViewportPageCount = 0`, zero external dependencies, zero `systemGestureExclusion` so system edge-back gestures stay conflict-free).
+   - Synchronized `PrimaryScrollableTabRow` and `HorizontalPager` from `pagerState.currentPage` as single source of truth (plus transient `pendingTapTabIndex` cleared in `try/finally` during `animateScrollToPage`) so finger swipes update the active tab cleanly without bouncing back and header taps animate smoothly across adjacent and non-adjacent tabs.
+   - Kept top-level bottom-navigation / `NavigationRail` destinations (`Library`, `Playlists`, `Settings`) in `BitPerfectAppNav.kt` strictly non-swipeable, while `DefaultHomepage` (`ALL_SONGS`, `FOLDERS`, `ARTISTS`, `ALBUMS`, `RECENT`, `FAVORITES`, `PLAYLISTS`) initializes the pager cleanly without hijacking subsequent navigation.
+2. **Hoisted Per-Tab Scroll Positions, Search, & Drill-Down Continuity ([`LibraryTrackList.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/library/LibraryTrackList.kt), [`LibraryGroupViews.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/library/LibraryGroupViews.kt), [`LibraryScreen.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/library/LibraryScreen.kt)):**
+   - Added `modifier: Modifier = Modifier` and `listState: LazyListState = rememberLazyListState()` parameters to `TrackListView` and `listState` parameters to `GroupListView`, `ArtistGroupListView`, and `FolderGroupListView`.
+   - Hoisted all 6 per-tab `LazyListState` instances at `LibraryScreen` scope so each sub-tab preserves its independent scroll offset across horizontal swipes, live `All Songs` search filtering, sorting, embedded artwork rendering, oldest-first Artist albums, and drill-down navigation (`Folder Detail`, `Artist Detail`, `Album Detail`, `Artist -> Child Album Detail`).
+
+### Final Clean `v1.3` Software Verification Evidence (`./gradlew clean ktlintCheck detekt testDebugUnitTest assembleDebug --max-workers=2 --no-daemon && ./gradlew lintDebug assembleRelease --max-workers=2 --no-daemon`)
+- **Kotlin Formatting (`ktlintCheck`):** **PASS — 0 violations**.
+- **Static Analysis (`detekt`):** **PASS — 0 issues** (0 baseline suppressions).
+- **Automated JVM Unit + Room v5 Migration + Robolectric Native-Skia + Compose UI Tests (`testDebugUnitTest`):** **366 / 366 passed** across **57 test suites** (`0` failed, `0` errors, `0` skipped, `0` `@Ignore`, `0` `TODO()`), including:
+  - [`LibrarySubTabSwipeUiTest.kt`](../app/src/test/java/com/cangkir/bitperfectplayer/ui/LibrarySubTabSwipeUiTest.kt): `7 / 7` (pure-Kotlin `LibraryTab.fromPageIndex` & `DefaultHomepage.toInitialLibraryTab`; bidirectional `HorizontalPager` swipe across all 6 tabs `All Songs <-> Folders <-> Artists <-> Albums <-> Recent <-> Favorites`; adjacent & non-adjacent tab header tap animations + subsequent swipe without bounce-back; independent scroll position preservation + `Folder Detail` drill-down + `All Songs` search survival across swipes; `DefaultHomepage` cold-start initialization on `Artists`/`Recent` + return restoration without hijacking; and strict non-swipeability of top-level `Library`, `Playlists`, and `Settings` destinations)
+  - [`BitPerfectUiBehaviorTest.kt`](../app/src/test/java/com/cangkir/bitperfectplayer/ui/BitPerfectUiBehaviorTest.kt): `45 / 45`
+- **Compiler, KSP, & R8 Warnings:** **0** Kotlin warnings, **0** KSP warnings, **0** R8 warnings.
+- **Android Lint (`lintDebug` & `lintVitalRelease`):** **0 errors**, **0 warnings across all `app/src/` Kotlin, manifest, and resource files** (13 remaining SARIF advisories are strictly upstream dependency notices outside `app/src/`).
+- **Pure-Kotlin Domain Boundary:** **PASS — 0 `android.*` / `androidx.*` imports** in `LibraryTab.kt`.
+- **Merged Manifest & Offline Privacy Audit (XML-parsed Source + All 5 Generated Debug/Release/UnitTest Manifests — 6 manifests total):** **PASS — 0 `INTERNET`, 0 `RECORD_AUDIO`, 0 `MANAGE_EXTERNAL_STORAGE`, 0 `WRITE_EXTERNAL_STORAGE`, 0 `READ_MEDIA_IMAGES`**; Release merged manifest verified `android:versionCode="4"` and `android:versionName="1.3"`.
+- **Debug APK (`assembleDebug`):** `app/build/outputs/apk/debug/app-debug.apk` (`21,606,702 bytes` / `20.61 MB`).
+- **Unsigned Release APK (`assembleRelease` with R8):** `app/build/outputs/apk/release/app-release-unsigned.apk` (`3,062,588 bytes` / `2.92 MB`).
+- **R8 Mapping Artifact (`retrace` support):** `app/build/outputs/mapping/release/mapping.txt` (`38,613,915 bytes` / `36.83 MB`).
+
+### Additional Physical Hardware Verification Pending (Not Executed in Software-Only Environment)
+- [ ] **120 Hz Library Sub-Tab Horizontal Swipe & Edge-Back Feel:** Swipe smoothly across all 6 Library sub-tabs (`All Songs`, `Folders`, `Artists`, `Albums`, `Recent`, `Favorites`) and tap tab headers on POCO F4 at 120 Hz; confirm independent scroll position retention, smooth vertical list scrolling, and conflict-free Android predictive/edge-back navigation and drill-down Back handling.
+
 
 
 
