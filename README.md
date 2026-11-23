@@ -4,6 +4,49 @@ A 100% offline, local-first native Android music player (`com.cangkir.bitperfect
 
 ---
 
+## Screenshots
+
+<table>
+  <tr>
+    <td align="center" valign="top" width="25%">
+      <img src="docs/screenshots/01-now-playing.png" alt="Now Playing screen with spinning Vinyl Disc, 24-bit/96 kHz spec, and radial spectrum" width="200" /><br />
+      <sub><b>Now Playing</b><br />Vinyl Disc, 24-bit/96 kHz, Radial Spectrum</sub>
+    </td>
+    <td align="center" valign="top" width="25%">
+      <img src="docs/screenshots/02-all-songs.png" alt="Library All Songs view showing audio format specs and compact MiniPlayerBar" width="200" /><br />
+      <sub><b>Library — All Songs</b><br />Audio Specs &amp; Compact MiniPlayer</sub>
+    </td>
+    <td align="center" valign="top" width="25%">
+      <img src="docs/screenshots/03-artist-detail.png" alt="Artist Detail screen with hero banner and oldest-first albums carousel" width="200" /><br />
+      <sub><b>Artist Detail</b><br />Hero Banner &amp; Oldest-First Albums</sub>
+    </td>
+    <td align="center" valign="top" width="25%">
+      <img src="docs/screenshots/07-audio-diagnostics-1-safe-mode.png" alt="Audio Diagnostics page 1 showing Safe Mode selector and signal summary" width="200" /><br />
+      <sub><b>Audio Diagnostics (1/2)</b><br />Mode Selector &amp; Signal Summary</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" valign="top" width="25%">
+      <img src="docs/screenshots/04-settings-1.png" alt="Settings section 1 with Gapless, ReplayGain, and Artwork Style controls" width="200" /><br />
+      <sub><b>Settings — Audio &amp; Display</b><br />Gapless, ReplayGain, Artwork Style</sub>
+    </td>
+    <td align="center" valign="top" width="25%">
+      <img src="docs/screenshots/05-settings-2.png" alt="Settings section 2 with Spectrum Visualizer, Dynamic Theme, and SAF backup controls" width="200" /><br />
+      <sub><b>Settings — Visuals &amp; Backup</b><br />Spectrum, Dynamic Theme, SAF</sub>
+    </td>
+    <td align="center" valign="top" width="25%">
+      <img src="docs/screenshots/06-settings-3.png" alt="Settings section 3 showing opt-in diagnostic logging and 100% offline privacy details" width="200" /><br />
+      <sub><b>Settings — Logs &amp; Privacy</b><br />Opt-In Logging &amp; 100% Offline</sub>
+    </td>
+    <td align="center" valign="top" width="25%">
+      <img src="docs/screenshots/08-audio-diagnostics-2-safe-mode.png" alt="Audio Diagnostics page 2 showing 6-stage audio path verification boundaries" width="200" /><br />
+      <sub><b>Audio Diagnostics (2/2)</b><br />6-Stage Verification Boundaries</sub>
+    </td>
+  </tr>
+</table>
+
+---
+
 ## Core Design Principles
 
 1. **100% Offline and Local-First:** Zero `INTERNET`, `RECORD_AUDIO`, `MANAGE_EXTERNAL_STORAGE`, `WRITE_EXTERNAL_STORAGE`, or `READ_MEDIA_IMAGES` permissions. No networking libraries, telemetry, analytics, ads, cloud sync, or automatic online lookups for metadata, artwork, or lyrics.
