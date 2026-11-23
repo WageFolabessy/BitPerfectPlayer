@@ -172,7 +172,7 @@ internal fun LibraryTabRow(selectedTab: LibraryTab, onSelectTab: (LibraryTab) ->
                         color = if (selected) {
                             MaterialTheme.colorScheme.primary
                         } else {
-                            TextMuted
+                            MaterialTheme.colorScheme.onSurfaceVariant
                         },
                     )
                 },

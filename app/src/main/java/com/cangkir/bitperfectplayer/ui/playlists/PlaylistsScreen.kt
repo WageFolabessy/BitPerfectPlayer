@@ -31,9 +31,12 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -51,6 +54,10 @@ import com.cangkir.bitperfectplayer.library.TrackSortScope
 import com.cangkir.bitperfectplayer.library.TrackSortSpec
 import com.cangkir.bitperfectplayer.ui.TrackSortBottomSheet
 import com.cangkir.bitperfectplayer.ui.theme.CoralWarning
+import com.cangkir.bitperfectplayer.ui.theme.CoverThemeColorCache
+import com.cangkir.bitperfectplayer.ui.theme.CoverThemeLookup
+import com.cangkir.bitperfectplayer.ui.theme.DynamicThemeTokens
+import com.cangkir.bitperfectplayer.ui.theme.ThemeArtworkCandidateSelector
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -66,10 +73,24 @@ fun PlaylistsScreen(
     onRenamePlaylist: (Long, String) -> Unit,
     onDeletePlaylist: (Long, String) -> Unit,
     onRemovePlaylistEntry: (Long, Long) -> Unit,
-    onMovePlaylistEntry: (Long, Int, Int) -> Unit,
     onExportPlaylist: (ResolvedPlaylist, Uri) -> Unit,
     onImportPlaylist: (Uri) -> Unit,
     onOpenQueue: () -> Unit = {},
+    favoriteTrackUris: Set<String> = emptySet(),
+    favoriteFingerprints: Set<String> = emptySet(),
+    onShuffleTracks: (List<PlaybackTrack>, QueueContext) -> Unit = { tracks, ctx -> onPlayTracks(tracks.shuffled(), 0, ctx) },
+    onToggleFavorite: (PlaybackTrack) -> Unit = {},
+    onEnqueueTrack: (PlaybackTrack) -> Unit = {},
+    onEnqueueNext: (PlaybackTrack) -> Unit = {},
+    onAddToPlaylist: (PlaybackTrack) -> Unit = {},
+    onShowTrackInfo: (PlaybackTrack) -> Unit = {},
+    onRemovePlaylistEntryWithTitle: ((Long, Long, String, String) -> Unit)? = null,
+    onCommitPlaylistOrder: (Long, List<Long>) -> Unit = { _, _ -> },
+    dynamicCoverThemeEnabled: Boolean = false,
+    coverThemeColorCache: CoverThemeColorCache? = null,
+    isForegroundPage: Boolean = true,
+    onDetailViewOpenChanged: (Boolean) -> Unit = {},
+    onContextualDynamicThemeChanged: ((DynamicThemeTokens?) -> Unit)? = null,
 ) {
     var openedPlaylistId by rememberSaveable { mutableStateOf<Long?>(null) }
     var showMostPlayedDetail by rememberSaveable { mutableStateOf(false) }
@@ -82,6 +103,47 @@ fun PlaylistsScreen(
 
     val openedPlaylist = remember(playlistsState.playlists, openedPlaylistId) {
         openedPlaylistId?.let { id -> playlistsState.playlists.firstOrNull { it.id == id } }
+    }
+
+    val isDetailOpen = openedPlaylist != null || showMostPlayedDetail
+    val latestOnDetailOpenChanged by rememberUpdatedState(onDetailViewOpenChanged)
+    LaunchedEffect(isForegroundPage, isDetailOpen) {
+        if (isForegroundPage) {
+            latestOnDetailOpenChanged(isDetailOpen)
+        }
+    }
+    DisposableEffect(Unit) {
+        onDispose { latestOnDetailOpenChanged(false) }
+    }
+
+    val latestOnThemeChanged by rememberUpdatedState(onContextualDynamicThemeChanged)
+    val playlistThemeCandidates = remember(openedPlaylist) {
+        openedPlaylist?.let { ThemeArtworkCandidateSelector.selectStableCandidates(it.tracks) }.orEmpty()
+    }
+    LaunchedEffect(
+        dynamicCoverThemeEnabled,
+        isForegroundPage,
+        openedPlaylist?.id,
+        playlistThemeCandidates,
+        coverThemeColorCache,
+    ) {
+        val cb = latestOnThemeChanged ?: return@LaunchedEffect
+        val targetPlaylist = openedPlaylist?.takeIf { dynamicCoverThemeEnabled && isForegroundPage }
+        if (targetPlaylist == null || coverThemeColorCache == null) {
+            cb(null)
+            return@LaunchedEffect
+        }
+        val peeked = playlistThemeCandidates.firstNotNullOfOrNull {
+            (coverThemeColorCache.peekCached(it) as? CoverThemeLookup.Resolved)?.tokens
+        }
+        if (peeked != null) {
+            cb(peeked)
+        }
+        val resolved = coverThemeColorCache.resolveFirstChromaticTokens(playlistThemeCandidates)
+        cb(resolved)
+    }
+    DisposableEffect(Unit) {
+        onDispose { latestOnThemeChanged?.invoke(null) }
     }
 
     val exportLauncher = rememberLauncherForActivityResult(
@@ -325,15 +387,36 @@ fun PlaylistsScreen(
                         canReorderManually = canReorderManually,
                         activeTrackUri = activeTrackUri,
                         albumArtworkLoader = albumArtworkLoader,
+                        favoriteTrackUris = favoriteTrackUris,
+                        favoriteFingerprints = favoriteFingerprints,
                         onOpenSort = { showPlaylistSortSheet = true },
                         onPlayTracks = { tracks, index ->
                             onPlayTracks(tracks, index, playlistContext)
                         },
+                        onShuffleTracks = { tracks -> onShuffleTracks(tracks, playlistContext) },
                         onEnqueueAllNext = { onEnqueueTracksNext(openedPlaylist.tracks, playlistContext) },
                         onEnqueueAll = { onEnqueueTracks(openedPlaylist.tracks, playlistContext) },
-                        onMoveEntry = { from, to -> onMovePlaylistEntry(openedPlaylist.id, from, to) },
-                        onRemoveEntry = { entryId -> onRemovePlaylistEntry(openedPlaylist.id, entryId) },
+                        onCommitOrder = { orderedIds ->
+                            onCommitPlaylistOrder(openedPlaylist.id, orderedIds)
+                        },
+                        onRemoveEntry = { entry ->
+                            if (onRemovePlaylistEntryWithTitle != null) {
+                                onRemovePlaylistEntryWithTitle(
+                                    openedPlaylist.id,
+                                    entry.entryId,
+                                    openedPlaylist.name,
+                                    entry.track.title,
+                                )
+                            } else {
+                                onRemovePlaylistEntry(openedPlaylist.id, entry.entryId)
+                            }
+                        },
                         onExport = { launchExport(openedPlaylist) },
+                        onToggleFavorite = onToggleFavorite,
+                        onEnqueueNext = onEnqueueNext,
+                        onEnqueueTrack = onEnqueueTrack,
+                        onAddToPlaylist = onAddToPlaylist,
+                        onShowTrackInfo = onShowTrackInfo,
                     )
                 }
 
@@ -343,11 +426,19 @@ fun PlaylistsScreen(
                         items = playlistsState.mostPlayed,
                         activeTrackUri = activeTrackUri,
                         albumArtworkLoader = albumArtworkLoader,
+                        favoriteTrackUris = favoriteTrackUris,
+                        favoriteFingerprints = favoriteFingerprints,
                         onPlayTracks = { tracks, index ->
                             onPlayTracks(tracks, index, mpContext)
                         },
+                        onShuffleTracks = { tracks -> onShuffleTracks(tracks, mpContext) },
                         onEnqueueAllNext = { tracks -> onEnqueueTracksNext(tracks, mpContext) },
                         onEnqueueAll = { tracks -> onEnqueueTracks(tracks, mpContext) },
+                        onToggleFavorite = onToggleFavorite,
+                        onEnqueueNext = onEnqueueNext,
+                        onEnqueueTrack = onEnqueueTrack,
+                        onAddToPlaylist = onAddToPlaylist,
+                        onShowTrackInfo = onShowTrackInfo,
                     )
                 }
 
@@ -356,6 +447,8 @@ fun PlaylistsScreen(
                         playlistsState = playlistsState,
                         activeTrackUri = activeTrackUri,
                         albumArtworkLoader = albumArtworkLoader,
+                        favoriteTrackUris = favoriteTrackUris,
+                        favoriteFingerprints = favoriteFingerprints,
                         onOpenMostPlayedAll = { showMostPlayedDetail = true },
                         onPlayTracks = onPlayTracks,
                         onOpenPlaylist = { playlist -> openedPlaylistId = playlist.id },
@@ -364,6 +457,11 @@ fun PlaylistsScreen(
                         onRenamePlaylistClick = { playlistPendingRename = it },
                         onExportPlaylistClick = launchExport,
                         onDeletePlaylistClick = { playlistPendingDelete = it },
+                        onToggleFavorite = onToggleFavorite,
+                        onEnqueueNext = onEnqueueNext,
+                        onEnqueueTrack = onEnqueueTrack,
+                        onAddToPlaylist = onAddToPlaylist,
+                        onShowTrackInfo = onShowTrackInfo,
                     )
                 }
             }

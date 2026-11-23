@@ -28,11 +28,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.Flip
 import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -66,9 +62,10 @@ import com.cangkir.bitperfectplayer.library.ArtistPhotoStore
 import com.cangkir.bitperfectplayer.library.FolderArtworkSelector
 import com.cangkir.bitperfectplayer.library.LibraryGroup
 import com.cangkir.bitperfectplayer.library.TrackSortSpec
+import com.cangkir.bitperfectplayer.ui.DetailActionHeaderRow
 import com.cangkir.bitperfectplayer.ui.InlineSortTriggerButton
 import com.cangkir.bitperfectplayer.ui.TrackArtworkThumbnail
-import com.cangkir.bitperfectplayer.ui.theme.ObsidianBackground
+import com.cangkir.bitperfectplayer.ui.theme.ThemeArtworkCandidateSelector
 import kotlinx.coroutines.delay
 
 @Composable
@@ -214,6 +211,7 @@ internal fun GroupDetailTrackList(
     albumArtworkLoader: AlbumArtworkLoader,
     onOpenSort: () -> Unit,
     onPlayTracks: (List<PlaybackTrack>, Int) -> Unit,
+    onShuffleTracks: (List<PlaybackTrack>) -> Unit = { tracks -> onPlayTracks(tracks.shuffled(), 0) },
     onEnqueueAllNext: () -> Unit,
     onEnqueueAll: () -> Unit,
     onEnqueueTrack: (PlaybackTrack) -> Unit,
@@ -222,8 +220,6 @@ internal fun GroupDetailTrackList(
     onShowTrackInfo: (PlaybackTrack) -> Unit,
     onToggleFavorite: (PlaybackTrack) -> Unit,
 ) {
-    var groupMenuExpanded by remember { mutableStateOf(false) }
-
     Column(modifier = Modifier.fillMaxSize()) {
         if (showTrackNumber && group.tracks.isNotEmpty()) {
             AlbumDetailArtworkHeader(
@@ -251,62 +247,26 @@ internal fun GroupDetailTrackList(
                 onClick = onOpenSort,
             )
         }
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 16.dp, end = 6.dp, bottom = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Button(
-                onClick = { onPlayTracks(group.tracks, 0) },
-                enabled = group.tracks.isNotEmpty(),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary,
-                ),
-                modifier = Modifier
-                    .weight(1f)
-                    .sizeIn(minHeight = 48.dp),
-            ) {
-                Icon(Icons.Filled.PlayArrow, contentDescription = null)
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("Play All", maxLines = 1, softWrap = false)
-            }
-            Box {
-                IconButton(
-                    onClick = { groupMenuExpanded = true },
-                    enabled = group.tracks.isNotEmpty(),
-                    modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.MoreVert,
-                        contentDescription = "Queue options for ${groupContext.sourceLabel}",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                if (groupMenuExpanded) {
-                    DropdownMenu(
-                        expanded = true,
-                        onDismissRequest = { groupMenuExpanded = false },
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("Play Next") },
-                            onClick = {
-                                groupMenuExpanded = false
-                                onEnqueueAllNext()
-                            },
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Add All to Queue") },
-                            onClick = {
-                                groupMenuExpanded = false
-                                onEnqueueAll()
-                            },
-                        )
-                    }
-                }
-            }
+        DetailActionHeaderRow(
+            hasTracks = group.tracks.isNotEmpty(),
+            onPlayAll = { onPlayTracks(group.tracks, 0) },
+            onShuffle = { onShuffleTracks(group.tracks) },
+            overflowContentDescription = "Queue options for ${groupContext.sourceLabel}",
+        ) { dismiss ->
+            DropdownMenuItem(
+                text = { Text("Play Next") },
+                onClick = {
+                    dismiss()
+                    onEnqueueAllNext()
+                },
+            )
+            DropdownMenuItem(
+                text = { Text("Add All to Queue") },
+                onClick = {
+                    dismiss()
+                    onEnqueueAll()
+                },
+            )
         }
         HorizontalDivider(
             thickness = 0.5.dp,
@@ -335,19 +295,34 @@ internal fun GroupDetailTrackList(
 
 @Composable
 private fun AlbumDetailArtworkHeader(albumGroup: LibraryGroup, albumArtworkLoader: AlbumArtworkLoader) {
-    val representativeTrack = albumGroup.tracks.firstOrNull() ?: return
+    val stableCandidates = remember(albumGroup.tracks) {
+        ThemeArtworkCandidateSelector.selectStableCandidates(albumGroup.tracks)
+    }
+    val fallbackTrack = stableCandidates.firstOrNull() ?: albumGroup.tracks.firstOrNull() ?: return
+    var resolvedCoverTrack by remember(albumGroup.name, fallbackTrack.uriString) {
+        mutableStateOf(
+            albumArtworkLoader.getCachedFirstAvailableArtwork(
+                tracks = stableCandidates,
+                targetSizePx = AlbumArtworkLoader.HERO_SIZE_PX,
+            )?.first ?: fallbackTrack,
+        )
+    }
     val albumYear = remember(albumGroup.tracks) {
         ArtistDetailHelper.resolveAlbumReleaseYear(albumGroup.tracks)
     }
-    var backCoverBitmap by remember(albumGroup.name, representativeTrack.uriString) {
+    var backCoverBitmap by remember(albumGroup.name, fallbackTrack.uriString) {
         mutableStateOf<Bitmap?>(null)
     }
-    var showingBackCover by remember(albumGroup.name, representativeTrack.uriString) {
+    var showingBackCover by remember(albumGroup.name, fallbackTrack.uriString) {
         mutableStateOf(false)
     }
 
-    LaunchedEffect(albumGroup.name, representativeTrack.uriString) {
+    LaunchedEffect(albumGroup.name, stableCandidates) {
         showingBackCover = false
+        albumArtworkLoader.loadFirstAvailableArtwork(
+            tracks = stableCandidates,
+            targetSizePx = AlbumArtworkLoader.HERO_SIZE_PX,
+        )?.let { resolvedCoverTrack = it.first }
         backCoverBitmap = albumArtworkLoader.loadAlbumBackCoverBitmap(
             albumName = albumGroup.name,
             tracks = albumGroup.tracks,
@@ -358,6 +333,13 @@ private fun AlbumDetailArtworkHeader(albumGroup: LibraryGroup, albumArtworkLoade
     val currentBackBitmap = backCoverBitmap
     val backImageBitmap = remember(currentBackBitmap) {
         if (currentBackBitmap != null && !currentBackBitmap.isRecycled) currentBackBitmap.asImageBitmap() else null
+    }
+    val headerArtist = remember(albumGroup.tracks, fallbackTrack.artist) {
+        albumGroup.tracks
+            .asSequence()
+            .map { it.artist.trim() }
+            .firstOrNull { it.isNotEmpty() && !it.equals("Unknown Artist", ignoreCase = true) }
+            ?: fallbackTrack.artist.ifBlank { "Unknown Artist" }
     }
 
     Row(
@@ -372,7 +354,7 @@ private fun AlbumDetailArtworkHeader(albumGroup: LibraryGroup, albumArtworkLoade
                 modifier = Modifier
                     .size(104.dp)
                     .clip(RoundedCornerShape(12.dp))
-                    .background(ObsidianBackground),
+                    .background(MaterialTheme.colorScheme.background),
                 contentAlignment = Alignment.Center,
             ) {
                 Image(
@@ -384,7 +366,7 @@ private fun AlbumDetailArtworkHeader(albumGroup: LibraryGroup, albumArtworkLoade
             }
         } else {
             TrackArtworkThumbnail(
-                track = representativeTrack,
+                track = resolvedCoverTrack,
                 artworkLoader = albumArtworkLoader,
                 size = 104.dp,
                 cornerRadius = 12.dp,
@@ -406,7 +388,7 @@ private fun AlbumDetailArtworkHeader(albumGroup: LibraryGroup, albumArtworkLoade
             Spacer(modifier = Modifier.height(3.dp))
             Text(
                 text = buildString {
-                    append(representativeTrack.artist)
+                    append(headerArtist)
                     if (albumYear > 0) append(" · $albumYear")
                 },
                 style = MaterialTheme.typography.bodySmall,
@@ -887,7 +869,7 @@ private fun FolderCoverThumbnail(folderGroup: LibraryGroup, albumArtworkLoader: 
                     .padding(2.dp)
                     .size(18.dp)
                     .clip(badgeShape)
-                    .background(ObsidianBackground.copy(alpha = 0.88f))
+                    .background(MaterialTheme.colorScheme.background.copy(alpha = 0.88f))
                     .border(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.7f), badgeShape),
                 contentAlignment = Alignment.Center,
             ) {

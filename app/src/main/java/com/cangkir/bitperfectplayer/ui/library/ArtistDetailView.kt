@@ -51,10 +51,12 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -144,6 +146,8 @@ internal fun ArtistDetailView(
     onToggleFavorite: (PlaybackTrack) -> Unit,
     onSetCustomArtistPhoto: (String, Uri) -> Unit,
     onResetCustomArtistPhoto: (String) -> Unit,
+    isForegroundPage: Boolean = true,
+    onContextualDynamicThemeChanged: ((DynamicThemeTokens?) -> Unit)? = null,
 ) {
     val artistName = artistGroup.name
     val artistDetail = remember(artistName, artistGroup.tracks, albumTrackSortSpec) {
@@ -287,10 +291,12 @@ internal fun ArtistDetailView(
 
     ArtistDetailDynamicThemeWrapper(
         enabled = dynamicCoverThemeEnabled,
+        isForegroundPage = isForegroundPage,
         themeCacheKey = resolvedHero.themeCacheKey,
         heroBitmap = resolvedHero.bitmap,
         isHeroResolved = resolvedHero.isResolved,
         coverThemeColorCache = coverThemeColorCache,
+        onContextualDynamicThemeChanged = onContextualDynamicThemeChanged,
     ) {
         val listState = rememberLazyListState()
         var previousResetKey by remember { mutableStateOf(scrollResetKey) }
@@ -884,26 +890,28 @@ private fun ArtistTracksSectionHeader(trackCount: Int, sortLabel: String, onOpen
 }
 
 /**
- * Local Contextual Artist Dynamic Cover Theme wrapping ONLY [ArtistDetailView] using the active
- * resolved Artist Hero image (custom photo -> embedded `ARTIST` -> newest album cover).
+ * Contextual Artist Dynamic Theme handler:
+ * - When [onContextualDynamicThemeChanged] is supplied (main app shell), pushes resolved artist
+ *   hero tokens up to root `BitPerfectPlayerTheme` so TopBar, MiniPlayer, BottomNav, and canvas
+ *   all adapt together and revert cleanly on Back or page switch.
+ * - Otherwise (standalone preview/tests), wraps [ArtistDetailView] locally.
  */
 @Composable
 private fun ArtistDetailDynamicThemeWrapper(
     enabled: Boolean,
+    isForegroundPage: Boolean = true,
     themeCacheKey: String?,
     heroBitmap: Bitmap?,
     isHeroResolved: Boolean,
     coverThemeColorCache: CoverThemeColorCache?,
+    onContextualDynamicThemeChanged: ((DynamicThemeTokens?) -> Unit)? = null,
     content: @Composable () -> Unit,
 ) {
-    if (!enabled || coverThemeColorCache == null) {
-        content()
-        return
-    }
     val parentTokens = LocalActiveDynamicTokens.current
+    val latestOnThemeChanged by rememberUpdatedState(onContextualDynamicThemeChanged)
     var lookup by remember(themeCacheKey) {
         mutableStateOf(
-            if (themeCacheKey != null) {
+            if (themeCacheKey != null && coverThemeColorCache != null) {
                 coverThemeColorCache.peekCachedByKey(themeCacheKey)
             } else {
                 CoverThemeLookup.Pending
@@ -911,20 +919,40 @@ private fun ArtistDetailDynamicThemeWrapper(
         )
     }
 
-    LaunchedEffect(themeCacheKey, heroBitmap) {
-        if (themeCacheKey != null && heroBitmap != null && lookup is CoverThemeLookup.Pending) {
-            lookup = CoverThemeLookup.Resolved(
-                coverThemeColorCache.resolveTokensFromBitmap(themeCacheKey, heroBitmap),
-            )
+    val activeCache = coverThemeColorCache?.takeIf { enabled && isForegroundPage }
+    LaunchedEffect(activeCache, themeCacheKey, heroBitmap) {
+        if (activeCache != null && themeCacheKey != null && heroBitmap != null) {
+            if (lookup is CoverThemeLookup.Pending) {
+                lookup = CoverThemeLookup.Resolved(
+                    activeCache.resolveTokensFromBitmap(themeCacheKey, heroBitmap),
+                )
+            }
         }
     }
 
     val targetTokens = when {
+        !enabled || !isForegroundPage || coverThemeColorCache == null -> null
         themeCacheKey == null -> if (isHeroResolved) null else parentTokens
         else -> when (val cur = lookup) {
             CoverThemeLookup.Pending -> parentTokens
             is CoverThemeLookup.Resolved -> cur.tokens
         }
+    }
+
+    if (onContextualDynamicThemeChanged != null) {
+        LaunchedEffect(enabled, isForegroundPage, targetTokens) {
+            latestOnThemeChanged?.invoke(if (enabled && isForegroundPage) targetTokens else null)
+        }
+        DisposableEffect(Unit) {
+            onDispose { latestOnThemeChanged?.invoke(null) }
+        }
+        content()
+        return
+    }
+
+    if (!enabled || coverThemeColorCache == null) {
+        content()
+        return
     }
 
     BitPerfectPlayerTheme(

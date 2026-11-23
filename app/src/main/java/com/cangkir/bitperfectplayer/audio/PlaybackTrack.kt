@@ -52,7 +52,11 @@ data class PlaybackTrack(
     /**
      * Precomputed secondary artist/album line for smooth list scrolling.
      */
-    val artistAlbumLine: String = "$artist · $album"
+    val artistAlbumLine: String = run {
+        val cleanArtist = artist.trim().ifEmpty { "Unknown Artist" }
+        val cleanAlbum = album.trim().ifEmpty { "Unknown Album" }
+        "$cleanArtist · $cleanAlbum"
+    }
 
     /**
      * Precomputed concise track-position badge for Album detail rows (e.g., `"3"`, `"2·04"`),

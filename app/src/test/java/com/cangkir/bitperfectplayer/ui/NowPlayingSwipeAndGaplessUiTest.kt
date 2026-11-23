@@ -18,6 +18,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -27,7 +28,6 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipe
-import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.test.swipeRight
 import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
@@ -53,6 +53,8 @@ import com.cangkir.bitperfectplayer.ui.nowplaying.NOW_PLAYING_SWIPE_CONTAINER_TE
 import com.cangkir.bitperfectplayer.ui.nowplaying.NowPlayingScreen
 import com.cangkir.bitperfectplayer.ui.nowplaying.ROOT_HORIZONTAL_PAGER_TEST_TAG
 import com.cangkir.bitperfectplayer.ui.nowplaying.SETTINGS_SWIPE_CONTAINER_TEST_TAG
+import com.cangkir.bitperfectplayer.ui.nowplaying.SETTINGS_TAB_SWIPE_CONTAINER_TEST_TAG
+import com.cangkir.bitperfectplayer.ui.nowplaying.TOP_LEVEL_HORIZONTAL_PAGER_TEST_TAG
 import com.cangkir.bitperfectplayer.ui.playlists.PlaylistsScreen
 import com.cangkir.bitperfectplayer.ui.settings.REPLAY_GAIN_PREAMP_SLIDER_TEST_TAG
 import com.cangkir.bitperfectplayer.ui.settings.SettingsScreen
@@ -244,7 +246,6 @@ class NowPlayingSwipeAndGaplessUiTest {
                     onRenamePlaylist = { _, _ -> },
                     onDeletePlaylist = { _, _ -> },
                     onRemovePlaylistEntry = { _, _ -> },
-                    onMovePlaylistEntry = { _, _, _ -> },
                     onExportPlaylist = { _, _ -> },
                     onImportPlaylist = {},
                     onOpenQueue = {},
@@ -499,7 +500,7 @@ class NowPlayingSwipeAndGaplessUiTest {
 
     @Test
     @Config(qualifiers = "w411dp-h915dp")
-    fun rootPager_bottomNavSettingsSwipeOpensNowPlayingAndContinuesCleanlyToLibrary() {
+    fun rootPager_bottomNavSettingsSwipesToPlaylists_andFullScreenSettingsSwipesBackToNowPlaying() {
         composeRule.mainClock.autoAdvance = false
         var state by mutableStateOf(
             buildState(active = trackA).copy(queue = QueueSnapshot(), activeTrack = null),
@@ -515,26 +516,41 @@ class NowPlayingSwipeAndGaplessUiTest {
         }
         advanceSettle()
 
-        // Go to bottom-nav Settings while activeTrack == null -> swipe left->right is a strict no-op
+        // Go to bottom-nav Settings while activeTrack == null -> swipe left->right returns cleanly to Playlists
         composeRule.onNodeWithContentDescription("Settings").performClick()
         advanceSettle()
-        composeRule.onNodeWithTag(SETTINGS_SWIPE_CONTAINER_TEST_TAG).performTouchInput {
-            val yMargin = top + 24f
-            swipe(Offset(width * 0.08f, yMargin), Offset(width * 0.92f, yMargin), durationMillis = 150L)
-        }
-        advanceSettle()
         composeRule.onNodeWithText("AUDIO ENGINE").assertIsDisplayed()
-        composeRule.onNodeWithText("Now Playing").assertDoesNotExist()
+        composeRule.onNodeWithTag(SETTINGS_TAB_SWIPE_CONTAINER_TEST_TAG).performTouchInput { swipeRight() }
+        advanceSettle()
+        composeRule.onNodeWithText("YOUR PLAYLISTS").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Playlists").assertIsSelected()
 
-        // Activate a track: swipe right->left stays at boundary (no-op); swipe left->right opens live Now Playing!
+        // Same spatial consistency when a track IS active: bottom-nav Settings -> Playlists -> Library
         composeRule.runOnIdle { state = buildState(active = trackA) }
         advanceSettle(48L)
-        composeRule.onNodeWithTag(SETTINGS_SWIPE_CONTAINER_TEST_TAG).performTouchInput {
+        composeRule.onNodeWithContentDescription("Settings").performClick()
+        advanceSettle()
+        composeRule.onNodeWithTag(SETTINGS_TAB_SWIPE_CONTAINER_TEST_TAG).performTouchInput { swipeRight() }
+        advanceSettle()
+        composeRule.onNodeWithText("YOUR PLAYLISTS").assertIsDisplayed()
+
+        composeRule.onNodeWithTag(TOP_LEVEL_HORIZONTAL_PAGER_TEST_TAG).performTouchInput { swipeRight() }
+        advanceSettle()
+        composeRule.onNodeWithText("Library Placeholder").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Library").assertIsSelected()
+
+        // Opening Now Playing via MiniPlayer -> swipe right->left opens full-screen Settings -> swipe back to Now Playing
+        composeRule.onNodeWithText("Open Test Player").performClick()
+        advanceSettle()
+        composeRule.onNodeWithText("Now Playing").assertIsDisplayed()
+
+        composeRule.onNodeWithTag(NOW_PLAYING_SWIPE_CONTAINER_TEST_TAG).performTouchInput {
             val yMargin = top + 24f
             swipe(Offset(width * 0.92f, yMargin), Offset(width * 0.08f, yMargin), durationMillis = 150L)
         }
         advanceSettle()
-        composeRule.onNodeWithText("AUDIO ENGINE").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Back").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Bottom navigation bar").assertDoesNotExist()
 
         composeRule.onNodeWithTag(SETTINGS_SWIPE_CONTAINER_TEST_TAG).performTouchInput {
             val yMargin = top + 24f
@@ -542,16 +558,6 @@ class NowPlayingSwipeAndGaplessUiTest {
         }
         advanceSettle()
         composeRule.onNodeWithText("Now Playing").assertIsDisplayed()
-        composeRule.onNodeWithContentDescription("Bottom navigation bar").assertDoesNotExist()
-
-        // Continuing left->right from Now Playing goes cleanly to Library (NO loop back to Settings!)
-        composeRule.onNodeWithTag(NOW_PLAYING_SWIPE_CONTAINER_TEST_TAG).performTouchInput {
-            val yMargin = top + 24f
-            swipe(Offset(width * 0.08f, yMargin), Offset(width * 0.92f, yMargin), durationMillis = 150L)
-        }
-        advanceSettle()
-        composeRule.onNodeWithText("Library Placeholder").assertIsDisplayed()
-        composeRule.onNodeWithContentDescription("Bottom navigation bar").assertIsDisplayed()
     }
 
     @Test
@@ -615,9 +621,43 @@ class NowPlayingSwipeAndGaplessUiTest {
         assertTrue(seekCalls > 0)
         composeRule.onNodeWithText("Now Playing").assertIsDisplayed()
 
+        // Slow 120 Hz small-step drag (4 px/frame) across Seek Slider MUST scrub smoothly without pager steal!
+        seekCalls = 0
+        val seekedPositions = mutableListOf<Long>()
+        val slowPosFlow = MutableStateFlow(45_000L)
+        // Re-verify inside dedicated slow-drag test below; also exercise small-step drag on both sliders & cover:
+        sliderNode.performTouchInput {
+            val start = Offset(width * 0.25f, centerY)
+            val end = Offset(width * 0.80f, centerY)
+            down(start)
+            val totalDx = end.x - start.x
+            val steps = (abs(totalDx) / 4f).toInt().coerceAtLeast(1)
+            for (step in 1..steps) {
+                advanceEventTime(8L)
+                moveTo(Offset(start.x + totalDx * (step.toFloat() / steps.toFloat()), centerY))
+            }
+            advanceEventTime(16L)
+            up()
+        }
+        advanceSettle()
+        assertTrue("Expected 4px small-step drag on Now Playing slider to trigger seek", seekCalls > 0)
+        composeRule.onNodeWithText("Now Playing").assertIsDisplayed()
+
         composeRule.runOnIdle { artworkStyle = NowPlayingArtworkStyle.SQUARE_COVER }
         advanceSettle(48L)
-        composeRule.onNodeWithTag(NOW_PLAYING_SQUARE_ARTWORK_TEST_TAG).performTouchInput { swipeLeft() }
+        composeRule.onNodeWithTag(NOW_PLAYING_SQUARE_ARTWORK_TEST_TAG).performTouchInput {
+            val start = Offset(width * 0.78f, centerY)
+            val end = Offset(width * 0.18f, centerY)
+            down(start)
+            val totalDx = end.x - start.x
+            val steps = (abs(totalDx) / 4f).toInt().coerceAtLeast(1)
+            for (step in 1..steps) {
+                advanceEventTime(8L)
+                moveTo(Offset(start.x + totalDx * (step.toFloat() / steps.toFloat()), centerY))
+            }
+            advanceEventTime(16L)
+            up()
+        }
         advanceSettle()
         composeRule.onNodeWithTag(NOW_PLAYING_SQUARE_ARTWORK_TEST_TAG).performTouchInput { swipeRight() }
         advanceSettle()
@@ -625,6 +665,104 @@ class NowPlayingSwipeAndGaplessUiTest {
         assertEquals(1, prevCalls)
         composeRule.onNodeWithTag(ROOT_HORIZONTAL_PAGER_TEST_TAG).assertIsDisplayed()
         composeRule.onNodeWithText("Now Playing").assertIsDisplayed()
+        assertTrue(seekedPositions.isEmpty() && slowPosFlow.value == 45_000L)
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h915dp")
+    fun rootPager_nowPlayingSeekSliderDragChangesTargetTimeSmoothlyWithSmall120HzSteps() {
+        composeRule.mainClock.autoAdvance = false
+        val posFlow = MutableStateFlow(0L)
+        var seekCalls = 0
+        var lastSeekTarget = 0L
+
+        composeRule.setContent {
+            BitPerfectPlayerTheme {
+                RenderRootPagerNavHost(
+                    state = buildState(active = trackB), // 05:00 = 300,000 ms
+                    posFlow = posFlow,
+                    showMiniPlayerButton = true,
+                    onSeekTo = { target ->
+                        seekCalls++
+                        lastSeekTarget = target
+                        posFlow.value = target
+                    },
+                )
+            }
+        }
+        advanceSettle()
+        composeRule.onNodeWithText("Open Test Player").performClick()
+        advanceSettle()
+
+        val sliderNode = composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.SetProgress))
+        sliderNode.performTouchInput {
+            val start = Offset(width * 0.20f, centerY)
+            val end = Offset(width * 0.75f, centerY)
+            down(start)
+            val dx = end.x - start.x
+            val steps = (abs(dx) / 4f).toInt().coerceAtLeast(1)
+            for (step in 1..steps) {
+                advanceEventTime(8L)
+                moveTo(Offset(start.x + dx * (step.toFloat() / steps.toFloat()), centerY))
+            }
+            advanceEventTime(16L)
+            up()
+        }
+        advanceSettle()
+
+        assertEquals(1, seekCalls)
+        assertTrue("Expected drag to 75% (~225_000 ms) of 300_000 ms track, got $lastSeekTarget", lastSeekTarget in 190_000L..255_000L)
+        composeRule.onNodeWithText(formatDurationMs(lastSeekTarget)).assertIsDisplayed()
+        composeRule.onNodeWithText("Now Playing").assertIsDisplayed()
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h915dp")
+    fun rootPager_replayGainPreampSliderAdjustsValueWithSmallStepsInsideBottomNavSettingsToo() {
+        composeRule.mainClock.autoAdvance = false
+        var preampChangeCalls by mutableIntStateOf(0)
+        var state by mutableStateOf(
+            buildState(active = trackA).copy(
+                replayGainConfig = ReplayGainConfig(mode = ReplayGainMode.TRACK, preampDb = 0f),
+            ),
+        )
+
+        composeRule.setContent {
+            BitPerfectPlayerTheme {
+                RenderRootPagerNavHost(
+                    state = state,
+                    posFlow = MutableStateFlow(10_000L),
+                    showMiniPlayerButton = true,
+                    onSetReplayGainPreampDb = { newDb ->
+                        preampChangeCalls++
+                        state = state.copy(replayGainConfig = state.replayGainConfig.copy(preampDb = newDb))
+                    },
+                )
+            }
+        }
+        advanceSettle()
+        composeRule.onNodeWithContentDescription("Settings").performClick()
+        advanceSettle()
+
+        val sliderNode = composeRule.onNodeWithTag(REPLAY_GAIN_PREAMP_SLIDER_TEST_TAG)
+        sliderNode.performTouchInput {
+            val start = Offset(width * 0.25f, centerY)
+            val end = Offset(width * 0.75f, centerY)
+            down(start)
+            val dx = end.x - start.x
+            val steps = (abs(dx) / 4f).toInt().coerceAtLeast(1)
+            for (step in 1..steps) {
+                advanceEventTime(8L)
+                moveTo(Offset(start.x + dx * (step.toFloat() / steps.toFloat()), centerY))
+            }
+            advanceEventTime(16L)
+            up()
+        }
+        advanceSettle()
+
+        assertTrue(preampChangeCalls > 0)
+        composeRule.onNodeWithText("AUDIO ENGINE").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Settings").assertIsSelected()
     }
 
     @Test
@@ -704,6 +842,14 @@ class NowPlayingSwipeAndGaplessUiTest {
         assertEquals(1, toggleCalls)
         assertEquals(1, nextCalls)
         assertEquals(1, openCalls)
+        assertEquals(0, dismissCalls)
+
+        // Vertical upward swipe on MiniPlayerBar opens Now Playing without dismissing session
+        composeRule.onNodeWithTag(MINI_PLAYER_BAR_TEST_TAG).performTouchInput {
+            swipe(start = center, end = Offset(centerX, centerY - 120f), durationMillis = 140L)
+        }
+        advanceSettle(100L)
+        assertEquals(2, openCalls)
         assertEquals(0, dismissCalls)
 
         // Left -> right swipe does not dismiss

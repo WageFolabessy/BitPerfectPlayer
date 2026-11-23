@@ -67,6 +67,18 @@ class CoverThemeColorCache(private val albumArtworkLoader: AlbumArtworkLoader) {
         return resolveTokensFromBitmap(key = key, bitmap = bitmap)
     }
 
+    /**
+     * Evaluates ordered [candidates] until a track with non-monochrome chromatic cover artwork
+     * yields non-null [DynamicThemeTokens], caching both positive and negative outcomes per candidate.
+     */
+    suspend fun resolveFirstChromaticTokens(candidates: List<PlaybackTrack>): DynamicThemeTokens? {
+        for (candidate in candidates) {
+            val tokens = resolveTokens(candidate)
+            if (tokens != null) return tokens
+        }
+        return null
+    }
+
     suspend fun resolveTokensFromBitmap(key: String, bitmap: Bitmap?): DynamicThemeTokens? {
         if (key.isBlank()) return null
         cache.get(key)?.let { return it.tokens }

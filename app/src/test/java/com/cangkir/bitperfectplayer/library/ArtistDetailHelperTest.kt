@@ -109,11 +109,12 @@ class ArtistDetailHelperTest {
     }
 
     @Test
-    fun computeMonogramHandlesMultiWordSingleWordAndBlankNames() {
+    fun computeMonogramHandlesMultiWordSingleWordBlankAndSymbolNames() {
         assertEquals("PF", ArtistDetailHelper.computeMonogram("Pink Floyd"))
         assertEquals("R", ArtistDetailHelper.computeMonogram("Radiohead"))
         assertEquals("MD", ArtistDetailHelper.computeMonogram("Miles Davis Quintet"))
         assertEquals("?", ArtistDetailHelper.computeMonogram("   "))
+        assertEquals("?", ArtistDetailHelper.computeMonogram("--- / ***"))
     }
 
     @Test

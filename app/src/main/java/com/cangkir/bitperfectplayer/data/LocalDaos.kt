@@ -127,9 +127,6 @@ interface PlaylistDao {
     @Query("SELECT * FROM playlists ORDER BY updated_at_epoch_ms DESC, id DESC")
     suspend fun getAllPlaylists(): List<PlaylistEntity>
 
-    @Query("SELECT * FROM playlists WHERE id = :playlistId LIMIT 1")
-    suspend fun getPlaylistById(playlistId: Long): PlaylistEntity?
-
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insertPlaylist(entity: PlaylistEntity): Long
 
@@ -147,9 +144,6 @@ interface PlaylistDao {
 
     @Query("SELECT * FROM playlist_tracks ORDER BY playlist_id ASC, position_index ASC, id ASC")
     suspend fun getAllPlaylistTracks(): List<PlaylistTrackEntity>
-
-    @Query("SELECT * FROM playlist_tracks WHERE playlist_id = :playlistId ORDER BY position_index ASC, id ASC")
-    fun observeTracksForPlaylist(playlistId: Long): Flow<List<PlaylistTrackEntity>>
 
     @Query("SELECT * FROM playlist_tracks WHERE playlist_id = :playlistId ORDER BY position_index ASC, id ASC")
     suspend fun getTracksForPlaylist(playlistId: Long): List<PlaylistTrackEntity>
@@ -172,8 +166,31 @@ interface PlaylistDao {
     )
     suspend fun backfillFingerprintByUri(trackUri: String, fingerprint: String)
 
+    @Query("SELECT * FROM playlist_tracks WHERE id = :entryId LIMIT 1")
+    suspend fun getPlaylistTrackById(entryId: Long): PlaylistTrackEntity?
+
     @Query("DELETE FROM playlist_tracks WHERE id = :entryId")
     suspend fun deletePlaylistTrackById(entryId: Long): Int
+
+    @Transaction
+    suspend fun restoreEntryAtPosition(playlistId: Long, entity: PlaylistTrackEntity, updatedAtEpochMs: Long) {
+        val existing = getTracksForPlaylist(playlistId)
+        val insertPos = entity.positionIndex.coerceIn(0, existing.size)
+        existing.forEachIndexed { index, row ->
+            val targetPos = if (index < insertPos) index else index + 1
+            if (row.positionIndex != targetPos) {
+                updatePlaylistTrackPosition(entryId = row.id, positionIndex = targetPos)
+            }
+        }
+        insertPlaylistTrack(
+            entity.copy(
+                id = 0L,
+                playlistId = playlistId,
+                positionIndex = insertPos,
+            ),
+        )
+        touchPlaylist(playlistId = playlistId, updatedAtEpochMs = updatedAtEpochMs)
+    }
 
     @Transaction
     suspend fun replacePlaylistTrackOrder(playlistId: Long, orderedEntryIds: List<Long>, updatedAtEpochMs: Long) {

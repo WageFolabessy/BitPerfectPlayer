@@ -11,12 +11,13 @@ import org.junit.Test
 class MetadataScanPolicyTest {
 
     @Test
-    fun sanitizeCursorTag_rejectsBlankAndUnknownPlaceholder() {
+    fun sanitizeCursorTag_rejectsBlankAndUnknownPlaceholder_andCleansControlChars() {
         assertNull(MetadataScanPolicy.sanitizeCursorTag(null))
         assertNull(MetadataScanPolicy.sanitizeCursorTag("   "))
         assertNull(MetadataScanPolicy.sanitizeCursorTag("<unknown>"))
         assertNull(MetadataScanPolicy.sanitizeCursorTag("<UNKNOWN>"))
-        assertEquals("So What", MetadataScanPolicy.sanitizeCursorTag("  So What  "))
+        assertNull(MetadataScanPolicy.sanitizeCursorTag("\u0000\t\n "))
+        assertEquals("So What", MetadataScanPolicy.sanitizeCursorTag("  So   \t\n What\u0007  "))
     }
 
     @Test

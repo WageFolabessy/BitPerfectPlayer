@@ -41,8 +41,10 @@ import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.NavigationRailItemDefaults
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -50,6 +52,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -86,10 +89,11 @@ import com.cangkir.bitperfectplayer.ui.nowplaying.NowPlayingSwipeExclusionBounds
 import com.cangkir.bitperfectplayer.ui.nowplaying.PageExclusionGuardBox
 import com.cangkir.bitperfectplayer.ui.nowplaying.ROOT_HORIZONTAL_PAGER_TEST_TAG
 import com.cangkir.bitperfectplayer.ui.nowplaying.SETTINGS_SWIPE_CONTAINER_TEST_TAG
+import com.cangkir.bitperfectplayer.ui.nowplaying.SETTINGS_TAB_SWIPE_CONTAINER_TEST_TAG
+import com.cangkir.bitperfectplayer.ui.nowplaying.TOP_LEVEL_HORIZONTAL_PAGER_TEST_TAG
 import com.cangkir.bitperfectplayer.ui.playlists.AddToPlaylistDialog
 import com.cangkir.bitperfectplayer.ui.playlists.PlaylistsScreen
 import com.cangkir.bitperfectplayer.ui.settings.SettingsScreen
-import com.cangkir.bitperfectplayer.ui.theme.TextMuted
 import kotlinx.coroutines.launch
 
 private object Routes {
@@ -130,12 +134,26 @@ internal class RootPagerNavigator {
     var openNowPlaying: () -> Unit = {}
     var openSettingsFromNowPlaying: () -> Unit = {}
     var backToContent: () -> Unit = {}
+    var isLibraryDetailOpen: Boolean by mutableStateOf(false)
+    var isPlaylistsDetailOpen: Boolean by mutableStateOf(false)
+    var isLibraryPageForeground: Boolean by mutableStateOf(true)
+    var isPlaylistsPageForeground: Boolean by mutableStateOf(false)
 }
 
 @Composable
 internal fun rememberRootPagerNavigator(): RootPagerNavigator = remember { RootPagerNavigator() }
 
-internal fun DefaultHomepage.toStartDestinationRoute(): String = if (isPlaylistsRoute) Routes.PLAYLISTS else Routes.LIBRARY
+private fun topLevelRouteForPage(page: Int): String = when (page) {
+    RootPagerPolicy.TOP_LEVEL_PAGE_PLAYLISTS -> Routes.PLAYLISTS
+    RootPagerPolicy.TOP_LEVEL_PAGE_SETTINGS -> Routes.SETTINGS
+    else -> Routes.LIBRARY
+}
+
+private fun topLevelPageForRoute(route: String): Int = when (route) {
+    Routes.PLAYLISTS -> RootPagerPolicy.TOP_LEVEL_PAGE_PLAYLISTS
+    Routes.SETTINGS -> RootPagerPolicy.TOP_LEVEL_PAGE_SETTINGS
+    else -> RootPagerPolicy.TOP_LEVEL_PAGE_LIBRARY
+}
 
 @Composable
 fun BitPerfectAppRoot(viewModel: MainViewModel) {
@@ -165,15 +183,26 @@ private fun BitPerfectAppRootContent(viewModel: MainViewModel, startupHomepage: 
     val playbackState by viewModel.playbackState.collectAsStateWithLifecycle()
     val lyricsUiState by viewModel.lyricsUiState.collectAsStateWithLifecycle()
     val trackInfoState by viewModel.trackInfoState.collectAsStateWithLifecycle()
-    val uiMessage by viewModel.uiMessage.collectAsStateWithLifecycle()
+    val uiSnackbarMessage by viewModel.uiSnackbarMessage.collectAsStateWithLifecycle()
 
     var trackPendingAddToPlaylist by remember { mutableStateOf<PlaybackTrack?>(null) }
 
     val snackbarHostState = remember { SnackbarHostState() }
-    LaunchedEffect(uiMessage) {
-        val msg = uiMessage ?: return@LaunchedEffect
-        snackbarHostState.showSnackbar(msg)
-        viewModel.clearUiMessage()
+    LaunchedEffect(uiSnackbarMessage?.id) {
+        val current = uiSnackbarMessage ?: return@LaunchedEffect
+        try {
+            snackbarHostState.currentSnackbarData?.dismiss()
+            val result = snackbarHostState.showSnackbar(
+                message = current.message,
+                actionLabel = current.actionLabel,
+                duration = SnackbarDuration.Short,
+            )
+            if (result == SnackbarResult.ActionPerformed) {
+                current.onAction?.invoke()
+            }
+        } finally {
+            viewModel.clearUiMessage(current.id)
+        }
     }
 
     val openAddToPlaylist = remember { { track: PlaybackTrack -> trackPendingAddToPlaylist = track } }
@@ -260,7 +289,10 @@ private fun BitPerfectAppRootContent(viewModel: MainViewModel, startupHomepage: 
                 onSetGroupSort = viewModel::setGroupSort,
                 onAddToPlaylist = openAddToPlaylist,
                 onShowTrackInfo = viewModel::openTrackInfo,
-                onToggleFavorite = viewModel::toggleFavorite,
+                onToggleFavorite = { track -> viewModel.toggleFavorite(track) },
+                onToggleFavoriteFromFavorites = { track ->
+                    viewModel.toggleFavorite(track, showRemovalUndoSnackbar = true)
+                },
                 onOpenDiagnostics = openDiagnostics,
                 onOpenQueue = openQueue,
                 initialTab = initialLibraryTab,
@@ -271,9 +303,15 @@ private fun BitPerfectAppRootContent(viewModel: MainViewModel, startupHomepage: 
                 onShuffleTracks = { tracks, context -> viewModel.playTracks(tracks, context = context, shuffled = true) },
                 onSetCustomArtistPhoto = { artist, uri -> viewModel.updateCustomArtistPhoto(artist, uri) },
                 onResetCustomArtistPhoto = { artist -> viewModel.updateCustomArtistPhoto(artist, null) },
+                onDetailViewOpenChanged = { isOpen -> rootPagerNavigator.isLibraryDetailOpen = isOpen },
+                onContextualDynamicThemeChanged = { tokens ->
+                    viewModel.setContextualDynamicTheme("library", tokens)
+                },
+                isForegroundPage = rootPagerNavigator.isLibraryPageForeground,
             )
         },
         playlistsContent = {
+            val dynamicCoverThemeEnabled by viewModel.dynamicCoverThemeEnabled.collectAsStateWithLifecycle()
             PlaylistsScreen(
                 playlistsState = playlistsState,
                 activeTrackUri = playbackState.activeTrack?.uriString,
@@ -287,11 +325,31 @@ private fun BitPerfectAppRootContent(viewModel: MainViewModel, startupHomepage: 
                 onCreatePlaylist = viewModel::createPlaylist,
                 onRenamePlaylist = viewModel::renamePlaylist,
                 onDeletePlaylist = viewModel::deletePlaylist,
-                onRemovePlaylistEntry = viewModel::removePlaylistEntry,
-                onMovePlaylistEntry = viewModel::movePlaylistEntry,
+                onRemovePlaylistEntry = { playlistId, entryId ->
+                    viewModel.removePlaylistEntry(playlistId, entryId)
+                },
                 onExportPlaylist = viewModel::exportPlaylistToM3u8,
                 onImportPlaylist = viewModel::importPlaylistFromM3u8,
                 onOpenQueue = openQueue,
+                favoriteTrackUris = favoriteTrackUris,
+                favoriteFingerprints = libraryState.favoriteFingerprints,
+                onShuffleTracks = { tracks, context -> viewModel.playTracks(tracks, context = context, shuffled = true) },
+                onToggleFavorite = { track -> viewModel.toggleFavorite(track) },
+                onEnqueueTrack = viewModel::enqueueTrack,
+                onEnqueueNext = viewModel::enqueueTrackNext,
+                onAddToPlaylist = openAddToPlaylist,
+                onShowTrackInfo = viewModel::openTrackInfo,
+                onRemovePlaylistEntryWithTitle = { playlistId, entryId, playlistName, trackTitle ->
+                    viewModel.removePlaylistEntry(playlistId, entryId, playlistName, trackTitle)
+                },
+                onCommitPlaylistOrder = viewModel::commitPlaylistOrder,
+                dynamicCoverThemeEnabled = dynamicCoverThemeEnabled,
+                coverThemeColorCache = viewModel.coverThemeColorCache,
+                isForegroundPage = rootPagerNavigator.isPlaylistsPageForeground,
+                onDetailViewOpenChanged = { isOpen -> rootPagerNavigator.isPlaylistsDetailOpen = isOpen },
+                onContextualDynamicThemeChanged = { tokens ->
+                    viewModel.setContextualDynamicTheme("playlists", tokens)
+                },
             )
         },
         settingsContent = {
@@ -549,6 +607,7 @@ private fun BitPerfectSettingsDestination(
     )
 }
 
+@Suppress("UNUSED_PARAMETER")
 @Composable
 internal fun BitPerfectStartupNavHost(
     startupHomepage: DefaultHomepage,
@@ -564,17 +623,27 @@ internal fun BitPerfectStartupNavHost(
     settingsFromNowPlayingContent: (@Composable (onBack: () -> Unit) -> Unit)? = null,
     extraRoutes: NavGraphBuilder.() -> Unit = {},
 ) {
-    // Latch start destination & initial Library tab strictly ONCE so later preference changes in
-    // Settings or user tab switches never hijack active navigation.
-    val startContentRoute = rememberSaveable { startupHomepage.toStartDestinationRoute() }
+    // Latch start tab & initial Library sub-tab strictly ONCE so later preference changes never
+    // hijack active navigation.
+    val startTopLevelPage = rememberSaveable {
+        if (startupHomepage.isPlaylistsRoute) {
+            RootPagerPolicy.TOP_LEVEL_PAGE_PLAYLISTS
+        } else {
+            RootPagerPolicy.TOP_LEVEL_PAGE_LIBRARY
+        }
+    }
     val initialLibraryTab = rememberSaveable { startupHomepage.toInitialLibraryTab() }
-    var activeContentRoute by rememberSaveable { mutableStateOf(startContentRoute) }
-    var settingsOpenedFromBottomNav by rememberSaveable { mutableStateOf(false) }
+    var lastNonSettingsPage by rememberSaveable { mutableIntStateOf(startTopLevelPage) }
 
     val pagerState = rememberPagerState(
         initialPage = RootPagerPolicy.PAGE_CONTENT,
         pageCount = { RootPagerPolicy.PAGE_COUNT },
     )
+    val topLevelPagerState = rememberPagerState(
+        initialPage = startTopLevelPage,
+        pageCount = { RootPagerPolicy.TOP_LEVEL_PAGE_COUNT },
+    )
+    var pendingTapTopLevelPage by remember { mutableStateOf<Int?>(null) }
     val coroutineScope = rememberCoroutineScope()
     val saveableStateHolder = rememberSaveableStateHolder()
     val hasNowPlayingPage = nowPlayingContent != null
@@ -583,10 +652,25 @@ internal fun BitPerfectStartupNavHost(
     val currentNavRoute = backStackEntry?.destination?.route
     val isMainShellActive = currentNavRoute == null || currentNavRoute == Routes.MAIN_SHELL
 
-    LaunchedEffect(pagerState.settledPage, pagerState.isScrollInProgress) {
-        if (!pagerState.isScrollInProgress && pagerState.settledPage == RootPagerPolicy.PAGE_NOW_PLAYING) {
-            settingsOpenedFromBottomNav = false
+    val selectedTopLevelPage = RootPagerPolicy.resolveSelectedTopLevelPage(
+        currentPage = topLevelPagerState.currentPage,
+        pendingTapPage = pendingTapTopLevelPage,
+    )
+    val selectedTopLevelRoute = topLevelRouteForPage(selectedTopLevelPage)
+
+    LaunchedEffect(topLevelPagerState.settledPage) {
+        val settled = topLevelPagerState.settledPage
+        if (settled == RootPagerPolicy.TOP_LEVEL_PAGE_LIBRARY || settled == RootPagerPolicy.TOP_LEVEL_PAGE_PLAYLISTS) {
+            lastNonSettingsPage = settled
         }
+    }
+
+    LaunchedEffect(isMainShellActive, pagerState.currentPage, selectedTopLevelPage) {
+        val onContentShell = isMainShellActive && pagerState.currentPage == RootPagerPolicy.PAGE_CONTENT
+        val isLibraryTab = selectedTopLevelPage == RootPagerPolicy.TOP_LEVEL_PAGE_LIBRARY
+        val isPlaylistsTab = selectedTopLevelPage == RootPagerPolicy.TOP_LEVEL_PAGE_PLAYLISTS
+        rootPagerNavigator.isLibraryPageForeground = onContentShell && isLibraryTab
+        rootPagerNavigator.isPlaylistsPageForeground = onContentShell && isPlaylistsTab
     }
 
     DisposableEffect(rootPagerNavigator, navController, pagerState, coroutineScope, hasNowPlayingPage) {
@@ -607,7 +691,6 @@ internal fun BitPerfectStartupNavHost(
             if (navController.currentDestination?.route != Routes.MAIN_SHELL) {
                 navController.popBackStack(Routes.MAIN_SHELL, inclusive = false)
             }
-            settingsOpenedFromBottomNav = false
             coroutineScope.launch {
                 pagerState.animateScrollToPage(
                     page = RootPagerPolicy.PAGE_SETTINGS,
@@ -619,7 +702,6 @@ internal fun BitPerfectStartupNavHost(
             if (navController.currentDestination?.route != Routes.MAIN_SHELL) {
                 navController.popBackStack(Routes.MAIN_SHELL, inclusive = false)
             }
-            settingsOpenedFromBottomNav = false
             coroutineScope.launch {
                 pagerState.animateScrollToPage(
                     page = RootPagerPolicy.PAGE_CONTENT,
@@ -630,21 +712,31 @@ internal fun BitPerfectStartupNavHost(
         onDispose { }
     }
 
-    val selectTopLevelTab = remember(navController, pagerState, coroutineScope) {
+    val selectTopLevelTab = remember(navController, pagerState, topLevelPagerState, coroutineScope) {
         { route: String ->
             if (navController.currentDestination?.route != Routes.MAIN_SHELL) {
                 navController.popBackStack(Routes.MAIN_SHELL, inclusive = false)
             }
-            if (route == Routes.SETTINGS) {
-                settingsOpenedFromBottomNav = true
-                coroutineScope.launch {
-                    pagerState.scrollToPage(RootPagerPolicy.PAGE_SETTINGS)
-                }
-            } else {
-                activeContentRoute = route
-                settingsOpenedFromBottomNav = false
-                coroutineScope.launch {
-                    pagerState.scrollToPage(RootPagerPolicy.PAGE_CONTENT)
+            val targetPage = topLevelPageForRoute(route)
+            val fromPage = topLevelPagerState.currentPage
+            pendingTapTopLevelPage = targetPage
+            coroutineScope.launch {
+                try {
+                    if (pagerState.currentPage != RootPagerPolicy.PAGE_CONTENT) {
+                        pagerState.scrollToPage(RootPagerPolicy.PAGE_CONTENT)
+                    }
+                    if (RootPagerPolicy.shouldInstantJumpTopLevelTab(fromPage, targetPage)) {
+                        topLevelPagerState.scrollToPage(targetPage)
+                    } else if (topLevelPagerState.currentPage != targetPage || topLevelPagerState.currentPageOffsetFraction != 0f) {
+                        topLevelPagerState.animateScrollToPage(
+                            page = targetPage,
+                            animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
+                        )
+                    }
+                } finally {
+                    if (pendingTapTopLevelPage == targetPage) {
+                        pendingTapTopLevelPage = null
+                    }
                 }
             }
             Unit
@@ -663,28 +755,40 @@ internal fun BitPerfectStartupNavHost(
         }
     }
 
-    val backTargetPage = RootPagerPolicy.resolveBackTargetPage(
-        currentPage = pagerState.currentPage,
-        settingsOpenedFromBottomNav = settingsOpenedFromBottomNav,
-    )
-    BackHandler(enabled = isMainShellActive && backTargetPage != null) {
-        val target = backTargetPage ?: return@BackHandler
-        if (target == RootPagerPolicy.PAGE_CONTENT && pagerState.currentPage == RootPagerPolicy.PAGE_SETTINGS) {
-            settingsOpenedFromBottomNav = false
-            coroutineScope.launch { pagerState.scrollToPage(RootPagerPolicy.PAGE_CONTENT) }
-        } else {
+    val outerBackTarget = RootPagerPolicy.resolveBackTargetPage(currentPage = pagerState.currentPage)
+    val innerBackTarget = if (pagerState.currentPage == RootPagerPolicy.PAGE_CONTENT) {
+        RootPagerPolicy.resolveTopLevelBackTargetPage(
+            currentPage = topLevelPagerState.currentPage,
+            lastNonSettingsPage = lastNonSettingsPage,
+        )
+    } else {
+        null
+    }
+    BackHandler(enabled = isMainShellActive && (outerBackTarget != null || innerBackTarget != null)) {
+        if (outerBackTarget != null) {
             coroutineScope.launch {
                 pagerState.animateScrollToPage(
-                    page = target,
+                    page = outerBackTarget,
                     animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
                 )
+            }
+        } else if (innerBackTarget != null) {
+            val fromPage = topLevelPagerState.currentPage
+            coroutineScope.launch {
+                if (RootPagerPolicy.shouldInstantJumpTopLevelTab(fromPage, innerBackTarget)) {
+                    topLevelPagerState.scrollToPage(innerBackTarget)
+                } else {
+                    topLevelPagerState.animateScrollToPage(
+                        page = innerBackTarget,
+                        animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
+                    )
+                }
             }
         }
     }
 
     val needsOverlaySnackbarHost = !isMainShellActive ||
-        pagerState.settledPage == RootPagerPolicy.PAGE_NOW_PLAYING ||
-        (pagerState.settledPage == RootPagerPolicy.PAGE_SETTINGS && !settingsOpenedFromBottomNav)
+        pagerState.settledPage != RootPagerPolicy.PAGE_CONTENT
 
     Box(modifier = Modifier.fillMaxSize()) {
         NavHost(
@@ -699,11 +803,15 @@ internal fun BitPerfectStartupNavHost(
             composable(Routes.MAIN_SHELL) {
                 RootMainShellPager(
                     pagerState = pagerState,
+                    topLevelPagerState = topLevelPagerState,
+                    selectedTopLevelRoute = selectedTopLevelRoute,
+                    isDetailViewOpen = when (selectedTopLevelPage) {
+                        RootPagerPolicy.TOP_LEVEL_PAGE_LIBRARY -> rootPagerNavigator.isLibraryDetailOpen
+                        RootPagerPolicy.TOP_LEVEL_PAGE_PLAYLISTS -> rootPagerNavigator.isPlaylistsDetailOpen
+                        else -> false
+                    },
                     hasNowPlayingPage = hasNowPlayingPage,
-                    hasActiveTrack = hasActiveTrack,
-                    activeContentRoute = activeContentRoute,
                     initialLibraryTab = initialLibraryTab,
-                    settingsOpenedFromBottomNav = settingsOpenedFromBottomNav,
                     isMainShellActive = isMainShellActive,
                     snackbarHostState = snackbarHostState,
                     saveableStateHolder = saveableStateHolder,
@@ -737,11 +845,11 @@ internal fun BitPerfectStartupNavHost(
 @Composable
 private fun RootMainShellPager(
     pagerState: PagerState,
+    topLevelPagerState: PagerState,
+    selectedTopLevelRoute: String,
+    isDetailViewOpen: Boolean,
     hasNowPlayingPage: Boolean,
-    hasActiveTrack: Boolean,
-    activeContentRoute: String,
     initialLibraryTab: LibraryTab,
-    settingsOpenedFromBottomNav: Boolean,
     isMainShellActive: Boolean,
     snackbarHostState: SnackbarHostState,
     saveableStateHolder: SaveableStateHolder,
@@ -758,13 +866,12 @@ private fun RootMainShellPager(
 ) {
     val nowPlayingExclusionBounds = remember { NowPlayingSwipeExclusionBounds() }
     val settingsExclusionBounds = remember { NowPlayingSwipeExclusionBounds() }
+    val settingsTabExclusionBounds = remember { NowPlayingSwipeExclusionBounds() }
 
     val scrollEnabled = RootPagerPolicy.isRootPagerScrollEnabled(
         hasNowPlayingPage = hasNowPlayingPage,
         settledPage = pagerState.settledPage,
         isScrollInProgress = pagerState.isScrollInProgress,
-        hasActiveTrack = hasActiveTrack,
-        settingsOpenedFromBottomNav = settingsOpenedFromBottomNav,
     )
 
     HorizontalPager(
@@ -777,19 +884,47 @@ private fun RootMainShellPager(
     ) { page ->
         when (page) {
             RootPagerPolicy.PAGE_CONTENT -> {
+                val topLevelSwipeEnabled = RootPagerPolicy.isTopLevelTabPagerScrollEnabled(
+                    isDetailViewOpen = isDetailViewOpen,
+                    isScrollInProgress = topLevelPagerState.isScrollInProgress,
+                )
                 BitPerfectAdaptiveTopLevelFrame(
                     isTopLevelRoute = true,
-                    currentRoute = activeContentRoute,
+                    currentRoute = selectedTopLevelRoute,
                     snackbarHostState = snackbarHostState,
                     onSelectTab = onSelectTopLevelTab,
                     miniPlayerContent = miniPlayerContent,
                 ) { contentModifier ->
-                    Box(modifier = contentModifier) {
-                        saveableStateHolder.SaveableStateProvider(activeContentRoute) {
-                            if (activeContentRoute == Routes.PLAYLISTS) {
-                                playlistsContent()
-                            } else {
-                                libraryContent(initialLibraryTab)
+                    HorizontalPager(
+                        state = topLevelPagerState,
+                        beyondViewportPageCount = 0,
+                        userScrollEnabled = topLevelSwipeEnabled,
+                        modifier = contentModifier.testTag(TOP_LEVEL_HORIZONTAL_PAGER_TEST_TAG),
+                    ) { tabPage ->
+                        when (tabPage) {
+                            RootPagerPolicy.TOP_LEVEL_PAGE_LIBRARY -> {
+                                saveableStateHolder.SaveableStateProvider(Routes.LIBRARY) {
+                                    libraryContent(initialLibraryTab)
+                                }
+                            }
+                            RootPagerPolicy.TOP_LEVEL_PAGE_PLAYLISTS -> {
+                                saveableStateHolder.SaveableStateProvider(Routes.PLAYLISTS) {
+                                    playlistsContent()
+                                }
+                            }
+                            RootPagerPolicy.TOP_LEVEL_PAGE_SETTINGS -> {
+                                CompositionLocalProvider(LocalSwipeExclusionBounds provides settingsTabExclusionBounds) {
+                                    PageExclusionGuardBox(
+                                        exclusionBounds = settingsTabExclusionBounds,
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .testTag(SETTINGS_TAB_SWIPE_CONTAINER_TEST_TAG),
+                                    ) {
+                                        saveableStateHolder.SaveableStateProvider(Routes.SETTINGS) {
+                                            settingsContent()
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -822,24 +957,11 @@ private fun RootMainShellPager(
                             .fillMaxSize()
                             .testTag(SETTINGS_SWIPE_CONTAINER_TEST_TAG),
                     ) {
-                        if (settingsOpenedFromBottomNav || settingsFromNowPlayingContent == null) {
-                            BitPerfectAdaptiveTopLevelFrame(
-                                isTopLevelRoute = true,
-                                currentRoute = Routes.SETTINGS,
-                                snackbarHostState = snackbarHostState,
-                                onSelectTab = onSelectTopLevelTab,
-                                miniPlayerContent = miniPlayerContent,
-                            ) { contentModifier ->
-                                Box(modifier = contentModifier) {
-                                    saveableStateHolder.SaveableStateProvider(Routes.SETTINGS) {
-                                        settingsContent()
-                                    }
-                                }
-                            }
+                        val content = settingsFromNowPlayingContent
+                        if (content != null) {
+                            content(onBackToNowPlaying)
                         } else {
-                            saveableStateHolder.SaveableStateProvider(Routes.SETTINGS) {
-                                settingsFromNowPlayingContent(onBackToNowPlaying)
-                            }
+                            settingsContent()
                         }
                     }
                 }
@@ -959,8 +1081,8 @@ internal fun BitPerfectBottomNavBar(currentRoute: String, onSelectTab: (String) 
                     selectedIconColor = MaterialTheme.colorScheme.onPrimary,
                     selectedTextColor = MaterialTheme.colorScheme.primary,
                     indicatorColor = MaterialTheme.colorScheme.primary,
-                    unselectedIconColor = TextMuted,
-                    unselectedTextColor = TextMuted,
+                    unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
                 ),
             )
         }
@@ -1001,8 +1123,8 @@ internal fun BitPerfectNavigationRail(currentRoute: String, onSelectTab: (String
                     selectedIconColor = MaterialTheme.colorScheme.onPrimary,
                     selectedTextColor = MaterialTheme.colorScheme.primary,
                     indicatorColor = MaterialTheme.colorScheme.primary,
-                    unselectedIconColor = TextMuted,
-                    unselectedTextColor = TextMuted,
+                    unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
                 ),
             )
             Spacer(modifier = Modifier.height(8.dp))

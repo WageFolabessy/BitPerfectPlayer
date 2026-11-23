@@ -76,7 +76,6 @@ import com.cangkir.bitperfectplayer.library.EmbeddedArtworkSlot
 import com.cangkir.bitperfectplayer.ui.TrackArtworkThumbnail
 import com.cangkir.bitperfectplayer.ui.formatDurationMs
 import com.cangkir.bitperfectplayer.ui.rememberDelayedPreparingIndicator
-import com.cangkir.bitperfectplayer.ui.theme.ObsidianBackground
 import com.cangkir.bitperfectplayer.ui.theme.TextMuted
 import kotlinx.coroutines.flow.StateFlow
 
@@ -177,7 +176,7 @@ internal fun SwipeableSquareArtwork(
                 modifier = Modifier
                     .size(artworkSize)
                     .clip(RoundedCornerShape(16.dp))
-                    .background(ObsidianBackground),
+                    .background(MaterialTheme.colorScheme.background),
                 contentAlignment = Alignment.Center,
             ) {
                 Image(
@@ -248,6 +247,7 @@ internal fun NowPlayingSeekSection(
     var isScrubbing by remember(activeTrack.uriString) { mutableStateOf(false) }
     var scrubPositionMs by remember(activeTrack.uriString) { mutableFloatStateOf(0f) }
 
+    val canSeek = durationMs > 0L
     val displayedPosMs = when {
         isScrubbing -> scrubPositionMs.toLong().coerceIn(0L, maxPos)
         externalPreviewMs != null -> externalPreviewMs.coerceIn(0L, maxPos)
@@ -258,6 +258,7 @@ internal fun NowPlayingSeekSection(
 
     Slider(
         value = displayedPosMs.toFloat().coerceIn(0f, sliderMax),
+        enabled = canSeek,
         onValueChange = { newVal ->
             isScrubbing = true
             scrubPositionMs = newVal
@@ -265,7 +266,9 @@ internal fun NowPlayingSeekSection(
         onValueChangeFinished = {
             val target = scrubPositionMs.toLong()
             isScrubbing = false
-            onSeekTo(target)
+            if (canSeek) {
+                onSeekTo(target)
+            }
         },
         valueRange = 0f..sliderMax,
         colors = SliderDefaults.colors(
@@ -284,14 +287,18 @@ internal fun NowPlayingSeekSection(
         Text(
             text = formatDurationMs(displayedPosMs),
             style = MaterialTheme.typography.labelSmall,
-            color = if (externalPreviewMs != null) MaterialTheme.colorScheme.primary else TextMuted,
+            color = if (isScrubbing || externalPreviewMs != null) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
             maxLines = 1,
             softWrap = false,
         )
         Text(
             text = durationLabel,
             style = MaterialTheme.typography.labelSmall,
-            color = TextMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
             softWrap = false,
         )

@@ -5,6 +5,8 @@ import android.app.Application
 import android.net.Uri
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -13,6 +15,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -64,6 +67,7 @@ import com.cangkir.bitperfectplayer.library.TrackTechnicalInfo
 import com.cangkir.bitperfectplayer.ui.library.LIBRARY_SUBTAB_PAGER_TEST_TAG
 import com.cangkir.bitperfectplayer.ui.library.LibraryScreen
 import com.cangkir.bitperfectplayer.ui.nowplaying.NowPlayingScreen
+import com.cangkir.bitperfectplayer.ui.playlists.AddToPlaylistDialog
 import com.cangkir.bitperfectplayer.ui.playlists.PlaylistsScreen
 import com.cangkir.bitperfectplayer.ui.settings.SettingsScreen
 import com.cangkir.bitperfectplayer.ui.theme.BitPerfectPlayerTheme
@@ -458,7 +462,6 @@ class BitPerfectUiBehaviorTest {
                     onRenamePlaylist = { _, _ -> },
                     onDeletePlaylist = { _, _ -> },
                     onRemovePlaylistEntry = { _, _ -> },
-                    onMovePlaylistEntry = { _, _, _ -> },
                     onExportPlaylist = { _, _ -> },
                     onImportPlaylist = {},
                 )
@@ -1275,14 +1278,14 @@ class BitPerfectUiBehaviorTest {
 
         // 3. Folders tab -> open Folder Detail -> Queue icon present and strictly passive
         composeRule.onNodeWithContentDescription("Back to Albums").assertIsDisplayed().performClick()
-        composeRule.onNodeWithText("Folders").assertIsDisplayed().performClick()
+        composeRule.onNodeWithText("Folders").performScrollTo().assertIsDisplayed().performClick()
         composeRule.onNodeWithText("FLAC Hi-Res").assertIsDisplayed().performClick()
         composeRule.onNodeWithContentDescription("Open playback queue").assertIsDisplayed().performClick()
         assertEquals(3, openQueueCalls)
 
         // 4. Artists tab -> Artist Detail -> Queue icon MUST NOT exist on Hero Banner overlay
         composeRule.onNodeWithContentDescription("Back to Folders").assertIsDisplayed().performClick()
-        composeRule.onNodeWithText("Artists").assertIsDisplayed().performClick()
+        composeRule.onNodeWithText("Artists").performScrollTo().assertIsDisplayed().performClick()
         composeRule.onNodeWithText("Green Day").assertIsDisplayed().performClick()
         composeRule.onNodeWithContentDescription("Back to Artists").assertIsDisplayed()
         composeRule.onNodeWithContentDescription("Artist options for Green Day").assertIsDisplayed()
@@ -1419,7 +1422,6 @@ class BitPerfectUiBehaviorTest {
                     onRenamePlaylist = { _, _ -> },
                     onDeletePlaylist = { _, _ -> },
                     onRemovePlaylistEntry = { _, _ -> },
-                    onMovePlaylistEntry = { _, _, _ -> },
                     onExportPlaylist = { _, _ -> },
                     onImportPlaylist = {},
                     onOpenQueue = { openQueueCalls++ },
@@ -1586,7 +1588,6 @@ class BitPerfectUiBehaviorTest {
                             onRenamePlaylist = { _, _ -> },
                             onDeletePlaylist = { _, _ -> },
                             onRemovePlaylistEntry = { _, _ -> },
-                            onMovePlaylistEntry = { _, _, _ -> },
                             onExportPlaylist = { _, _ -> },
                             onImportPlaylist = {},
                         )
@@ -1849,7 +1850,6 @@ class BitPerfectUiBehaviorTest {
                             onRenamePlaylist = { _, _ -> },
                             onDeletePlaylist = { _, _ -> },
                             onRemovePlaylistEntry = { _, _ -> },
-                            onMovePlaylistEntry = { _, _, _ -> },
                             onExportPlaylist = { _, _ -> },
                             onImportPlaylist = {},
                         )
@@ -1923,20 +1923,20 @@ class BitPerfectUiBehaviorTest {
         }
 
         composeRule.onNode(hasScrollToIndexAction()).performScrollToIndex(1)
-        composeRule.onNodeWithContentDescription("Toggle dynamic cover theme").performScrollTo()
-        composeRule.onNodeWithText("Dynamic Cover Theme").assertIsDisplayed()
-        composeRule.onNodeWithContentDescription("Toggle dynamic cover theme")
+        composeRule.onNodeWithContentDescription("Toggle dynamic theme").performScrollTo()
+        composeRule.onNodeWithText("Dynamic Theme").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Toggle dynamic theme")
             .assertIsDisplayed()
             .assertIsOff()
             .performClick()
 
         composeRule.waitForIdle()
-        composeRule.onNodeWithContentDescription("Toggle dynamic cover theme").assertIsOn()
+        composeRule.onNodeWithContentDescription("Toggle dynamic theme").assertIsOn()
         assertEquals(listOf(true), events)
 
-        composeRule.onNodeWithContentDescription("Toggle dynamic cover theme").performClick()
+        composeRule.onNodeWithContentDescription("Toggle dynamic theme").performClick()
         composeRule.waitForIdle()
-        composeRule.onNodeWithContentDescription("Toggle dynamic cover theme").assertIsOff()
+        composeRule.onNodeWithContentDescription("Toggle dynamic theme").assertIsOff()
         assertEquals(listOf(true, false), events)
     }
 
@@ -2231,7 +2231,7 @@ class BitPerfectUiBehaviorTest {
         // Return -> open Folder Detail -> tap top-bar Queue icon -> still strictly passive
         composeRule.onNodeWithContentDescription("Back").assertIsDisplayed().performClick()
         composeRule.onNodeWithContentDescription("Back to Albums").assertIsDisplayed().performClick()
-        composeRule.onNodeWithText("Folders").assertIsDisplayed().performClick()
+        composeRule.onNodeWithText("Folders").performScrollTo().assertIsDisplayed().performClick()
         composeRule.onNodeWithText("Browsed Folder").assertIsDisplayed().performClick()
         composeRule.onNodeWithContentDescription("Open playback queue").assertIsDisplayed().performClick()
         composeRule.onNodeWithText("Currently Playing Queue Song").assertIsDisplayed()
@@ -2743,6 +2743,11 @@ class BitPerfectUiBehaviorTest {
         // Priority 2: Embedded ARTIST art
         composeRule.onNodeWithContentDescription("Embedded artist artwork for Beta Embedded").assertIsDisplayed()
         // Priority 3: First album in oldest-first sorted order (LP 2003, NOT LP 2013!)
+        composeRule.waitUntil(timeoutMillis = 3_000L) {
+            composeRule.onAllNodesWithContentDescription(
+                "Artist cover from LP 2003 for Gamma Fallback",
+            ).fetchSemanticsNodes().isNotEmpty()
+        }
         composeRule.onNodeWithContentDescription("Artist cover from LP 2003 for Gamma Fallback").assertIsDisplayed()
         // Priority 4: Monochrome monogram fallback
         composeRule.onNodeWithContentDescription("Artist monogram for Delta Mono").assertIsDisplayed()
@@ -3117,5 +3122,347 @@ class BitPerfectUiBehaviorTest {
 
         composeRule.onNodeWithText("Refresh").performClick()
         assertEquals(1, refreshClicks)
+    }
+
+    @Composable
+    private fun RenderDynamicThemeNavigationShell(
+        albumGroup: com.cangkir.bitperfectplayer.library.LibraryGroup,
+        samplePlaylist: com.cangkir.bitperfectplayer.library.ResolvedPlaylist,
+        cache: CoverThemeColorCache,
+        contextMap: MutableState<Map<String, com.cangkir.bitperfectplayer.ui.theme.DynamicThemeTokens>>,
+        onObservedPrimary: (Color) -> Unit,
+    ) {
+        val activeTokens = contextMap.value.values.lastOrNull()
+        BitPerfectPlayerTheme(dynamicTokens = activeTokens) {
+            onObservedPrimary(MaterialTheme.colorScheme.primary)
+            val navigator = rememberRootPagerNavigator()
+            BitPerfectStartupNavHost(
+                startupHomepage = DefaultHomepage.ALBUMS,
+                rootPagerNavigator = navigator,
+                libraryContent = { initialTab ->
+                    LibraryScreen(
+                        libraryState = LibrarySnapshot(
+                            allSongs = albumGroup.tracks,
+                            albums = listOf(albumGroup),
+                        ),
+                        favoriteTrackUris = emptySet(),
+                        playbackState = PlaybackControllerState(),
+                        albumArtworkLoader = artworkLoader,
+                        onRefreshLibrary = {},
+                        onImportFolder = {},
+                        onPlayTracks = { _, _, _ -> },
+                        onEnqueueTrack = {},
+                        onEnqueueNext = {},
+                        onEnqueueTracks = { _, _ -> },
+                        onEnqueueTracksNext = { _, _ -> },
+                        onSetTrackSort = { _, _ -> },
+                        onSetGroupSort = { _, _ -> },
+                        onAddToPlaylist = {},
+                        onShowTrackInfo = {},
+                        onToggleFavorite = {},
+                        onOpenDiagnostics = {},
+                        initialTab = initialTab,
+                        dynamicCoverThemeEnabled = true,
+                        coverThemeColorCache = cache,
+                        isForegroundPage = navigator.isLibraryPageForeground,
+                        onDetailViewOpenChanged = { navigator.isLibraryDetailOpen = it },
+                        onContextualDynamicThemeChanged = { tokens ->
+                            contextMap.value = if (tokens == null) {
+                                contextMap.value - "library"
+                            } else {
+                                contextMap.value + ("library" to tokens)
+                            }
+                        },
+                    )
+                },
+                playlistsContent = {
+                    PlaylistsScreen(
+                        playlistsState = PlaylistsUiSnapshot(
+                            playlists = listOf(samplePlaylist),
+                            isLoaded = true,
+                        ),
+                        activeTrackUri = null,
+                        albumArtworkLoader = artworkLoader,
+                        onPlayTracks = { _, _, _ -> },
+                        onEnqueueTracks = { _, _ -> },
+                        onEnqueueTracksNext = { _, _ -> },
+                        onSetPlaylistSort = { _, _ -> },
+                        onCreatePlaylist = {},
+                        onRenamePlaylist = { _, _ -> },
+                        onDeletePlaylist = { _, _ -> },
+                        onRemovePlaylistEntry = { _, _ -> },
+                        onExportPlaylist = { _, _ -> },
+                        onImportPlaylist = {},
+                        dynamicCoverThemeEnabled = true,
+                        coverThemeColorCache = cache,
+                        isForegroundPage = navigator.isPlaylistsPageForeground,
+                        onDetailViewOpenChanged = { navigator.isPlaylistsDetailOpen = it },
+                        onContextualDynamicThemeChanged = { tokens ->
+                            contextMap.value = if (tokens == null) {
+                                contextMap.value - "playlists"
+                            } else {
+                                contextMap.value + ("playlists" to tokens)
+                            }
+                        },
+                    )
+                },
+                settingsContent = {
+                    SettingsScreen(
+                        libraryState = LibrarySnapshot(),
+                        playbackState = PlaybackControllerState(),
+                        sleepTimerStateFlow = MutableStateFlow(SleepTimerState()),
+                        onImportFolder = {},
+                        onRemoveSafFolder = {},
+                        onRefreshLibrary = {},
+                        onSetGaplessEnabled = {},
+                        onSetReplayGainMode = {},
+                        onSetReplayGainPreampDb = {},
+                        onSetReplayGainPreventClipping = {},
+                        onSelectSleepTimerPreset = {},
+                        onExportLocalBackup = {},
+                        onImportLocalBackup = {},
+                        onOpenDiagnostics = {},
+                    )
+                },
+            )
+        }
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h915dp")
+    fun rootDynamicTheme_propagatesAlbumAndPlaylistTokensToBottomNavAndRevertsCleanly() {
+        val albumTokens = CoverThemePaletteGenerator.generateTokensFromHue(145f, 0.90f)
+        val playlistTokens = CoverThemePaletteGenerator.generateTokensFromHue(275f, 0.85f)
+        val cache = CoverThemeColorCache(artworkLoader).apply {
+            seedCacheForTesting(hiResFlacTrack, albumTokens)
+        }
+        val playlistTrack = hiResFlacTrack.copy(
+            uriString = "content://test/audio/purple_song.flac",
+            title = "Violet Song",
+            album = "Violet LP",
+        )
+        cache.seedCacheForTesting(playlistTrack, playlistTokens)
+
+        val albumGroup = com.cangkir.bitperfectplayer.library.LibraryGroup(
+            name = "21st Century Breakdown",
+            subtitle = "Green Day · 1 track",
+            tracks = listOf(hiResFlacTrack),
+        )
+        val samplePlaylist = com.cangkir.bitperfectplayer.library.ResolvedPlaylist(
+            id = 5L,
+            name = "Night Studio",
+            createdAtEpochMs = 1L,
+            updatedAtEpochMs = 2L,
+            entries = listOf(
+                com.cangkir.bitperfectplayer.library.ResolvedPlaylistEntry(
+                    entryId = 50L,
+                    playlistId = 5L,
+                    positionIndex = 0,
+                    track = playlistTrack,
+                ),
+            ),
+        )
+
+        val contextMap = mutableStateOf<Map<String, com.cangkir.bitperfectplayer.ui.theme.DynamicThemeTokens>>(emptyMap())
+        var observedPrimary by mutableStateOf(Color.Unspecified)
+
+        composeRule.setContent {
+            RenderDynamicThemeNavigationShell(
+                albumGroup = albumGroup,
+                samplePlaylist = samplePlaylist,
+                cache = cache,
+                contextMap = contextMap,
+                onObservedPrimary = { observedPrimary = it },
+            )
+        }
+        composeRule.waitForIdle()
+        assertEquals(StudioIvoryPrimary, observedPrimary)
+
+        // Open Album Detail -> root primary (used by BottomNavBar + content) adopts emerald album theme
+        composeRule.onNodeWithText("21st Century Breakdown").performClick()
+        composeRule.waitForIdle()
+        assertEquals(Color(albumTokens.primaryArgb), observedPrimary)
+
+        // Switch to Settings tab -> contextual album theme clears back to Monochrome Studio
+        composeRule.onNodeWithContentDescription("Settings").performClick()
+        composeRule.waitForIdle()
+        assertEquals(StudioIvoryPrimary, observedPrimary)
+
+        // Open Playlists -> open Night Studio playlist -> root primary adopts violet playlist theme!
+        composeRule.onNodeWithContentDescription("Playlists").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("Night Studio").performClick()
+        composeRule.waitForIdle()
+        assertEquals(Color(playlistTokens.primaryArgb), observedPrimary)
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h915dp")
+    fun playlistDetailView_usesDragHandlesInCustomOrderAsc_exposesPlayAllShuffleAndAddedDialogBadge() {
+        val trackTwo = hiResFlacTrack.copy(
+            uriString = "content://test/audio/static_age.flac",
+            title = "Static Age",
+            trackNumber = 8,
+            contentFingerprint = "c".repeat(64),
+        )
+        val playlist = com.cangkir.bitperfectplayer.library.ResolvedPlaylist(
+            id = 9L,
+            name = "Audiophile Mix",
+            createdAtEpochMs = 1L,
+            updatedAtEpochMs = 2L,
+            entries = listOf(
+                com.cangkir.bitperfectplayer.library.ResolvedPlaylistEntry(901L, 9L, 0, hiResFlacTrack),
+                com.cangkir.bitperfectplayer.library.ResolvedPlaylistEntry(902L, 9L, 1, trackTwo),
+            ),
+        )
+        var sortSpec by mutableStateOf(TrackSortSpec(TrackSortOption.CUSTOM_ORDER, SortDirection.ASC))
+        var shuffleClicks = 0
+
+        composeRule.setContent {
+            BitPerfectPlayerTheme {
+                androidx.compose.foundation.layout.Column {
+                    PlaylistsScreen(
+                        playlistsState = PlaylistsUiSnapshot(
+                            playlists = listOf(playlist),
+                            playlistDetailSort = sortSpec,
+                            isLoaded = true,
+                        ),
+                        activeTrackUri = null,
+                        albumArtworkLoader = artworkLoader,
+                        onPlayTracks = { _, _, _ -> },
+                        onShuffleTracks = { _, _ -> shuffleClicks++ },
+                        onEnqueueTracks = { _, _ -> },
+                        onEnqueueTracksNext = { _, _ -> },
+                        onSetPlaylistSort = { _, _ -> },
+                        onCreatePlaylist = {},
+                        onRenamePlaylist = { _, _ -> },
+                        onDeletePlaylist = { _, _ -> },
+                        onRemovePlaylistEntry = { _, _ -> },
+                        onExportPlaylist = { _, _ -> },
+                        onImportPlaylist = {},
+                    )
+                }
+            }
+        }
+        composeRule.waitForIdle()
+
+        // Open playlist detail
+        composeRule.onNodeWithText("Audiophile Mix").performClick()
+        composeRule.waitForIdle()
+
+        // Play All + Shuffle present, zero duplicate "Export .m3u8" body button, zero Up/Down arrows
+        composeRule.onNodeWithText("Play All").assertIsDisplayed()
+        composeRule.onNodeWithText("Shuffle").assertIsDisplayed().performClick()
+        assertEquals(1, shuffleClicks)
+        assertEquals(0, composeRule.onAllNodesWithText("Export .m3u8").fetchSemanticsNodes().size)
+        assertEquals(0, composeRule.onAllNodesWithContentDescription("Move Peacemaker up").fetchSemanticsNodes().size)
+
+        // Drag handles + Close remove + MoreVert menu present in CUSTOM_ORDER ASC
+        composeRule.onNodeWithContentDescription("Reorder Peacemaker").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Remove Peacemaker from Audiophile Mix").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("More actions for Peacemaker").assertIsDisplayed()
+
+        // Switching away from CUSTOM_ORDER ASC hides drag handles cleanly
+        composeRule.runOnIdle { sortSpec = TrackSortSpec(TrackSortOption.TITLE, SortDirection.ASC) }
+        composeRule.waitForIdle()
+        assertEquals(0, composeRule.onAllNodesWithContentDescription("Reorder Peacemaker").fetchSemanticsNodes().size)
+    }
+
+    @Test
+    fun addToPlaylistDialog_marksPlaylistsContainingTrackAsAdded() {
+        val playlistWithTrack = com.cangkir.bitperfectplayer.library.ResolvedPlaylist(
+            id = 1L,
+            name = "Already Has It",
+            createdAtEpochMs = 1L,
+            updatedAtEpochMs = 2L,
+            entries = listOf(
+                com.cangkir.bitperfectplayer.library.ResolvedPlaylistEntry(10L, 1L, 0, hiResFlacTrack),
+            ),
+        )
+        val emptyPlaylist = com.cangkir.bitperfectplayer.library.ResolvedPlaylist(
+            id = 2L,
+            name = "Fresh List",
+            createdAtEpochMs = 1L,
+            updatedAtEpochMs = 2L,
+            entries = emptyList(),
+        )
+
+        composeRule.setContent {
+            BitPerfectPlayerTheme {
+                AddToPlaylistDialog(
+                    track = hiResFlacTrack,
+                    playlists = listOf(playlistWithTrack, emptyPlaylist),
+                    onSelectPlaylist = {},
+                    onCreateAndAdd = {},
+                    onDismiss = {},
+                )
+            }
+        }
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithContentDescription("Already added to Already Has It").assertIsDisplayed()
+        composeRule.onNodeWithText("Added").assertIsDisplayed()
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h915dp")
+    fun untaggedZeroDurationTrack_rendersSafelyAndDisablesSeekSliderWithoutCrash() {
+        val untaggedWav = PlaybackTrack(
+            uriString = "content://test/raw_rip.wav",
+            title = "raw_rip",
+            artist = "Unknown Artist",
+            album = "Unknown Album",
+            folderName = "Downloads",
+            fileName = "raw_rip.wav",
+            durationMs = 0L,
+            sampleRateHz = 0,
+            bitDepth = null,
+            container = "WAV",
+            codec = "PCM",
+        )
+        var seekCalls = 0
+
+        composeRule.setContent {
+            BitPerfectPlayerTheme {
+                NowPlayingScreen(
+                    playbackState = PlaybackControllerState(
+                        queue = QueueSnapshot(items = listOf(untaggedWav), currentIndex = 0),
+                        queueContext = QueueContext.folder("Downloads"),
+                        activeTrack = untaggedWav,
+                        engineState = EnginePlaybackState(status = PlaybackStatus.PAUSED, durationMs = 0L),
+                    ),
+                    playbackPositionMsFlow = MutableStateFlow(0L),
+                    sleepTimerStateFlow = MutableStateFlow(SleepTimerState()),
+                    albumArtworkLoader = artworkLoader,
+                    isFavorite = false,
+                    spectrumVisualizerEnabled = false,
+                    onBack = {},
+                    onToggleFavorite = {},
+                    onAddToPlaylist = {},
+                    onShowTrackInfo = {},
+                    onSelectSleepTimerPreset = {},
+                    onTogglePlayPause = {},
+                    onPrevious = {},
+                    onNext = {},
+                    onSeekTo = { seekCalls++ },
+                    onToggleShuffle = {},
+                    onCycleRepeatMode = {},
+                    onRequestBitPerfectMode = {},
+                    onConfirmBitPerfectWarning = {},
+                    onDismissSafetyWarning = {},
+                    onSwitchToSafeMode = {},
+                    onClearAutoPauseNotice = {},
+                    onOpenQueue = {},
+                    onOpenLyrics = {},
+                    onOpenDiagnostics = {},
+                )
+            }
+        }
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithText("raw_rip").assertIsDisplayed()
+        composeRule.onNodeWithText("Unknown Artist · Unknown Album").assertIsDisplayed()
+        composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.SetProgress)).assertIsNotEnabled()
+        assertEquals(0, seekCalls)
     }
 }

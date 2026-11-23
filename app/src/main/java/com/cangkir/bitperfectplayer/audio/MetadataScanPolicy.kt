@@ -8,10 +8,34 @@ package com.cangkir.bitperfectplayer.audio
 object MetadataScanPolicy {
 
     /**
-     * Normalizes a raw MediaStore cursor tag (`TITLE`, `ARTIST`, `ALBUM`), rejecting blanks
-     * and Android's `<unknown>` sentinel.
+     * Normalizes a raw MediaStore cursor tag (`TITLE`, `ARTIST`, `ALBUM`), stripping control
+     * characters, collapsing embedded newlines/tabs, and rejecting blanks and `<unknown>`.
      */
-    fun sanitizeCursorTag(raw: String?): String? = raw?.trim()?.takeIf { it.isNotEmpty() && !it.equals("<unknown>", ignoreCase = true) }
+    fun sanitizeCursorTag(raw: String?): String? {
+        if (raw == null) return null
+        val cleaned = buildString(raw.length) {
+            var lastWasSpace = true
+            for (ch in raw) {
+                val mapped = when {
+                    ch in '\u0000'..'\u001F' || ch == '\u007F' -> {
+                        if (ch == '\t' || ch == '\n' || ch == '\r') ' ' else continue
+                    }
+                    ch.isWhitespace() -> ' '
+                    else -> ch
+                }
+                if (mapped == ' ') {
+                    if (!lastWasSpace) {
+                        append(' ')
+                        lastWasSpace = true
+                    }
+                } else {
+                    append(mapped)
+                    lastWasSpace = false
+                }
+            }
+        }.trim()
+        return cleaned.takeIf { it.isNotEmpty() && !it.equals("<unknown>", ignoreCase = true) }
+    }
 
     /**
      * Returns `true` when `MediaMetadataRetriever` can be completely skipped for a MediaStore

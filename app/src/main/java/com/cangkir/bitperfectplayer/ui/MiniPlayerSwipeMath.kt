@@ -37,6 +37,22 @@ object MiniPlayerSwipeMath {
     /** Minimum visual alpha (`0.25f`) reached as the mini-player approaches its dismiss threshold. */
     const val MIN_ALPHA: Float = 0.25f
 
+    /** Minimum upward swipe distance (`dp`) to open Now Playing directly from `MiniPlayerBar`. */
+    const val UPWARD_OPEN_THRESHOLD_DP: Float = 28f
+
+    /** Vertical-to-horizontal dominance ratio required for swipe-up-to-open. */
+    const val VERTICAL_OPEN_RATIO: Float = 1.25f
+
+    /**
+     * Returns `true` when an upward vertical drag on `MiniPlayerBar` exceeds [openThresholdPx]
+     * (`totalDyPx <= -openThresholdPx`) and clearly dominates horizontal movement.
+     */
+    fun shouldTriggerSwipeUpToOpen(totalDxPx: Float, totalDyPx: Float, openThresholdPx: Float): Boolean {
+        if (!totalDxPx.isFinite() || !totalDyPx.isFinite() || !openThresholdPx.isFinite()) return false
+        val safeThreshold = openThresholdPx.takeIf { it > 0f } ?: return false
+        return totalDyPx <= -safeThreshold && abs(totalDyPx) > abs(totalDxPx) * VERTICAL_OPEN_RATIO
+    }
+
     /**
      * Returns `true` when cumulative movement from `down` exceeds [touchSlopPx] and is
      * predominantly horizontal (`|dx| > |dy| * 1.25`).

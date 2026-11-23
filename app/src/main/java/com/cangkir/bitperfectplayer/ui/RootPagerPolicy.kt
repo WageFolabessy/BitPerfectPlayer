@@ -1,9 +1,12 @@
 package com.cangkir.bitperfectplayer.ui
 
+import kotlin.math.abs
+
 /**
- * Pure-Kotlin state and navigation policy for the root 3-page `HorizontalPager`
- * (`[Content (Library / Playlists)] <-> [Now Playing] <-> [Settings]`), kept free of `android.*`
- * and `androidx.*` imports for deterministic JVM unit testing.
+ * Pure-Kotlin state and navigation policy for:
+ * 1. The outer 3-page root `HorizontalPager` (`[Content] <-> [Now Playing] <-> [Settings]`), and
+ * 2. The inner 3-page top-level `HorizontalPager` (`[Library] <-> [Playlists] <-> [Settings]`) inside [PAGE_CONTENT],
+ * kept free of `android.*` and `androidx.*` imports for deterministic JVM unit testing.
  */
 object RootPagerPolicy {
     const val PAGE_CONTENT: Int = 0
@@ -11,40 +14,61 @@ object RootPagerPolicy {
     const val PAGE_SETTINGS: Int = 2
     const val PAGE_COUNT: Int = 3
 
+    const val TOP_LEVEL_PAGE_LIBRARY: Int = 0
+    const val TOP_LEVEL_PAGE_PLAYLISTS: Int = 1
+    const val TOP_LEVEL_PAGE_SETTINGS: Int = 2
+    const val TOP_LEVEL_PAGE_COUNT: Int = 3
+
     /**
-     * Enables user horizontal swiping only when:
-     * - [hasNowPlayingPage] is `true`, and
-     * - either a scroll/drag/settle is already in flight (never abort mid-gesture at the 50% midpoint),
-     *   or the pager is currently settled on [PAGE_NOW_PLAYING],
-     *   or on [PAGE_SETTINGS] when opened from Now Playing OR opened from bottom nav with an active track.
-     *
-     * On [PAGE_CONTENT] (`Library` / `Playlists`), horizontal scrolling stays disabled so
-     * `LibraryScreen`'s inner 6-tab `HorizontalPager` owns all horizontal swipes without conflict.
+     * Enables outer horizontal swiping only when [hasNowPlayingPage] is `true` AND either a drag is
+     * already in flight (never abort past the 50% midpoint) OR settled on [PAGE_NOW_PLAYING] /
+     * [PAGE_SETTINGS] (`false` on [PAGE_CONTENT] so inner top-level & Library pagers own swipes).
      */
-    fun isRootPagerScrollEnabled(
-        hasNowPlayingPage: Boolean,
-        settledPage: Int,
-        isScrollInProgress: Boolean,
-        hasActiveTrack: Boolean,
-        settingsOpenedFromBottomNav: Boolean,
-    ): Boolean {
+    fun isRootPagerScrollEnabled(hasNowPlayingPage: Boolean, settledPage: Int, isScrollInProgress: Boolean): Boolean {
         if (!hasNowPlayingPage) return false
         if (isScrollInProgress) return true
-        return when (settledPage) {
-            PAGE_NOW_PLAYING -> true
-            PAGE_SETTINGS -> !settingsOpenedFromBottomNav || hasActiveTrack
-            else -> false
-        }
+        return settledPage == PAGE_NOW_PLAYING || settledPage == PAGE_SETTINGS
     }
 
     /**
-     * Resolves the System Back / TopAppBar Back destination page from [currentPage], or `null` when
-     * settled on [PAGE_CONTENT] so inner Library Back handlers or normal activity exit apply.
+     * Resolves System Back / TopAppBar Back destination page for the outer pager, or `null` when
+     * settled on [PAGE_CONTENT].
      */
-    fun resolveBackTargetPage(currentPage: Int, settingsOpenedFromBottomNav: Boolean): Int? = when (currentPage) {
-        PAGE_SETTINGS -> if (settingsOpenedFromBottomNav) PAGE_CONTENT else PAGE_NOW_PLAYING
+    fun resolveBackTargetPage(currentPage: Int): Int? = when (currentPage) {
+        PAGE_SETTINGS -> PAGE_NOW_PLAYING
         PAGE_NOW_PLAYING -> PAGE_CONTENT
         else -> null
+    }
+
+    /**
+     * Enables horizontal swiping across `[Library] <-> [Playlists] <-> [Settings]` whenever a drag
+     * is already in progress or no inner detail view (Album, Artist, Folder, Playlist, Most Played)
+     * is open.
+     */
+    fun isTopLevelTabPagerScrollEnabled(isDetailViewOpen: Boolean, isScrollInProgress: Boolean): Boolean =
+        isScrollInProgress || !isDetailViewOpen
+
+    /**
+     * Returns the immediately highlighted top-level tab index, honoring an in-flight [pendingTapPage]
+     * so non-adjacent bottom-nav taps (`Library <-> Settings`) never flicker through `Playlists`.
+     */
+    fun resolveSelectedTopLevelPage(currentPage: Int, pendingTapPage: Int?): Int =
+        (pendingTapPage ?: currentPage).coerceIn(0, TOP_LEVEL_PAGE_COUNT - 1)
+
+    /**
+     * Returns `true` for non-adjacent top-level jumps (`Library <-> Settings`) so the pager snaps
+     * cleanly without sliding an intermediate `Playlists` screen past the viewport.
+     */
+    fun shouldInstantJumpTopLevelTab(fromPage: Int, toPage: Int): Boolean = abs(toPage - fromPage) > 1
+
+    /**
+     * Resolves System Back target when settled on the top-level `Settings` tab (`PAGE_CONTENT`),
+     * returning to [lastNonSettingsPage] (`Library` or `Playlists`), or `null` otherwise.
+     */
+    fun resolveTopLevelBackTargetPage(currentPage: Int, lastNonSettingsPage: Int): Int? = if (currentPage == TOP_LEVEL_PAGE_SETTINGS) {
+        lastNonSettingsPage.coerceIn(TOP_LEVEL_PAGE_LIBRARY, TOP_LEVEL_PAGE_PLAYLISTS)
+    } else {
+        null
     }
 
     /**

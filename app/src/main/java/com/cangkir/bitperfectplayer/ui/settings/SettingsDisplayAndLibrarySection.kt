@@ -310,7 +310,7 @@ internal fun SettingsDisplaySection(
 
             SettingsHairline()
 
-            // Opt-in Dynamic Cover Theme toggle (defaults OFF -> Monochrome Studio)
+            // Opt-in Dynamic Theme toggle (defaults OFF -> Monochrome Studio)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -320,14 +320,15 @@ internal fun SettingsDisplaySection(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Dynamic Cover Theme",
+                        text = "Dynamic Theme",
                         style = MaterialTheme.typography.titleSmall,
                         color = MaterialTheme.colorScheme.onSurface,
                     )
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
-                        text = "Adapt accent and subtle dark surface tint to the playing track and opened " +
-                            "album cover. Falls back to Monochrome Studio when off or monochrome.",
+                        text = "Adapt accent and dark surfaces (including navigation bar) to the playing " +
+                            "track or opened album, artist, or playlist. Falls back to Monochrome Studio " +
+                            "when off or monochrome.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -338,7 +339,7 @@ internal fun SettingsDisplaySection(
                     onCheckedChange = onSetDynamicCoverThemeEnabled,
                     colors = studioSwitchColors(),
                     modifier = Modifier.semantics {
-                        contentDescription = "Toggle dynamic cover theme"
+                        contentDescription = "Toggle dynamic theme"
                     },
                 )
             }
@@ -487,7 +488,7 @@ internal fun DefaultHomepageBottomSheet(
             )
             Spacer(modifier = Modifier.height(4.dp))
 
-            DefaultHomepage.entries.forEach { option ->
+            DEFAULT_HOMEPAGE_DISPLAY_ORDER.forEach { option ->
                 val selected = option == currentHomepage
                 Row(
                     modifier = Modifier
@@ -520,6 +521,16 @@ internal fun DefaultHomepageBottomSheet(
         }
     }
 }
+
+private val DEFAULT_HOMEPAGE_DISPLAY_ORDER = listOf(
+    DefaultHomepage.ALL_SONGS,
+    DefaultHomepage.ARTISTS,
+    DefaultHomepage.ALBUMS,
+    DefaultHomepage.RECENT,
+    DefaultHomepage.FAVORITES,
+    DefaultHomepage.FOLDERS,
+    DefaultHomepage.PLAYLISTS,
+)
 
 private fun formatReadableSafLabel(uriString: String): String {
     val decoded = runCatching { Uri.decode(uriString) }.getOrDefault(uriString)

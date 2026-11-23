@@ -105,4 +105,12 @@ class MiniPlayerSwipeMathTest {
             ),
         )
     }
+
+    @Test
+    fun shouldTriggerSwipeUpToOpen_requiresUpwardDistanceAndVerticalDominance() {
+        assertTrue(MiniPlayerSwipeMath.shouldTriggerSwipeUpToOpen(totalDxPx = 6f, totalDyPx = -60f, openThresholdPx = 56f))
+        assertFalse(MiniPlayerSwipeMath.shouldTriggerSwipeUpToOpen(totalDxPx = 6f, totalDyPx = -40f, openThresholdPx = 56f))
+        assertFalse(MiniPlayerSwipeMath.shouldTriggerSwipeUpToOpen(totalDxPx = 0f, totalDyPx = 90f, openThresholdPx = 56f))
+        assertFalse(MiniPlayerSwipeMath.shouldTriggerSwipeUpToOpen(totalDxPx = -70f, totalDyPx = -65f, openThresholdPx = 56f))
+    }
 }

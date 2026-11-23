@@ -16,6 +16,7 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -28,13 +29,17 @@ import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -168,6 +173,84 @@ fun TrackArtworkThumbnail(
                 tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
                 modifier = Modifier.size(iconSize),
             )
+        }
+    }
+}
+
+/**
+ * Consistent `Play All` + `Shuffle` + overflow action header shared by Album Detail,
+ * Folder Detail, Playlist Detail, and Most Played Detail screens.
+ */
+@Composable
+fun DetailActionHeaderRow(
+    hasTracks: Boolean,
+    onPlayAll: () -> Unit,
+    onShuffle: () -> Unit,
+    overflowContentDescription: String,
+    modifier: Modifier = Modifier,
+    overflowMenuItems: @Composable ColumnScope.(dismiss: () -> Unit) -> Unit,
+) {
+    var menuExpanded by remember { mutableStateOf(false) }
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, end = 6.dp, bottom = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Button(
+            onClick = onPlayAll,
+            enabled = hasTracks,
+            shape = RoundedCornerShape(24.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
+            ),
+            modifier = Modifier
+                .weight(1f)
+                .sizeIn(minHeight = 48.dp),
+        ) {
+            Icon(Icons.Filled.PlayArrow, contentDescription = null)
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("Play All", maxLines = 1, softWrap = false)
+        }
+        FilledTonalButton(
+            onClick = onShuffle,
+            enabled = hasTracks,
+            shape = RoundedCornerShape(24.dp),
+            colors = ButtonDefaults.filledTonalButtonColors(
+                containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                contentColor = MaterialTheme.colorScheme.onSurface,
+            ),
+            modifier = Modifier
+                .weight(1f)
+                .sizeIn(minHeight = 48.dp),
+        ) {
+            Icon(Icons.Filled.Shuffle, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("Shuffle", maxLines = 1, softWrap = false)
+        }
+        Box {
+            IconButton(
+                onClick = { menuExpanded = true },
+                enabled = hasTracks,
+                modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.MoreVert,
+                    contentDescription = overflowContentDescription,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (menuExpanded) {
+                DropdownMenu(
+                    expanded = true,
+                    onDismissRequest = { menuExpanded = false },
+                ) {
+                    overflowMenuItems { menuExpanded = false }
+                }
+            }
         }
     }
 }
@@ -383,6 +466,7 @@ fun MiniPlayerBar(
     onDismissPlayback: () -> Unit = {},
 ) {
     val track = playbackState.activeTrack ?: return
+    val currentOnOpenNowPlaying by rememberUpdatedState(onOpenNowPlaying)
     val currentOnDismissPlayback by rememberUpdatedState(onDismissPlayback)
     val coroutineScope = rememberCoroutineScope()
     val density = LocalDensity.current
@@ -391,6 +475,7 @@ fun MiniPlayerBar(
     val flingVelocityThresholdPxPerSec =
         with(density) { MiniPlayerSwipeMath.FLING_VELOCITY_THRESHOLD_DP_PER_SEC.dp.toPx() }
     val minFlingDragPx = with(density) { MiniPlayerSwipeMath.MIN_FLING_DRAG_DP.dp.toPx() }
+    val swipeUpOpenThresholdPx = with(density) { MiniPlayerSwipeMath.UPWARD_OPEN_THRESHOLD_DP.dp.toPx() }
 
     var containerWidthPx by remember { mutableFloatStateOf(0f) }
     var isDismissing by remember(track.uriString) { mutableStateOf(false) }
@@ -439,6 +524,7 @@ fun MiniPlayerBar(
                 maxDismissThresholdPx,
                 flingVelocityThresholdPxPerSec,
                 minFlingDragPx,
+                swipeUpOpenThresholdPx,
             ) {
                 val touchSlop = viewConfiguration.touchSlop
                 awaitEachGesture {
@@ -453,6 +539,7 @@ fun MiniPlayerBar(
                     var totalDy = 0f
                     var rawDragX = 0f
                     var horizontalLocked = false
+                    var verticalLocked = false
                     var gestureAborted = false
                     var dragEnded = false
 
@@ -469,11 +556,14 @@ fun MiniPlayerBar(
                             totalDx += stepDx
                             totalDy += stepDy
 
-                            if (!horizontalLocked) {
+                            if (!horizontalLocked && !verticalLocked) {
                                 when {
-                                    change.isConsumed ||
-                                        MiniPlayerSwipeMath.shouldAbortForVerticalDrag(totalDx, totalDy, touchSlop) -> {
-                                        gestureAborted = true
+                                    change.isConsumed -> gestureAborted = true
+                                    MiniPlayerSwipeMath.shouldAbortForVerticalDrag(totalDx, totalDy, touchSlop) -> {
+                                        verticalLocked = true
+                                        if (totalDy < 0f && change.positionChanged()) {
+                                            change.consume()
+                                        }
                                     }
                                     MiniPlayerSwipeMath.shouldLockHorizontalDrag(totalDx, totalDy, touchSlop) -> {
                                         horizontalLocked = true
@@ -487,6 +577,10 @@ fun MiniPlayerBar(
                                         )
                                         coroutineScope.launch { translationX.snapTo(clamped) }
                                     }
+                                }
+                            } else if (verticalLocked) {
+                                if (totalDy < 0f && change.positionChanged()) {
+                                    change.consume()
                                 }
                             } else {
                                 rawDragX += stepDx
@@ -502,7 +596,17 @@ fun MiniPlayerBar(
                         }
                     }
 
-                    if (horizontalLocked && !gestureAborted) {
+                    if (verticalLocked && !gestureAborted) {
+                        if (
+                            MiniPlayerSwipeMath.shouldTriggerSwipeUpToOpen(
+                                totalDxPx = totalDx,
+                                totalDyPx = totalDy,
+                                openThresholdPx = swipeUpOpenThresholdPx,
+                            )
+                        ) {
+                            currentOnOpenNowPlaying()
+                        }
+                    } else if (horizontalLocked && !gestureAborted) {
                         val effectiveThresholdPx = MiniPlayerSwipeMath.computeDismissThresholdPx(
                             containerWidthPx = size.width.toFloat(),
                             minThresholdPx = minDismissThresholdPx,

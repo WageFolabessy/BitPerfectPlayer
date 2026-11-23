@@ -2,6 +2,8 @@ package com.cangkir.bitperfectplayer.ui.nowplaying
 
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitHorizontalTouchSlopOrCancellation
+import androidx.compose.foundation.gestures.horizontalDrag
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.staticCompositionLocalOf
@@ -17,8 +19,10 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 
 internal const val ROOT_HORIZONTAL_PAGER_TEST_TAG = "root_horizontal_pager"
+internal const val TOP_LEVEL_HORIZONTAL_PAGER_TEST_TAG = "top_level_horizontal_pager"
 internal const val NOW_PLAYING_SWIPE_CONTAINER_TEST_TAG = "now_playing_swipe_container"
 internal const val SETTINGS_SWIPE_CONTAINER_TEST_TAG = "settings_swipe_container"
+internal const val SETTINGS_TAB_SWIPE_CONTAINER_TEST_TAG = "settings_tab_swipe_container"
 
 internal val LocalSwipeExclusionBounds = staticCompositionLocalOf<NowPlayingSwipeExclusionBounds?> { null }
 
@@ -97,15 +101,14 @@ internal fun PageExclusionGuardBox(
                     if (!exclusionBounds.containsLocalPoint(down.position)) {
                         return@awaitEachGesture
                     }
-                    val pointerId = down.id
-                    var tracking = true
-                    while (tracking) {
-                        val event = awaitPointerEvent(PointerEventPass.Main)
-                        val change = event.changes.firstOrNull { it.id == pointerId } ?: event.changes.firstOrNull()
-                        if (change == null || !change.pressed) {
-                            tracking = false
-                        } else if (change.positionChanged()) {
-                            change.consume()
+                    val drag = awaitHorizontalTouchSlopOrCancellation(down.id) { change, _ ->
+                        change.consume()
+                    }
+                    if (drag != null) {
+                        horizontalDrag(drag.id) { change ->
+                            if (change.positionChanged()) {
+                                change.consume()
+                            }
                         }
                     }
                 }

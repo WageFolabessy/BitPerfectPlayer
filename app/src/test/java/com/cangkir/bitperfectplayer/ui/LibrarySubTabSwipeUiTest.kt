@@ -35,11 +35,13 @@ import com.cangkir.bitperfectplayer.library.LibrarySnapshot
 import com.cangkir.bitperfectplayer.library.PlaylistsUiSnapshot
 import com.cangkir.bitperfectplayer.ui.library.LIBRARY_SUBTAB_PAGER_TEST_TAG
 import com.cangkir.bitperfectplayer.ui.library.LibraryScreen
+import com.cangkir.bitperfectplayer.ui.nowplaying.TOP_LEVEL_HORIZONTAL_PAGER_TEST_TAG
 import com.cangkir.bitperfectplayer.ui.playlists.PlaylistsScreen
 import com.cangkir.bitperfectplayer.ui.settings.SettingsScreen
 import com.cangkir.bitperfectplayer.ui.theme.BitPerfectPlayerTheme
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -188,19 +190,19 @@ class LibrarySubTabSwipeUiTest {
     fun libraryTab_fromPageIndexClampsAndMapsAllSixTabs() {
         assertEquals(LibraryTab.ALL_SONGS, LibraryTab.fromPageIndex(-3))
         assertEquals(LibraryTab.ALL_SONGS, LibraryTab.fromPageIndex(0))
-        assertEquals(LibraryTab.FOLDERS, LibraryTab.fromPageIndex(1))
-        assertEquals(LibraryTab.ARTISTS, LibraryTab.fromPageIndex(2))
-        assertEquals(LibraryTab.ALBUMS, LibraryTab.fromPageIndex(3))
-        assertEquals(LibraryTab.RECENT, LibraryTab.fromPageIndex(4))
-        assertEquals(LibraryTab.FAVORITES, LibraryTab.fromPageIndex(5))
-        assertEquals(LibraryTab.FAVORITES, LibraryTab.fromPageIndex(99))
+        assertEquals(LibraryTab.ARTISTS, LibraryTab.fromPageIndex(1))
+        assertEquals(LibraryTab.ALBUMS, LibraryTab.fromPageIndex(2))
+        assertEquals(LibraryTab.RECENT, LibraryTab.fromPageIndex(3))
+        assertEquals(LibraryTab.FAVORITES, LibraryTab.fromPageIndex(4))
+        assertEquals(LibraryTab.FOLDERS, LibraryTab.fromPageIndex(5))
+        assertEquals(LibraryTab.FOLDERS, LibraryTab.fromPageIndex(99))
 
         assertEquals(LibraryTab.ALL_SONGS, DefaultHomepage.ALL_SONGS.toInitialLibraryTab())
-        assertEquals(LibraryTab.FOLDERS, DefaultHomepage.FOLDERS.toInitialLibraryTab())
         assertEquals(LibraryTab.ARTISTS, DefaultHomepage.ARTISTS.toInitialLibraryTab())
         assertEquals(LibraryTab.ALBUMS, DefaultHomepage.ALBUMS.toInitialLibraryTab())
         assertEquals(LibraryTab.RECENT, DefaultHomepage.RECENT.toInitialLibraryTab())
         assertEquals(LibraryTab.FAVORITES, DefaultHomepage.FAVORITES.toInitialLibraryTab())
+        assertEquals(LibraryTab.FOLDERS, DefaultHomepage.FOLDERS.toInitialLibraryTab())
         assertEquals(LibraryTab.ALL_SONGS, DefaultHomepage.PLAYLISTS.toInitialLibraryTab())
     }
 
@@ -237,16 +239,11 @@ class LibrarySubTabSwipeUiTest {
         assertTabSelected(LibraryTab.ALL_SONGS)
         composeRule.onNodeWithText("All Songs Anthem").assertIsDisplayed()
 
-        // Forward swipes: All Songs -> Folders -> Artists -> Albums -> Recent -> Favorites
-        composeRule.onNodeWithTag(LIBRARY_SUBTAB_PAGER_TEST_TAG).performTouchInput { swipeLeft() }
-        composeRule.waitForIdle()
-        assertTabSelected(LibraryTab.FOLDERS)
-        composeRule.onNodeWithText("All Songs").assertIsNotSelected()
-        composeRule.onNodeWithText("Lossless Master Dir").assertIsDisplayed()
-
+        // Forward swipes: All Songs -> Artists -> Albums -> Recent -> Favorites -> Folders
         composeRule.onNodeWithTag(LIBRARY_SUBTAB_PAGER_TEST_TAG).performTouchInput { swipeLeft() }
         composeRule.waitForIdle()
         assertTabSelected(LibraryTab.ARTISTS)
+        composeRule.onNodeWithText("All Songs").assertIsNotSelected()
         composeRule.onNodeWithText("Miles Coltrane Quartet").assertIsDisplayed()
 
         composeRule.onNodeWithTag(LIBRARY_SUBTAB_PAGER_TEST_TAG).performTouchInput { swipeLeft() }
@@ -264,7 +261,17 @@ class LibrarySubTabSwipeUiTest {
         assertTabSelected(LibraryTab.FAVORITES)
         composeRule.onNodeWithText("Beloved Favorite Ballad").assertIsDisplayed()
 
-        // Reverse swipes: Favorites -> Recent -> Albums -> Artists -> Folders -> All Songs
+        composeRule.onNodeWithTag(LIBRARY_SUBTAB_PAGER_TEST_TAG).performTouchInput { swipeLeft() }
+        composeRule.waitForIdle()
+        assertTabSelected(LibraryTab.FOLDERS)
+        composeRule.onNodeWithText("Lossless Master Dir").assertIsDisplayed()
+
+        // Reverse swipes: Folders -> Favorites -> Recent -> Albums -> Artists -> All Songs
+        composeRule.onNodeWithTag(LIBRARY_SUBTAB_PAGER_TEST_TAG).performTouchInput { swipeRight() }
+        composeRule.waitForIdle()
+        assertTabSelected(LibraryTab.FAVORITES)
+        composeRule.onNodeWithText("Beloved Favorite Ballad").assertIsDisplayed()
+
         composeRule.onNodeWithTag(LIBRARY_SUBTAB_PAGER_TEST_TAG).performTouchInput { swipeRight() }
         composeRule.waitForIdle()
         assertTabSelected(LibraryTab.RECENT)
@@ -279,11 +286,6 @@ class LibrarySubTabSwipeUiTest {
         composeRule.waitForIdle()
         assertTabSelected(LibraryTab.ARTISTS)
         composeRule.onNodeWithText("Miles Coltrane Quartet").assertIsDisplayed()
-
-        composeRule.onNodeWithTag(LIBRARY_SUBTAB_PAGER_TEST_TAG).performTouchInput { swipeRight() }
-        composeRule.waitForIdle()
-        assertTabSelected(LibraryTab.FOLDERS)
-        composeRule.onNodeWithText("Lossless Master Dir").assertIsDisplayed()
 
         composeRule.onNodeWithTag(LIBRARY_SUBTAB_PAGER_TEST_TAG).performTouchInput { swipeRight() }
         composeRule.waitForIdle()
@@ -327,24 +329,29 @@ class LibrarySubTabSwipeUiTest {
         assertTabSelected(LibraryTab.ALBUMS)
         composeRule.onNodeWithText("Midnight Masterpiece").assertIsDisplayed()
 
-        // Jump forward to Favorites
-        composeRule.onNodeWithText("Favorites").performScrollTo().performClick()
-        composeRule.waitForIdle()
-        assertTabSelected(LibraryTab.FAVORITES)
-        composeRule.onNodeWithText("Beloved Favorite Ballad").assertIsDisplayed()
-
-        // Jump backward to Folders, then swipe left to Artists without bouncing back
+        // Jump forward to Folders (far right tab)
         composeRule.onNodeWithText("Folders").performScrollTo().performClick()
         composeRule.waitForIdle()
         assertTabSelected(LibraryTab.FOLDERS)
         composeRule.onNodeWithText("Lossless Master Dir").assertIsDisplayed()
 
-        composeRule.onNodeWithTag(LIBRARY_SUBTAB_PAGER_TEST_TAG).performTouchInput { swipeLeft() }
+        // Swipe right back to Favorites without bouncing back
+        composeRule.onNodeWithTag(LIBRARY_SUBTAB_PAGER_TEST_TAG).performTouchInput { swipeRight() }
+        composeRule.waitForIdle()
+        assertTabSelected(LibraryTab.FAVORITES)
+        composeRule.onNodeWithText("Beloved Favorite Ballad").assertIsDisplayed()
+
+        // Jump backward to Artists, swipe left to Albums, then jump to Recent and All Songs
+        composeRule.onNodeWithText("Artists").performScrollTo().performClick()
         composeRule.waitForIdle()
         assertTabSelected(LibraryTab.ARTISTS)
         composeRule.onNodeWithText("Miles Coltrane Quartet").assertIsDisplayed()
 
-        // Jump to Recent, then back to All Songs
+        composeRule.onNodeWithTag(LIBRARY_SUBTAB_PAGER_TEST_TAG).performTouchInput { swipeLeft() }
+        composeRule.waitForIdle()
+        assertTabSelected(LibraryTab.ALBUMS)
+        composeRule.onNodeWithText("Midnight Masterpiece").assertIsDisplayed()
+
         composeRule.onNodeWithText("Recent").performScrollTo().performClick()
         composeRule.waitForIdle()
         assertTabSelected(LibraryTab.RECENT)
@@ -392,9 +399,12 @@ class LibrarySubTabSwipeUiTest {
         composeRule.waitForIdle()
         composeRule.onNodeWithText("Track 19").assertIsDisplayed()
 
-        // Swipe to Folders, scroll down to index 15 (Folder 16), drill down and return
-        composeRule.onNodeWithTag(LIBRARY_SUBTAB_PAGER_TEST_TAG).performTouchInput { swipeLeft() }
-        composeRule.waitForIdle()
+        // Swipe 5x to rightmost Folders tab, scroll to Folder 16, drill down and return
+        repeat(5) {
+            composeRule.onNodeWithTag(LIBRARY_SUBTAB_PAGER_TEST_TAG).performTouchInput { swipeLeft() }
+            composeRule.waitForIdle()
+        }
+        assertTabSelected(LibraryTab.FOLDERS)
         composeRule.onNode(hasScrollToIndexAction() and !hasTestTag(LIBRARY_SUBTAB_PAGER_TEST_TAG))
             .performScrollToIndex(15)
         composeRule.waitForIdle()
@@ -406,27 +416,25 @@ class LibrarySubTabSwipeUiTest {
         assertTabSelected(LibraryTab.FOLDERS)
         composeRule.onNodeWithText("Folder 16").assertIsDisplayed()
 
-        // Swipe through Artists -> Albums -> Recent -> Favorites and scroll Favorites to index 14 (Fav 15)
-        repeat(4) {
-            composeRule.onNodeWithTag(LIBRARY_SUBTAB_PAGER_TEST_TAG).performTouchInput { swipeLeft() }
-            composeRule.waitForIdle()
-        }
+        // Swipe right to Favorites and scroll to Fav 15
+        composeRule.onNodeWithTag(LIBRARY_SUBTAB_PAGER_TEST_TAG).performTouchInput { swipeRight() }
+        composeRule.waitForIdle()
         assertTabSelected(LibraryTab.FAVORITES)
         composeRule.onNode(hasScrollToIndexAction() and !hasTestTag(LIBRARY_SUBTAB_PAGER_TEST_TAG))
             .performScrollToIndex(14)
         composeRule.waitForIdle()
         composeRule.onNodeWithText("Fav 15").assertIsDisplayed()
 
-        // Swipe back to Folders and All Songs -> independent scroll positions preserved!
-        repeat(4) {
-            composeRule.onNodeWithTag(LIBRARY_SUBTAB_PAGER_TEST_TAG).performTouchInput { swipeRight() }
-            composeRule.waitForIdle()
-        }
+        // Swipe right back to Folders/Favorites -> Artists/All Songs -> independent scroll preserved!
+        composeRule.onNodeWithTag(LIBRARY_SUBTAB_PAGER_TEST_TAG).performTouchInput { swipeLeft() }
+        composeRule.waitForIdle()
         assertTabSelected(LibraryTab.FOLDERS)
         composeRule.onNodeWithText("Folder 16").assertIsDisplayed()
 
-        composeRule.onNodeWithTag(LIBRARY_SUBTAB_PAGER_TEST_TAG).performTouchInput { swipeRight() }
-        composeRule.waitForIdle()
+        repeat(5) {
+            composeRule.onNodeWithTag(LIBRARY_SUBTAB_PAGER_TEST_TAG).performTouchInput { swipeRight() }
+            composeRule.waitForIdle()
+        }
         assertTabSelected(LibraryTab.ALL_SONGS)
         composeRule.onNodeWithText("Track 19").assertIsDisplayed()
 
@@ -438,7 +446,7 @@ class LibrarySubTabSwipeUiTest {
 
         composeRule.onNodeWithTag(LIBRARY_SUBTAB_PAGER_TEST_TAG).performTouchInput { swipeLeft() }
         composeRule.waitForIdle()
-        assertTabSelected(LibraryTab.FOLDERS)
+        assertTabSelected(LibraryTab.ARTISTS)
 
         composeRule.onNodeWithTag(LIBRARY_SUBTAB_PAGER_TEST_TAG).performTouchInput { swipeRight() }
         composeRule.waitForIdle()
@@ -492,7 +500,6 @@ class LibrarySubTabSwipeUiTest {
                             onRenamePlaylist = { _, _ -> },
                             onDeletePlaylist = { _, _ -> },
                             onRemovePlaylistEntry = { _, _ -> },
-                            onMovePlaylistEntry = { _, _, _ -> },
                             onExportPlaylist = { _, _ -> },
                             onImportPlaylist = {},
                         )
@@ -600,13 +607,15 @@ class LibrarySubTabSwipeUiTest {
 
     @Test
     @Config(qualifiers = "w411dp-h915dp")
-    fun bottomNavigationDestinations_remainStrictlyNonSwipeable() {
+    fun topLevelDestinations_swipeSmoothlyAcrossLibraryPlaylistsSettings_andLockDuringDetails() {
         val snapshot = buildDistinctSnapshot()
 
         composeRule.setContent {
             BitPerfectPlayerTheme {
+                val navigator = rememberRootPagerNavigator()
                 BitPerfectStartupNavHost(
                     startupHomepage = DefaultHomepage.ALL_SONGS,
+                    rootPagerNavigator = navigator,
                     libraryContent = { initialTab ->
                         LibraryScreen(
                             libraryState = snapshot,
@@ -627,6 +636,7 @@ class LibrarySubTabSwipeUiTest {
                             onToggleFavorite = {},
                             onOpenDiagnostics = {},
                             initialTab = initialTab,
+                            onDetailViewOpenChanged = { navigator.isLibraryDetailOpen = it },
                         )
                     },
                     playlistsContent = {
@@ -642,9 +652,9 @@ class LibrarySubTabSwipeUiTest {
                             onRenamePlaylist = { _, _ -> },
                             onDeletePlaylist = { _, _ -> },
                             onRemovePlaylistEntry = { _, _ -> },
-                            onMovePlaylistEntry = { _, _, _ -> },
                             onExportPlaylist = { _, _ -> },
                             onImportPlaylist = {},
+                            onDetailViewOpenChanged = { navigator.isPlaylistsDetailOpen = it },
                         )
                     },
                     settingsContent = {
@@ -670,42 +680,158 @@ class LibrarySubTabSwipeUiTest {
         }
         composeRule.waitForIdle()
 
-        // Swiping past left boundary of All Songs stays in Library (never switches to Playlists/Settings)
+        // Left boundary on All Songs stays inside Library
         composeRule.onNodeWithTag(LIBRARY_SUBTAB_PAGER_TEST_TAG).performTouchInput { swipeRight() }
         composeRule.waitForIdle()
         assertTabSelected(LibraryTab.ALL_SONGS)
-        composeRule.onNodeWithText("All Songs Anthem").assertIsDisplayed()
-        assertEquals(0, composeRule.onAllNodesWithText("YOUR PLAYLISTS").fetchSemanticsNodes().size)
+        composeRule.onNodeWithContentDescription("Library").assertIsSelected()
 
-        // Swiping past right boundary of Favorites stays in Library (never switches to Playlists/Settings)
-        composeRule.onNodeWithText("Favorites").performScrollTo().performClick()
+        // Navigate to rightmost Library tab (Folders), then swipe past its right edge into Playlists!
+        composeRule.onNodeWithText("Folders").performScrollTo().performClick()
         composeRule.waitForIdle()
-        composeRule.onNodeWithTag(LIBRARY_SUBTAB_PAGER_TEST_TAG).performTouchInput { swipeLeft() }
-        composeRule.waitForIdle()
-        assertTabSelected(LibraryTab.FAVORITES)
-        composeRule.onNodeWithText("Beloved Favorite Ballad").assertIsDisplayed()
-        assertEquals(0, composeRule.onAllNodesWithText("YOUR PLAYLISTS").fetchSemanticsNodes().size)
+        assertTabSelected(LibraryTab.FOLDERS)
 
-        // Bottom-nav Playlists destination is strictly non-swipeable
-        composeRule.onNodeWithContentDescription("Playlists").assertIsDisplayed().performClick()
+        composeRule.onNodeWithTag(TOP_LEVEL_HORIZONTAL_PAGER_TEST_TAG).performTouchInput { swipeLeft() }
         composeRule.waitForIdle()
         composeRule.onNodeWithText("YOUR PLAYLISTS").assertIsDisplayed()
-        composeRule.onNodeWithText("YOUR PLAYLISTS").performTouchInput { swipeLeft() }
-        composeRule.waitForIdle()
-        composeRule.onNodeWithText("YOUR PLAYLISTS").assertIsDisplayed()
-        composeRule.onNodeWithText("YOUR PLAYLISTS").performTouchInput { swipeRight() }
-        composeRule.waitForIdle()
-        composeRule.onNodeWithText("YOUR PLAYLISTS").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Playlists").assertIsSelected()
 
-        // Bottom-nav Settings destination is strictly non-swipeable
-        composeRule.onNodeWithContentDescription("Settings").assertIsDisplayed().performClick()
+        // Swipe right-to-left from Playlists -> Bottom-nav Settings!
+        composeRule.onNodeWithTag(TOP_LEVEL_HORIZONTAL_PAGER_TEST_TAG).performTouchInput { swipeLeft() }
         composeRule.waitForIdle()
         composeRule.onNodeWithText("AUDIO ENGINE").assertIsDisplayed()
-        composeRule.onNodeWithText("AUDIO ENGINE").performTouchInput { swipeLeft() }
+        composeRule.onNodeWithContentDescription("Settings").assertIsSelected()
+
+        // Reverse: Settings -> Playlists -> Library (Folders)
+        composeRule.onNodeWithTag(TOP_LEVEL_HORIZONTAL_PAGER_TEST_TAG).performTouchInput { swipeRight() }
         composeRule.waitForIdle()
-        composeRule.onNodeWithText("AUDIO ENGINE").assertIsDisplayed()
-        composeRule.onNodeWithText("AUDIO ENGINE").performTouchInput { swipeRight() }
+        composeRule.onNodeWithText("YOUR PLAYLISTS").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Playlists").assertIsSelected()
+
+        composeRule.onNodeWithTag(TOP_LEVEL_HORIZONTAL_PAGER_TEST_TAG).performTouchInput { swipeRight() }
         composeRule.waitForIdle()
-        composeRule.onNodeWithText("AUDIO ENGINE").assertIsDisplayed()
+        composeRule.onNodeWithText("Lossless Master Dir").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Library").assertIsSelected()
+
+        // Detail screen (e.g. Folder Detail) locks top-level swipe so detail interactions never conflict
+        composeRule.onNodeWithText("Lossless Master Dir").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("Folder Track Item").assertIsDisplayed()
+        composeRule.onNodeWithTag(TOP_LEVEL_HORIZONTAL_PAGER_TEST_TAG).performTouchInput { swipeLeft() }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("Folder Track Item").assertIsDisplayed()
+        assertTrue(composeRule.onAllNodesWithText("YOUR PLAYLISTS").fetchSemanticsNodes().isEmpty())
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h915dp")
+    fun bottomNavBar_directSwitchFromSettingsToLibraryOrPlaylistsNeverActivatesWrongTabFirst() {
+        val snapshot = buildDistinctSnapshot()
+        composeRule.mainClock.autoAdvance = false
+
+        try {
+            composeRule.setContent {
+                BitPerfectPlayerTheme {
+                    BitPerfectStartupNavHost(
+                        startupHomepage = DefaultHomepage.ALL_SONGS,
+                        libraryContent = { initialTab ->
+                            LibraryScreen(
+                                libraryState = snapshot,
+                                favoriteTrackUris = emptySet(),
+                                playbackState = PlaybackControllerState(),
+                                albumArtworkLoader = artworkLoader,
+                                onRefreshLibrary = {},
+                                onImportFolder = {},
+                                onPlayTracks = { _, _, _ -> },
+                                onEnqueueTrack = {},
+                                onEnqueueNext = {},
+                                onEnqueueTracks = { _, _ -> },
+                                onEnqueueTracksNext = { _, _ -> },
+                                onSetTrackSort = { _, _ -> },
+                                onSetGroupSort = { _, _ -> },
+                                onAddToPlaylist = {},
+                                onShowTrackInfo = {},
+                                onToggleFavorite = {},
+                                onOpenDiagnostics = {},
+                                initialTab = initialTab,
+                            )
+                        },
+                        playlistsContent = {
+                            PlaylistsScreen(
+                                playlistsState = PlaylistsUiSnapshot(isLoaded = true),
+                                activeTrackUri = null,
+                                albumArtworkLoader = artworkLoader,
+                                onPlayTracks = { _, _, _ -> },
+                                onEnqueueTracks = { _, _ -> },
+                                onEnqueueTracksNext = { _, _ -> },
+                                onSetPlaylistSort = { _, _ -> },
+                                onCreatePlaylist = {},
+                                onRenamePlaylist = { _, _ -> },
+                                onDeletePlaylist = { _, _ -> },
+                                onRemovePlaylistEntry = { _, _ -> },
+                                onExportPlaylist = { _, _ -> },
+                                onImportPlaylist = {},
+                            )
+                        },
+                        settingsContent = {
+                            SettingsScreen(
+                                libraryState = snapshot,
+                                playbackState = PlaybackControllerState(),
+                                sleepTimerStateFlow = MutableStateFlow(SleepTimerState()),
+                                onImportFolder = {},
+                                onRemoveSafFolder = {},
+                                onRefreshLibrary = {},
+                                onSetGaplessEnabled = {},
+                                onSetReplayGainMode = {},
+                                onSetReplayGainPreampDb = {},
+                                onSetReplayGainPreventClipping = {},
+                                onSelectSleepTimerPreset = {},
+                                onExportLocalBackup = {},
+                                onImportLocalBackup = {},
+                                onOpenDiagnostics = {},
+                            )
+                        },
+                    )
+                }
+            }
+            composeRule.mainClock.advanceTimeBy(400L)
+
+            // Route A: Library -> Playlists -> Settings -> Library (Playlists MUST stay unselected!)
+            composeRule.onNodeWithContentDescription("Playlists").performClick()
+            composeRule.mainClock.advanceTimeBy(400L)
+            composeRule.onNodeWithContentDescription("Playlists").assertIsSelected()
+
+            composeRule.onNodeWithContentDescription("Settings").performClick()
+            composeRule.mainClock.advanceTimeBy(400L)
+            composeRule.onNodeWithContentDescription("Settings").assertIsSelected()
+
+            composeRule.onNodeWithContentDescription("Library").performClick()
+            repeat(8) {
+                composeRule.mainClock.advanceTimeBy(32L)
+                composeRule.onNodeWithContentDescription("Library").assertIsSelected()
+                composeRule.onNodeWithContentDescription("Playlists").assertIsNotSelected()
+                composeRule.onNodeWithContentDescription("Settings").assertIsNotSelected()
+            }
+            composeRule.onNodeWithText("All Songs Anthem").assertIsDisplayed()
+
+            // Route B: Playlists -> Library -> Settings -> Playlists (Library MUST stay unselected!)
+            composeRule.onNodeWithContentDescription("Playlists").performClick()
+            composeRule.mainClock.advanceTimeBy(400L)
+            composeRule.onNodeWithContentDescription("Library").performClick()
+            composeRule.mainClock.advanceTimeBy(400L)
+            composeRule.onNodeWithContentDescription("Settings").performClick()
+            composeRule.mainClock.advanceTimeBy(400L)
+
+            composeRule.onNodeWithContentDescription("Playlists").performClick()
+            repeat(8) {
+                composeRule.mainClock.advanceTimeBy(32L)
+                composeRule.onNodeWithContentDescription("Playlists").assertIsSelected()
+                composeRule.onNodeWithContentDescription("Library").assertIsNotSelected()
+                composeRule.onNodeWithContentDescription("Settings").assertIsNotSelected()
+            }
+            composeRule.onNodeWithText("YOUR PLAYLISTS").assertIsDisplayed()
+        } finally {
+            composeRule.mainClock.autoAdvance = true
+        }
     }
 }

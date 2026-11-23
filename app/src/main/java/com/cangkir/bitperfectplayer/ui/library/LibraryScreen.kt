@@ -24,11 +24,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.ScaffoldDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -58,8 +60,10 @@ import com.cangkir.bitperfectplayer.ui.theme.AmberIndicated
 import com.cangkir.bitperfectplayer.ui.theme.BitPerfectPlayerTheme
 import com.cangkir.bitperfectplayer.ui.theme.CoverThemeColorCache
 import com.cangkir.bitperfectplayer.ui.theme.CoverThemeLookup
+import com.cangkir.bitperfectplayer.ui.theme.DynamicThemeTokens
 import com.cangkir.bitperfectplayer.ui.theme.EmeraldSafe
 import com.cangkir.bitperfectplayer.ui.theme.LocalActiveDynamicTokens
+import com.cangkir.bitperfectplayer.ui.theme.ThemeArtworkCandidateSelector
 import kotlinx.coroutines.launch
 
 internal const val LIBRARY_SUBTAB_PAGER_TEST_TAG = "library_subtab_pager"
@@ -92,6 +96,10 @@ fun LibraryScreen(
     onShuffleTracks: (List<PlaybackTrack>, QueueContext) -> Unit = { tracks, ctx -> onPlayTracks(tracks, 0, ctx) },
     onSetCustomArtistPhoto: (String, android.net.Uri) -> Unit = { _, _ -> },
     onResetCustomArtistPhoto: (String) -> Unit = {},
+    onToggleFavoriteFromFavorites: ((PlaybackTrack) -> Unit)? = null,
+    onDetailViewOpenChanged: (Boolean) -> Unit = {},
+    onContextualDynamicThemeChanged: ((DynamicThemeTokens?) -> Unit)? = null,
+    isForegroundPage: Boolean = true,
 ) {
     val context = LocalContext.current
     val pagerState = rememberPagerState(
@@ -192,6 +200,17 @@ fun LibraryScreen(
     val isArtistAlbumDetailOpen = selectedTab == LibraryTab.ARTISTS && openedGroup != null && openedArtistAlbumGroup != null
     val isStandaloneAlbumDetailOpen = selectedTab == LibraryTab.ALBUMS && openedGroup != null
     val isAnyAlbumDetailOpen = isStandaloneAlbumDetailOpen || isArtistAlbumDetailOpen
+    val isAnyDetailOpen = openedGroup != null || openedArtistAlbumGroup != null
+
+    val latestOnDetailOpenChanged by rememberUpdatedState(onDetailViewOpenChanged)
+    LaunchedEffect(isForegroundPage, isAnyDetailOpen) {
+        if (isForegroundPage) {
+            latestOnDetailOpenChanged(isAnyDetailOpen)
+        }
+    }
+    DisposableEffect(Unit) {
+        onDispose { latestOnDetailOpenChanged(false) }
+    }
 
     val effectiveDetailGroup = openedArtistAlbumGroup ?: openedGroup
     val effectiveDetailContext: QueueContext? = remember(selectedTab, openedGroup, openedArtistAlbumGroup) {
@@ -249,14 +268,21 @@ fun LibraryScreen(
         navigateDetailBack()
     }
 
+    val albumThemeCandidates = remember(isAnyAlbumDetailOpen, effectiveDetailGroup) {
+        if (isAnyAlbumDetailOpen && effectiveDetailGroup != null) {
+            ThemeArtworkCandidateSelector.selectStableCandidates(effectiveDetailGroup.tracks)
+        } else {
+            emptyList()
+        }
+    }
+
     AlbumDetailDynamicThemeWrapper(
         enabled = dynamicCoverThemeEnabled && isAnyAlbumDetailOpen,
-        representativeTrack = if (isAnyAlbumDetailOpen) {
-            effectiveDetailGroup?.tracks?.firstOrNull()
-        } else {
-            null
-        },
+        isForegroundPage = isForegroundPage && !isArtistDetailOpen,
+        manageHostContextualTheme = !isArtistDetailOpen,
+        candidates = albumThemeCandidates,
         coverThemeColorCache = coverThemeColorCache,
+        onContextualDynamicThemeChanged = onContextualDynamicThemeChanged,
     ) {
         activeTrackSortSheet?.let { scope ->
             TrackSortBottomSheet(
@@ -309,6 +335,8 @@ fun LibraryScreen(
                 onToggleFavorite = onToggleFavorite,
                 onSetCustomArtistPhoto = onSetCustomArtistPhoto,
                 onResetCustomArtistPhoto = onResetCustomArtistPhoto,
+                isForegroundPage = isForegroundPage,
+                onContextualDynamicThemeChanged = onContextualDynamicThemeChanged,
             )
             return@AlbumDetailDynamicThemeWrapper
         }
@@ -409,6 +437,7 @@ fun LibraryScreen(
                         albumArtworkLoader = albumArtworkLoader,
                         onOpenSort = { activeTrackSortSheet = effectiveDetailSortScope },
                         onPlayTracks = { tracks, index -> onPlayTracks(tracks, index, effectiveDetailContext) },
+                        onShuffleTracks = { tracks -> onShuffleTracks(tracks, effectiveDetailContext) },
                         onEnqueueAllNext = { onEnqueueTracksNext(effectiveDetailGroup.tracks, effectiveDetailContext) },
                         onEnqueueAll = { onEnqueueTracks(effectiveDetailGroup.tracks, effectiveDetailContext) },
                         onEnqueueTrack = onEnqueueTrack,
@@ -454,6 +483,7 @@ fun LibraryScreen(
                             onAddToPlaylist = onAddToPlaylist,
                             onShowTrackInfo = onShowTrackInfo,
                             onToggleFavorite = onToggleFavorite,
+                            onToggleFavoriteFromFavorites = onToggleFavoriteFromFavorites,
                         )
                     }
                 }
@@ -490,6 +520,7 @@ private fun LibraryPagerPageContent(
     onAddToPlaylist: (PlaybackTrack) -> Unit,
     onShowTrackInfo: (PlaybackTrack) -> Unit,
     onToggleFavorite: (PlaybackTrack) -> Unit,
+    onToggleFavoriteFromFavorites: ((PlaybackTrack) -> Unit)? = null,
 ) {
     val sortPrefs = libraryState.sortPreferences
     when (tab) {
@@ -653,7 +684,7 @@ private fun LibraryPagerPageContent(
                 onEnqueueNext = onEnqueueNext,
                 onAddToPlaylist = onAddToPlaylist,
                 onShowTrackInfo = onShowTrackInfo,
-                onToggleFavorite = onToggleFavorite,
+                onToggleFavorite = onToggleFavoriteFromFavorites ?: onToggleFavorite,
                 onImportFolder = null,
             )
         }
@@ -661,33 +692,80 @@ private fun LibraryPagerPageContent(
 }
 
 /**
- * Local Album Dynamic Cover Theme scope wrapping ONLY the opened Album Detail subtree so
- * unrelated global bars and screens never recompose and pressing Back restores cleanly.
+ * Album Dynamic Theme scope:
+ * - When [onContextualDynamicThemeChanged] is supplied (main shell), pushes resolved album tokens
+ *   to root `BitPerfectPlayerTheme` so bottom nav, rail, MiniPlayer, TopAppBar, and content all
+ *   adapt seamlessly and revert when leaving or switching tabs.
+ * - Otherwise (standalone preview/tests), wraps the opened Album Detail subtree locally.
  */
 @Composable
 private fun AlbumDetailDynamicThemeWrapper(
     enabled: Boolean,
-    representativeTrack: PlaybackTrack?,
+    isForegroundPage: Boolean,
+    manageHostContextualTheme: Boolean,
+    candidates: List<PlaybackTrack>,
     coverThemeColorCache: CoverThemeColorCache?,
+    onContextualDynamicThemeChanged: ((DynamicThemeTokens?) -> Unit)? = null,
     content: @Composable () -> Unit,
 ) {
-    if (!enabled || representativeTrack == null || coverThemeColorCache == null) {
-        content()
-        return
-    }
     val parentTokens = LocalActiveDynamicTokens.current
-    val cacheKey = remember(representativeTrack) { coverThemeColorCache.cacheKeyFor(representativeTrack) }
-    var lookup by remember(cacheKey) { mutableStateOf(coverThemeColorCache.peekCached(representativeTrack)) }
+    val latestOnThemeChanged by rememberUpdatedState(onContextualDynamicThemeChanged)
+    val cacheKeys = remember(candidates, coverThemeColorCache) {
+        if (coverThemeColorCache == null) emptyList() else candidates.map { coverThemeColorCache.cacheKeyFor(it) }
+    }
+    var resolvedPair by remember(enabled, cacheKeys) {
+        val peeked = if (enabled && coverThemeColorCache != null && candidates.isNotEmpty()) {
+            val allCached = candidates.all { coverThemeColorCache.peekCached(it) is CoverThemeLookup.Resolved }
+            val firstChromatic = candidates.firstNotNullOfOrNull {
+                (coverThemeColorCache.peekCached(it) as? CoverThemeLookup.Resolved)?.tokens
+            }
+            if (firstChromatic != null) {
+                CoverThemeLookup.Resolved(firstChromatic)
+            } else if (allCached) {
+                CoverThemeLookup.Resolved(null)
+            } else {
+                CoverThemeLookup.Pending
+            }
+        } else {
+            CoverThemeLookup.Resolved(null)
+        }
+        mutableStateOf(peeked)
+    }
 
-    LaunchedEffect(cacheKey) {
-        if (lookup is CoverThemeLookup.Pending) {
-            lookup = CoverThemeLookup.Resolved(coverThemeColorCache.resolveTokens(representativeTrack))
+    val activeCache = coverThemeColorCache?.takeIf { enabled && candidates.isNotEmpty() }
+    LaunchedEffect(activeCache, isForegroundPage, cacheKeys) {
+        if (activeCache != null && resolvedPair is CoverThemeLookup.Pending) {
+            resolvedPair = CoverThemeLookup.Resolved(
+                activeCache.resolveFirstChromaticTokens(candidates),
+            )
         }
     }
 
-    val targetTokens = when (val cur = lookup) {
-        CoverThemeLookup.Pending -> parentTokens
-        is CoverThemeLookup.Resolved -> cur.tokens
+    val targetTokens = if (!enabled) {
+        null
+    } else {
+        when (val cur = resolvedPair) {
+            CoverThemeLookup.Pending -> parentTokens
+            is CoverThemeLookup.Resolved -> cur.tokens
+        }
+    }
+
+    if (onContextualDynamicThemeChanged != null) {
+        LaunchedEffect(manageHostContextualTheme, isForegroundPage, enabled, targetTokens) {
+            if (manageHostContextualTheme) {
+                latestOnThemeChanged?.invoke(if (isForegroundPage && enabled) targetTokens else null)
+            }
+        }
+        DisposableEffect(Unit) {
+            onDispose { latestOnThemeChanged?.invoke(null) }
+        }
+        content()
+        return
+    }
+
+    if (!enabled || candidates.isEmpty() || coverThemeColorCache == null) {
+        content()
+        return
     }
 
     BitPerfectPlayerTheme(
