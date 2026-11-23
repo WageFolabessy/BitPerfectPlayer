@@ -319,9 +319,12 @@ class MediaCodecAudioDecoder private constructor(
      * Pumps initial input frames until `INFO_OUTPUT_FORMAT_CHANGED` and/or the first decoded PCM
      * buffer arrives so `AudioTrack` creation uses the confirmed runtime `codec.outputFormat`.
      */
-    private fun primeOutputFormat() {
+    private fun primeOutputFormat(isCancelled: () -> Boolean = { false }) {
         var tries = 0
         while (tries < PRIME_MAX_ATTEMPTS && !outputEos) {
+            if (isCancelled()) {
+                throw AudioDecodeException.Cancelled()
+            }
             tries++
             feedInputBufferIfAvailable()
             val outIndex = codec.dequeueOutputBuffer(bufferInfo, DEQUEUE_TIMEOUT_US)
@@ -381,13 +384,19 @@ class MediaCodecAudioDecoder private constructor(
             fileName: String?,
             mimeHint: String? = null,
             diagnosticLogger: LocalDiagnosticLogger? = null,
+            isCancelled: () -> Boolean = { false },
         ): PcmAudioDecoder {
+            if (isCancelled()) throw AudioDecodeException.Cancelled()
             val classified = AudioFormatClassifier.classify(fileName, mimeHint)
             return try {
                 val decoder = if (classified == SupportedAudioFormat.WAV) {
-                    openDirectWavDecoder(context, uri) ?: openMediaCodecDecoder(context, uri, fileName, classified)
+                    openDirectWavDecoder(context, uri) ?: openMediaCodecDecoder(context, uri, fileName, classified, isCancelled)
                 } else {
-                    openMediaCodecDecoder(context, uri, fileName, classified)
+                    openMediaCodecDecoder(context, uri, fileName, classified, isCancelled)
+                }
+                if (isCancelled()) {
+                    runCatching { decoder.close() }
+                    throw AudioDecodeException.Cancelled()
                 }
                 diagnosticLogger?.logAudio("DECODER_CONFIG") {
                     val fmt = decoder.format
@@ -406,6 +415,8 @@ class MediaCodecAudioDecoder private constructor(
                     )
                 }
                 decoder
+            } catch (e: AudioDecodeException.Cancelled) {
+                throw e
             } catch (e: AudioDecodeException) {
                 diagnosticLogger?.logError("DECODER_OPEN_ERROR") {
                     linkedMapOf(
@@ -466,24 +477,33 @@ class MediaCodecAudioDecoder private constructor(
             }
         }
 
+        private fun checkCancelled(isCancelled: () -> Boolean) {
+            if (isCancelled()) throw AudioDecodeException.Cancelled()
+        }
+
         private fun openMediaCodecDecoder(
             context: Context,
             uri: Uri,
             fileName: String?,
             classifiedFormat: SupportedAudioFormat?,
+            isCancelled: () -> Boolean,
         ): PcmAudioDecoder {
+            checkCancelled(isCancelled)
             // Inspect FLAC header directly if applicable so source bit depth (16 vs 24) is verified.
             val flacInfo = if (classifiedFormat == SupportedAudioFormat.FLAC) {
                 readFlacHeaderSafely(context, uri)
             } else {
                 null
             }
+            checkCancelled(isCancelled)
 
             val extractor = MediaExtractor()
             var codec: MediaCodec? = null
             try {
                 extractor.setDataSource(context, uri, null)
+                checkCancelled(isCancelled)
                 val (trackFormat, mime) = selectFirstAudioTrack(extractor, fileName, uri)
+                checkCancelled(isCancelled)
 
                 val sourceSampleRate = flacInfo?.sampleRateHz
                     ?: trackFormat.getIntegerOrDefault(MediaFormat.KEY_SAMPLE_RATE, 44_100)
@@ -557,7 +577,7 @@ class MediaCodecAudioDecoder private constructor(
                     requestedEncoding = requestedPcm,
                     initialFormat = initialDecoded,
                 )
-                decoder.primeOutputFormat()
+                decoder.primeOutputFormat(isCancelled)
                 return decoder
             } catch (e: AudioDecodeException) {
                 releaseInitResources(codec, extractor)

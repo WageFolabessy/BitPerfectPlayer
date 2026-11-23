@@ -28,7 +28,10 @@ import com.cangkir.bitperfectplayer.audio.PlaybackTrack
 import com.cangkir.bitperfectplayer.audio.QueueContext
 import com.cangkir.bitperfectplayer.audio.QueueSnapshot
 import com.cangkir.bitperfectplayer.audio.SleepTimerState
+import com.cangkir.bitperfectplayer.data.NowPlayingArtworkStyle
+import com.cangkir.bitperfectplayer.data.SpectrumColorStyle
 import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
+import com.cangkir.bitperfectplayer.library.EmbeddedArtworkSlot
 import com.cangkir.bitperfectplayer.library.LibraryGroup
 import com.cangkir.bitperfectplayer.library.SortDirection
 import com.cangkir.bitperfectplayer.library.TrackSortOption
@@ -538,5 +541,268 @@ class PlaybackRecoveryAndPolishUiTest {
         )
         composeRule.onNodeWithText(" · FLAC 24-bit · 96 kHz", useUnmergedTree = true).assertIsDisplayed()
         composeRule.onNodeWithText("Close").performClick()
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h915dp")
+    fun miniPlayerAndNowPlaying_showDelayedPreparingHaloOnlyAfter250Ms() {
+        val preparingState = PlaybackControllerState(
+            queue = QueueSnapshot(items = listOf(trackHiResFlac), currentIndex = 0),
+            queueContext = QueueContext.allSongs(),
+            activeTrack = trackHiResFlac,
+            engineState = EnginePlaybackState(
+                status = PlaybackStatus.PREPARING,
+                activeTrackUri = Uri.parse(trackHiResFlac.uriString),
+                durationMs = trackHiResFlac.durationMs,
+                isPreparingPlayback = true,
+                preservePlayingUiDuringTransition = false,
+            ),
+        )
+        composeRule.mainClock.autoAdvance = false
+        try {
+            composeRule.setContent {
+                BitPerfectPlayerTheme {
+                    androidx.compose.foundation.layout.Column {
+                        MiniPlayerBar(
+                            playbackState = preparingState,
+                            playbackPositionMsFlow = MutableStateFlow(0L),
+                            artworkLoader = artworkLoader,
+                            onOpenNowPlaying = {},
+                            onTogglePlayPause = {},
+                            onNext = {},
+                        )
+                        NowPlayingScreen(
+                            playbackState = preparingState,
+                            playbackPositionMsFlow = MutableStateFlow(0L),
+                            sleepTimerStateFlow = MutableStateFlow(SleepTimerState()),
+                            albumArtworkLoader = artworkLoader,
+                            isFavorite = false,
+                            artworkStyle = NowPlayingArtworkStyle.VINYL_DISC,
+                            onSetArtworkStyle = {},
+                            spectrumVisualizerEnabled = false,
+                            onSetSpectrumVisualizerEnabled = {},
+                            spectrumColorStyle = SpectrumColorStyle.PRISM,
+                            onCycleSpectrumColorStyle = {},
+                            spectrumSparksEnabled = false,
+                            onSetSpectrumSparksEnabled = {},
+                            onSetSpectrumVisualizerActive = {},
+                            onSampleSpectrumWindow = { 0 },
+                            onBack = {},
+                            onToggleFavorite = {},
+                            onAddToPlaylist = {},
+                            onShowTrackInfo = {},
+                            onSelectSleepTimerPreset = {},
+                            onTogglePlayPause = {},
+                            onPrevious = {},
+                            onNext = {},
+                            onSeekTo = {},
+                            onBeginTurntableScratch = { false },
+                            onUpdateTurntableScratchRate = {},
+                            onEndTurntableScratch = {},
+                            onToggleShuffle = {},
+                            onCycleRepeatMode = {},
+                            onRequestBitPerfectMode = {},
+                            onConfirmBitPerfectWarning = {},
+                            onDismissSafetyWarning = {},
+                            onSwitchToSafeMode = {},
+                            onClearAutoPauseNotice = {},
+                            onOpenQueue = {},
+                            onOpenLyrics = {},
+                            onOpenDiagnostics = {},
+                        )
+                    }
+                }
+            }
+            composeRule.mainClock.advanceTimeBy(150L)
+            assertEquals(
+                0,
+                composeRule.onAllNodesWithContentDescription("Preparing playback").fetchSemanticsNodes().size,
+            )
+
+            composeRule.mainClock.advanceTimeBy(150L)
+            assertEquals(
+                2,
+                composeRule.onAllNodesWithContentDescription("Preparing playback").fetchSemanticsNodes().size,
+            )
+        } finally {
+            composeRule.mainClock.autoAdvance = true
+        }
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h915dp")
+    fun trackSwitchWhilePlaying_preservesPauseIconWithZeroFlicker() {
+        val switchingState = PlaybackControllerState(
+            queue = QueueSnapshot(items = listOf(trackCdFlac, trackHiResFlac), currentIndex = 1),
+            queueContext = QueueContext.allSongs(),
+            activeTrack = trackHiResFlac,
+            engineState = EnginePlaybackState(
+                status = PlaybackStatus.PREPARING,
+                activeTrackUri = Uri.parse(trackHiResFlac.uriString),
+                durationMs = trackHiResFlac.durationMs,
+                isPreparingPlayback = true,
+                preservePlayingUiDuringTransition = true,
+            ),
+        )
+        composeRule.setContent {
+            BitPerfectPlayerTheme {
+                androidx.compose.foundation.layout.Column {
+                    MiniPlayerBar(
+                        playbackState = switchingState,
+                        playbackPositionMsFlow = MutableStateFlow(0L),
+                        artworkLoader = artworkLoader,
+                        onOpenNowPlaying = {},
+                        onTogglePlayPause = {},
+                        onNext = {},
+                    )
+                    NowPlayingScreen(
+                        playbackState = switchingState,
+                        playbackPositionMsFlow = MutableStateFlow(0L),
+                        sleepTimerStateFlow = MutableStateFlow(SleepTimerState()),
+                        albumArtworkLoader = artworkLoader,
+                        isFavorite = false,
+                        artworkStyle = NowPlayingArtworkStyle.SQUARE_COVER,
+                        onSetArtworkStyle = {},
+                        spectrumVisualizerEnabled = false,
+                        onSetSpectrumVisualizerEnabled = {},
+                        spectrumColorStyle = SpectrumColorStyle.PRISM,
+                        onCycleSpectrumColorStyle = {},
+                        spectrumSparksEnabled = false,
+                        onSetSpectrumSparksEnabled = {},
+                        onSetSpectrumVisualizerActive = {},
+                        onSampleSpectrumWindow = { 0 },
+                        onBack = {},
+                        onToggleFavorite = {},
+                        onAddToPlaylist = {},
+                        onShowTrackInfo = {},
+                        onSelectSleepTimerPreset = {},
+                        onTogglePlayPause = {},
+                        onPrevious = {},
+                        onNext = {},
+                        onSeekTo = {},
+                        onBeginTurntableScratch = { false },
+                        onUpdateTurntableScratchRate = {},
+                        onEndTurntableScratch = {},
+                        onToggleShuffle = {},
+                        onCycleRepeatMode = {},
+                        onRequestBitPerfectMode = {},
+                        onConfirmBitPerfectWarning = {},
+                        onDismissSafetyWarning = {},
+                        onSwitchToSafeMode = {},
+                        onClearAutoPauseNotice = {},
+                        onOpenQueue = {},
+                        onOpenLyrics = {},
+                        onOpenDiagnostics = {},
+                    )
+                }
+            }
+        }
+        composeRule.waitForIdle()
+        assertEquals(2, composeRule.onAllNodesWithContentDescription("Pause playback").fetchSemanticsNodes().size)
+        assertEquals(0, composeRule.onAllNodesWithContentDescription("Play audio").fetchSemanticsNodes().size)
+        assertEquals(0, composeRule.onAllNodesWithContentDescription("Resume playback").fetchSemanticsNodes().size)
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h915dp")
+    fun vinylDisc_hitsIntraAlbumCacheImmediatelyAndHoldsPlaceholderBeforeUncachedFrontFallback() {
+        val albumTrack1 = trackCdFlac.copy(discNumber = 1)
+        val albumTrack2 = trackCdFlac.copy(
+            uriString = "content://test/audio/almost_easy_cd.flac",
+            title = "Almost Easy",
+            fileName = "03 - Almost Easy.flac",
+            discNumber = 1,
+        )
+        val discBitmap = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888)
+        artworkLoader.seedSlotBitmapForTesting(
+            albumTrack1,
+            EmbeddedArtworkSlot.DISC,
+            discBitmap,
+            AlbumArtworkLoader.DISC_SIZE_PX,
+        )
+        assertTrue(
+            artworkLoader.getCachedTrackSlotBitmap(
+                albumTrack2,
+                EmbeddedArtworkSlot.DISC,
+                AlbumArtworkLoader.DISC_SIZE_PX,
+            ) != null,
+        )
+
+        val uncachedFrontOnly = trackHiResFlac.copy(
+            album = "Uncached Disc Album",
+            discNumber = 1,
+        )
+        val frontBitmap = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888)
+        artworkLoader.seedArtworkForTesting(uncachedFrontOnly, frontBitmap, AlbumArtworkLoader.HERO_SIZE_PX)
+
+        var active by mutableStateOf(albumTrack2)
+        composeRule.mainClock.autoAdvance = false
+        try {
+            composeRule.setContent {
+                BitPerfectPlayerTheme {
+                    NowPlayingScreen(
+                        playbackState = PlaybackControllerState(
+                            queue = QueueSnapshot(items = listOf(albumTrack2, uncachedFrontOnly), currentIndex = 0),
+                            queueContext = QueueContext.allSongs(),
+                            activeTrack = active,
+                            engineState = EnginePlaybackState(
+                                status = PlaybackStatus.PLAYING,
+                                activeTrackUri = Uri.parse(active.uriString),
+                                durationMs = active.durationMs,
+                            ),
+                        ),
+                        playbackPositionMsFlow = MutableStateFlow(5_000L),
+                        sleepTimerStateFlow = MutableStateFlow(SleepTimerState()),
+                        albumArtworkLoader = artworkLoader,
+                        isFavorite = false,
+                        artworkStyle = NowPlayingArtworkStyle.VINYL_DISC,
+                        onSetArtworkStyle = {},
+                        spectrumVisualizerEnabled = false,
+                        onSetSpectrumVisualizerEnabled = {},
+                        spectrumColorStyle = SpectrumColorStyle.PRISM,
+                        onCycleSpectrumColorStyle = {},
+                        spectrumSparksEnabled = false,
+                        onSetSpectrumSparksEnabled = {},
+                        onSetSpectrumVisualizerActive = {},
+                        onSampleSpectrumWindow = { 0 },
+                        onBack = {},
+                        onToggleFavorite = {},
+                        onAddToPlaylist = {},
+                        onShowTrackInfo = {},
+                        onSelectSleepTimerPreset = {},
+                        onTogglePlayPause = {},
+                        onPrevious = {},
+                        onNext = {},
+                        onSeekTo = {},
+                        onBeginTurntableScratch = { false },
+                        onUpdateTurntableScratchRate = {},
+                        onEndTurntableScratch = {},
+                        onToggleShuffle = {},
+                        onCycleRepeatMode = {},
+                        onRequestBitPerfectMode = {},
+                        onConfirmBitPerfectWarning = {},
+                        onDismissSafetyWarning = {},
+                        onSwitchToSafeMode = {},
+                        onClearAutoPauseNotice = {},
+                        onOpenQueue = {},
+                        onOpenLyrics = {},
+                        onOpenDiagnostics = {},
+                    )
+                }
+            }
+            composeRule.mainClock.advanceTimeByFrame()
+            composeRule.onNodeWithContentDescription("Disc artwork for Almost Easy").assertIsDisplayed()
+            assertEquals(0, composeRule.onAllNodesWithContentDescription("Album art for Almost Easy").fetchSemanticsNodes().size)
+
+            active = uncachedFrontOnly
+            composeRule.mainClock.advanceTimeByFrame()
+            composeRule.onNodeWithContentDescription("Loading disc artwork for Drive My Car").assertIsDisplayed()
+            assertEquals(
+                0,
+                composeRule.onAllNodesWithContentDescription("Album art for Drive My Car").fetchSemanticsNodes().size,
+            )
+        } finally {
+            composeRule.mainClock.autoAdvance = true
+        }
     }
 }

@@ -1057,7 +1057,10 @@ class BitPerfectUiBehaviorTest {
             composeRule.onAllNodesWithContentDescription("Bottom navigation bar").fetchSemanticsNodes().size,
         )
 
-        // Switching tabs via NavigationRail works cleanly
+        // Switching tabs via icon-only NavigationRail works cleanly with zero text labels
+        assertEquals(0, composeRule.onAllNodesWithText("Library").fetchSemanticsNodes().size)
+        assertEquals(0, composeRule.onAllNodesWithText("Playlists").fetchSemanticsNodes().size)
+        assertEquals(0, composeRule.onAllNodesWithText("Settings").fetchSemanticsNodes().size)
         composeRule.onNodeWithContentDescription("Playlists").assertIsDisplayed().performClick()
         assertEquals("playlists", selectedRoute)
     }
@@ -1120,9 +1123,12 @@ class BitPerfectUiBehaviorTest {
         composeRule.onNodeWithText("03:24").assertIsDisplayed()
         composeRule.onNodeWithContentDescription("Play audio").assertIsDisplayed().performClick()
         assertEquals(1, playPauseClicks)
-        composeRule.onNodeWithText("Queue (1)").assertIsDisplayed()
-        composeRule.onNodeWithText("Lyrics").assertIsDisplayed()
-        composeRule.onNodeWithText("Audio Path").assertIsDisplayed()
+        assertEquals(0, composeRule.onAllNodesWithText("Queue (1)").fetchSemanticsNodes().size)
+        assertEquals(0, composeRule.onAllNodesWithText("Lyrics").fetchSemanticsNodes().size)
+        assertEquals(0, composeRule.onAllNodesWithText("Audio Path").fetchSemanticsNodes().size)
+        composeRule.onNodeWithContentDescription("Open playback queue").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Lyrics").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Audio Path").assertIsDisplayed()
 
         // Verify rotational scrubbing on the left-pane vinyl disc works identically in 2-column landscape mode
         composeRule.onNodeWithContentDescription(vinylDesc).performTouchInput {
@@ -1172,7 +1178,13 @@ class BitPerfectUiBehaviorTest {
             composeRule.onAllNodesWithContentDescription("Side navigation rail").fetchSemanticsNodes().size,
         )
 
-        composeRule.onNodeWithContentDescription("Settings").assertIsDisplayed().performClick()
+        assertEquals(0, composeRule.onAllNodesWithText("Library").fetchSemanticsNodes().size)
+        assertEquals(0, composeRule.onAllNodesWithText("Playlists").fetchSemanticsNodes().size)
+        assertEquals(0, composeRule.onAllNodesWithText("Settings").fetchSemanticsNodes().size)
+        val settingsTab = composeRule.onNodeWithContentDescription("Settings").assertIsDisplayed()
+        val settingsBounds = settingsTab.fetchSemanticsNode().boundsInRoot
+        assertTrue(settingsBounds.width >= 48f && settingsBounds.height >= 48f)
+        settingsTab.performClick()
         assertEquals("settings", selectedRoute)
     }
 
@@ -1247,7 +1259,9 @@ class BitPerfectUiBehaviorTest {
             }
         }
 
-        // 1. All Songs tab -> Queue icon present and strictly passive
+        // 1. All Songs tab -> concise status badge (no static Offline text) & Queue icon strictly passive
+        composeRule.onNodeWithText("Safe Mode").assertIsDisplayed()
+        assertEquals(0, composeRule.onAllNodesWithText("Offline", substring = true).fetchSemanticsNodes().size)
         composeRule.onNodeWithContentDescription("Open playback queue").assertIsDisplayed().performClick()
         assertEquals(1, openQueueCalls)
 
@@ -2469,8 +2483,9 @@ class BitPerfectUiBehaviorTest {
         // When no embedded BACK_COVER is present, ZERO Back Cover toggle UI should appear
         composeRule.onNodeWithContentDescription("Show back cover").assertDoesNotExist()
         composeRule.onNodeWithContentDescription("Show front cover").assertDoesNotExist()
-        // And NowPlayingScreen STILL keeps its Queue utility button intact!
-        composeRule.onNodeWithText("Queue (1)").assertIsDisplayed()
+        // And NowPlayingScreen STILL keeps its icon-only Queue utility button intact!
+        assertEquals(0, composeRule.onAllNodesWithText("Queue (1)").fetchSemanticsNodes().size)
+        composeRule.onNodeWithContentDescription("Open playback queue").assertIsDisplayed()
     }
 
     @Test

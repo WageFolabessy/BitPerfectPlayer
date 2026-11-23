@@ -22,9 +22,11 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Combined UI-observable low-frequency playback state unifying queue state, active queue context,
@@ -42,7 +44,13 @@ data class PlaybackControllerState(
     val engineState: EnginePlaybackState = EnginePlaybackState(),
 ) {
     val isPlaying: Boolean
-        get() = engineState.isPlaying
+        get() = TrackTransitionStatePolicy.isEffectivelyPlayingForUi(
+            status = engineState.status,
+            preservePlayingUiDuringTransition = engineState.preservePlayingUiDuringTransition,
+        )
+
+    val isPreparingPlayback: Boolean
+        get() = engineState.isPreparingPlayback
 
     val durationMs: Long
         get() = TrackTransitionStatePolicy.resolveDisplayDurationMs(
@@ -105,6 +113,8 @@ class PlaybackController(
     val state: StateFlow<PlaybackControllerState> = _state.asStateFlow()
 
     val playbackPositionMs: StateFlow<Long> = engine.playbackPositionMs
+
+    val openingTrackUri: StateFlow<String?> = engine.openingTrackUri
 
     /**
      * Decoupled Sleep Timer state collected ONLY by narrow leaf composables in NowPlayingScreen
@@ -190,6 +200,7 @@ class PlaybackController(
             track = active,
             queueSnapshot = snapshot,
             startPositionMs = startPositionMs,
+            autoPlay = autoPlay,
             queueContext = context,
         )
         loadActiveTrack(active, startPositionMs = startPositionMs, autoPlay = autoPlay)
@@ -205,6 +216,7 @@ class PlaybackController(
             track = active,
             queueSnapshot = shuffledSnapshot,
             startPositionMs = 0L,
+            autoPlay = true,
             queueContext = context,
         )
         scope.launch(Dispatchers.IO) {
@@ -219,6 +231,7 @@ class PlaybackController(
             track = selected,
             queueSnapshot = queueManager.snapshot(),
             startPositionMs = 0L,
+            autoPlay = true,
         )
         loadActiveTrack(selected, startPositionMs = 0L, autoPlay = true)
     }
@@ -232,6 +245,7 @@ class PlaybackController(
                 track = active,
                 queueSnapshot = snapshot,
                 startPositionMs = 0L,
+                autoPlay = false,
                 queueContext = QueueContext.custom("Queue"),
             )
             loadActiveTrack(active, startPositionMs = 0L, autoPlay = false)
@@ -343,6 +357,7 @@ class PlaybackController(
                 track = newActive,
                 queueSnapshot = snapshot,
                 startPositionMs = 0L,
+                autoPlay = wasPlaying,
             )
             loadActiveTrack(newActive, startPositionMs = 0L, autoPlay = wasPlaying)
         } else {
@@ -435,7 +450,17 @@ class PlaybackController(
     }
 
     fun togglePlayPause() {
-        if (_state.value.isPlaying) pause() else play()
+        val currentEngineState = _state.value.engineState
+        val action = AudioStartPathPolicy.resolveTogglePlayPauseAction(
+            isPlaying = currentEngineState.isPlaying,
+            isPreparingPlayback = currentEngineState.isPreparingPlayback,
+            isPreservingPlayingUi = currentEngineState.preservePlayingUiDuringTransition &&
+                currentEngineState.status == PlaybackStatus.PREPARING,
+        )
+        when (action) {
+            TogglePlayPauseAction.PAUSE -> pause()
+            TogglePlayPauseAction.PLAY -> play()
+        }
     }
 
     fun next(userInitiated: Boolean = true) {
@@ -446,6 +471,7 @@ class PlaybackController(
                 track = nextTrack,
                 queueSnapshot = snapshot,
                 startPositionMs = 0L,
+                autoPlay = true,
             )
             loadActiveTrack(nextTrack, startPositionMs = 0L, autoPlay = true)
         } else {
@@ -471,6 +497,7 @@ class PlaybackController(
                 track = prevTrack,
                 queueSnapshot = snapshot,
                 startPositionMs = 0L,
+                autoPlay = true,
             )
             loadActiveTrack(prevTrack, startPositionMs = 0L, autoPlay = true)
         } else {
@@ -755,6 +782,7 @@ class PlaybackController(
                     track = target,
                     queueSnapshot = snapshot,
                     startPositionMs = 0L,
+                    autoPlay = !pauseAfterTransition,
                 )
                 loadActiveTrack(target, startPositionMs = 0L, autoPlay = !pauseAfterTransition)
             }
@@ -873,12 +901,17 @@ class PlaybackController(
         track: PlaybackTrack,
         queueSnapshot: QueueSnapshot<PlaybackTrack>,
         startPositionMs: Long,
+        autoPlay: Boolean = false,
         queueContext: QueueContext? = null,
         activeFingerprint: String? = track.contentFingerprint,
     ) {
         engine.preparePendingTrackPosition(startPositionMs)
         val pendingDiagnostics = engine.buildPendingDiagnosticsForTrack(track)
         _state.update { current ->
+            val preservePlayingUi = TrackTransitionStatePolicy.shouldPreservePlayingUiOnTrackSwitch(
+                wasPlaying = current.isPlaying,
+                autoPlay = autoPlay,
+            )
             current.copy(
                 queue = queueSnapshot,
                 queueContext = queueContext ?: current.queueContext,
@@ -891,6 +924,8 @@ class PlaybackController(
                     diagnostics = pendingDiagnostics,
                     errorMessage = null,
                     lastAutoPauseNotice = null,
+                    isPreparingPlayback = autoPlay,
+                    preservePlayingUiDuringTransition = preservePlayingUi,
                 ),
             )
         }
@@ -985,7 +1020,14 @@ class PlaybackController(
         fingerprintJob?.cancel()
         fingerprintJob = scope.launch(Dispatchers.IO) {
             val resolvedFp = track.contentFingerprint?.takeIf { it.isNotBlank() }
-                ?: fingerprintProvider.computeFingerprint(track.uriString.toUri()).getOrNull()
+                ?: run {
+                    if (engine.openingTrackUri.value == track.uriString) {
+                        withTimeoutOrNull(OPENING_URI_YIELD_TIMEOUT_MS) {
+                            engine.openingTrackUri.first { it != track.uriString }
+                        }
+                    }
+                    fingerprintProvider.computeFingerprint(track.uriString.toUri()).getOrNull()
+                }
 
             if (resolvedFp != null && track.contentFingerprint != resolvedFp) {
                 trackedTracksByUri[track.uriString] = track.copy(contentFingerprint = resolvedFp)
@@ -1115,5 +1157,6 @@ class PlaybackController(
 
     companion object {
         private const val QUEUE_REORDER_PRELOAD_DEBOUNCE_MS = 250L
+        private const val OPENING_URI_YIELD_TIMEOUT_MS = 450L
     }
 }

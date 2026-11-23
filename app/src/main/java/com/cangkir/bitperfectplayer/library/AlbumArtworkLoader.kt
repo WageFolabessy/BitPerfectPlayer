@@ -21,10 +21,13 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * 100% offline local album cover art extractor & two-tier cache (in-memory [LruCache] + async
@@ -52,6 +55,22 @@ class AlbumArtworkLoader(context: Context) {
     private val slotMissingKeys = ConcurrentHashMap.newKeySet<String>()
     private val folderCoverUriCache = ConcurrentHashMap<String, String>()
     private val folderResolvedTrackKeyCache = ConcurrentHashMap<String, String>()
+
+    @Volatile
+    private var playbackOpeningUriFlow: StateFlow<String?>? = null
+
+    fun bindPlaybackOpeningUriFlow(openingTrackUriFlow: StateFlow<String?>) {
+        playbackOpeningUriFlow = openingTrackUriFlow
+    }
+
+    private suspend fun yieldIfTrackCurrentlyOpening(trackUri: String) {
+        val flow = playbackOpeningUriFlow ?: return
+        if (flow.value == trackUri) {
+            withTimeoutOrNull(OPENING_URI_YIELD_TIMEOUT_MS) {
+                flow.first { it != trackUri }
+            }
+        }
+    }
 
     /**
      * Lightweight plain-string cache identity key safe to call synchronously on the Main Thread.
@@ -181,6 +200,7 @@ class AlbumArtworkLoader(context: Context) {
         return withContext(Dispatchers.IO) {
             memoryCache.get(memKey)?.let { return@withContext it }
             if (missingKeys.contains(memKey)) return@withContext null
+            yieldIfTrackCurrentlyOpening(track.uriString)
 
             decodeSemaphore.withPermit {
                 memoryCache.get(memKey)?.let { return@withPermit it }
@@ -215,15 +235,35 @@ class AlbumArtworkLoader(context: Context) {
 
     /**
      * Builds a lightweight cache key for an embedded multi-artwork [slot] (`DISC`, `BACK_COVER`,
-     * `ARTIST`) on [track]. Safe to call synchronously on the main thread.
+     * `ARTIST`) on [track]. `DISC` keys deduplicate at album/artist/disc granularity (with distinct
+     * SAF folder fallback) so intra-album skips resolve synchronously in `0 ms`.
      */
-    fun slotCacheKeyFor(track: PlaybackTrack, slot: EmbeddedArtworkSlot, targetSizePx: Int = HERO_SIZE_PX): String {
-        val bucket = AlbumArtworkHelper.normalizeSizeBucket(targetSizePx)
-        return "slot:${slot.name}|${track.uriString}|${track.dateModifiedSeconds}|${track.fileSizeBytes}|$bucket"
-    }
+    fun slotCacheKeyFor(track: PlaybackTrack, slot: EmbeddedArtworkSlot, targetSizePx: Int = HERO_SIZE_PX): String =
+        AlbumArtworkHelper.buildSlotCacheKey(
+            slot = slot,
+            trackUri = track.uriString,
+            artist = track.artist,
+            album = track.album,
+            discNumber = track.discNumber,
+            parentTreeUriString = track.parentTreeUriString,
+            folderName = track.folderName,
+            dateModifiedSeconds = track.dateModifiedSeconds,
+            fileSizeBytes = track.fileSizeBytes,
+            targetSizePx = targetSizePx,
+        )
 
     fun getCachedTrackSlotBitmap(track: PlaybackTrack, slot: EmbeddedArtworkSlot, targetSizePx: Int = HERO_SIZE_PX): Bitmap? =
         slotMemoryCache.get(slotCacheKeyFor(track, slot, targetSizePx))?.takeIf { !it.isRecycled }
+
+    fun isTrackSlotKnownMissing(track: PlaybackTrack, slot: EmbeddedArtworkSlot, targetSizePx: Int = DISC_SIZE_PX): Boolean =
+        slotMissingKeys.contains(slotCacheKeyFor(track, slot, targetSizePx))
+
+    suspend fun preloadDiscArtwork(track: PlaybackTrack) {
+        if (!ArtistDetailHelper.supportsEmbeddedMultiArtwork(track)) return
+        if (getCachedTrackSlotBitmap(track, EmbeddedArtworkSlot.DISC, DISC_SIZE_PX) != null) return
+        if (isTrackSlotKnownMissing(track, EmbeddedArtworkSlot.DISC, DISC_SIZE_PX)) return
+        loadTrackSlotBitmap(track, EmbeddedArtworkSlot.DISC, DISC_SIZE_PX)
+    }
 
     internal fun seedSlotBitmapForTesting(
         track: PlaybackTrack,
@@ -251,7 +291,7 @@ class AlbumArtworkLoader(context: Context) {
      */
     suspend fun loadTrackSlotBitmap(track: PlaybackTrack, slot: EmbeddedArtworkSlot, targetSizePx: Int = HERO_SIZE_PX): Bitmap? {
         if (!ArtistDetailHelper.supportsEmbeddedMultiArtwork(track)) return null
-        val bucket = AlbumArtworkHelper.normalizeSizeBucket(targetSizePx)
+        val bucket = AlbumArtworkHelper.resolveSlotTargetSizePx(slot, targetSizePx)
         val key = slotCacheKeyFor(track, slot, bucket)
         slotMemoryCache.get(key)?.takeIf { !it.isRecycled }?.let { return it }
         if (slotMissingKeys.contains(key)) return null
@@ -259,6 +299,7 @@ class AlbumArtworkLoader(context: Context) {
         return withContext(Dispatchers.IO) {
             slotMemoryCache.get(key)?.takeIf { !it.isRecycled }?.let { return@withContext it }
             if (slotMissingKeys.contains(key)) return@withContext null
+            yieldIfTrackCurrentlyOpening(track.uriString)
 
             decodeSemaphore.withPermit {
                 slotMemoryCache.get(key)?.takeIf { !it.isRecycled }?.let { return@withPermit it }
@@ -267,7 +308,7 @@ class AlbumArtworkLoader(context: Context) {
                 val rawBytes = extractEmbeddedSlotBytes(track, slot)
                 val decoded = rawBytes?.let { decodeSampledBitmapFromBytes(it, bucket) }
                 if (decoded != null) {
-                    val normalized = constrainMaxDimension(decoded, bucket)
+                    val normalized = constrainMaxDimension(decoded, bucket, toleranceScale = 1.0f)
                     slotMemoryCache.put(key, normalized)
                     normalized
                 } else {
@@ -285,7 +326,7 @@ class AlbumArtworkLoader(context: Context) {
     suspend fun loadAlbumBackCoverBitmap(albumName: String, tracks: List<PlaybackTrack>, targetSizePx: Int = HERO_SIZE_PX): Bitmap? {
         val candidates = tracks.filter { ArtistDetailHelper.supportsEmbeddedMultiArtwork(it) }.take(MAX_ALBUM_BACK_PROBES)
         if (candidates.isEmpty()) return null
-        val bucket = AlbumArtworkHelper.normalizeSizeBucket(targetSizePx)
+        val bucket = AlbumArtworkHelper.resolveSlotTargetSizePx(EmbeddedArtworkSlot.BACK_COVER, targetSizePx)
         val key = "album_slot:BACK_COVER|${albumName.trim().lowercase()}|${candidates.first().uriString}|$bucket"
         slotMemoryCache.get(key)?.takeIf { !it.isRecycled }?.let { return it }
         if (slotMissingKeys.contains(key)) return null
@@ -303,7 +344,7 @@ class AlbumArtworkLoader(context: Context) {
                     val bytes = extractEmbeddedSlotBytes(track, EmbeddedArtworkSlot.BACK_COVER) ?: continue
                     val decoded = decodeSampledBitmapFromBytes(bytes, bucket)
                     if (decoded != null) {
-                        found = constrainMaxDimension(decoded, bucket)
+                        found = constrainMaxDimension(decoded, bucket, toleranceScale = 1.0f)
                         break
                     }
                 }
@@ -318,7 +359,7 @@ class AlbumArtworkLoader(context: Context) {
     }
 
     fun getCachedArtistEmbeddedBitmap(artistName: String, targetSizePx: Int = HERO_SIZE_PX): Bitmap? {
-        val bucket = AlbumArtworkHelper.normalizeSizeBucket(targetSizePx)
+        val bucket = AlbumArtworkHelper.resolveSlotTargetSizePx(EmbeddedArtworkSlot.ARTIST, targetSizePx)
         val key = "artist_slot:ARTIST|${artistName.trim().lowercase()}|$bucket"
         return slotMemoryCache.get(key)?.takeIf { !it.isRecycled }
     }
@@ -343,7 +384,7 @@ class AlbumArtworkLoader(context: Context) {
         targetSizePx: Int = HERO_SIZE_PX,
     ): Bitmap? {
         if (candidateTracks.isEmpty()) return null
-        val bucket = AlbumArtworkHelper.normalizeSizeBucket(targetSizePx)
+        val bucket = AlbumArtworkHelper.resolveSlotTargetSizePx(EmbeddedArtworkSlot.ARTIST, targetSizePx)
         val normalized = artistName.trim().lowercase()
         val key = "artist_slot:ARTIST|$normalized|$bucket"
         val missingKey = "artist_slot_missing:ARTIST|$normalized"
@@ -363,7 +404,7 @@ class AlbumArtworkLoader(context: Context) {
                     val bytes = extractEmbeddedSlotBytes(track, EmbeddedArtworkSlot.ARTIST) ?: continue
                     val decoded = decodeSampledBitmapFromBytes(bytes, bucket)
                     if (decoded != null) {
-                        found = constrainMaxDimension(decoded, bucket)
+                        found = constrainMaxDimension(decoded, bucket, toleranceScale = 1.0f)
                         break
                     }
                 }
@@ -397,10 +438,10 @@ class AlbumArtworkLoader(context: Context) {
 
         val primaryArtwork = if (preferThumbnailFirst) {
             // Fast path for list/mini-player 160px thumbnails on MediaStore: try OS-indexed thumbnail first.
-            extractMediaStoreThumbnail(uri, bucketPx) ?: extractEmbeddedPicture(uri, bucketPx)
+            extractMediaStoreThumbnail(uri, bucketPx) ?: extractEmbeddedPicture(track, uri, bucketPx)
         } else {
-            // Hero (600px) & SAF/legacy path: prefer full-resolution embedded tags first.
-            val embedded = extractEmbeddedPicture(uri, bucketPx)
+            // Hero (600px) & SAF/legacy path: prefer lightweight header-only FLAC/MP3 FRONT_COVER first.
+            val embedded = extractEmbeddedPicture(track, uri, bucketPx)
             if (embedded == null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && isMediaStore) {
                 extractMediaStoreThumbnail(uri, bucketPx)
             } else {
@@ -414,7 +455,12 @@ class AlbumArtworkLoader(context: Context) {
             ?.let { extractSafSiblingCover(uri, it, bucketPx) }
     }
 
-    private fun extractEmbeddedPicture(uri: Uri, bucketPx: Int): Bitmap? {
+    private fun extractEmbeddedPicture(track: PlaybackTrack, uri: Uri, bucketPx: Int): Bitmap? {
+        if (ArtistDetailHelper.supportsEmbeddedMultiArtwork(track)) {
+            extractEmbeddedSlotBytes(track, EmbeddedArtworkSlot.FRONT_COVER)
+                ?.let { bytes -> decodeSampledBitmapFromBytes(bytes, bucketPx) }
+                ?.let { return it }
+        }
         val retriever = MediaMetadataRetriever()
         return try {
             retriever.setDataSource(appContext, uri)
@@ -552,12 +598,12 @@ class AlbumArtworkLoader(context: Context) {
         }.getOrNull()
     }
 
-    private fun constrainMaxDimension(bitmap: Bitmap, targetSizePx: Int): Bitmap {
+    private fun constrainMaxDimension(bitmap: Bitmap, targetSizePx: Int, toleranceScale: Float = 1.25f): Bitmap {
         val target = AlbumArtworkHelper.computeProportionalTargetDimensions(
             srcWidth = bitmap.width,
             srcHeight = bitmap.height,
             maxDimensionPx = targetSizePx,
-            toleranceScale = 1.25f,
+            toleranceScale = toleranceScale,
         )
         if (target.width == bitmap.width && target.height == bitmap.height) return bitmap
         if (target.width <= 0 || target.height <= 0) return bitmap
@@ -633,13 +679,20 @@ class AlbumArtworkLoader(context: Context) {
         }
     }
 
-    private fun createSlotMemoryCache(): LruCache<String, Bitmap> = object : LruCache<String, Bitmap>(SLOT_MEM_CACHE_KB) {
-        override fun sizeOf(key: String, value: Bitmap): Int = (value.byteCount / 1024).coerceAtLeast(1)
+    private fun createSlotMemoryCache(): LruCache<String, Bitmap> {
+        val maxKb = (Runtime.getRuntime().maxMemory() / 1024L / 10L)
+            .toInt()
+            .coerceIn(MIN_SLOT_MEM_CACHE_KB, MAX_SLOT_MEM_CACHE_KB)
+        return object : LruCache<String, Bitmap>(maxKb) {
+            override fun sizeOf(key: String, value: Bitmap): Int = (value.byteCount / 1024).coerceAtLeast(1)
+        }
     }
 
     companion object {
         const val THUMBNAIL_SIZE_PX = AlbumArtworkHelper.THUMBNAIL_BUCKET_PX
         const val HERO_SIZE_PX = AlbumArtworkHelper.HERO_BUCKET_PX
+        const val DISC_SIZE_PX = AlbumArtworkHelper.DISC_BUCKET_PX
+        const val SLOT_HERO_SIZE_PX = AlbumArtworkHelper.SLOT_LARGE_BUCKET_PX
 
         private const val ARTWORK_CACHE_DIR = "artwork"
         private const val MAX_CONCURRENT_DECODES = 4
@@ -649,8 +702,10 @@ class AlbumArtworkLoader(context: Context) {
         private const val JPEG_QUALITY = 88
         private const val MIN_MEM_CACHE_KB = 4_096
         private const val MAX_MEM_CACHE_KB = 24_576
-        private const val SLOT_MEM_CACHE_KB = 8_192
+        private const val MIN_SLOT_MEM_CACHE_KB = 8_192
+        private const val MAX_SLOT_MEM_CACHE_KB = 24_576
         private const val MAX_DISK_CACHE_FILES = 600
         private const val TARGET_DISK_CACHE_FILES = 450
+        private const val OPENING_URI_YIELD_TIMEOUT_MS = 450L
     }
 }

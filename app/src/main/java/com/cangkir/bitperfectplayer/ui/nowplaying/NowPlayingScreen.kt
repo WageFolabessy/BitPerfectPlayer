@@ -648,6 +648,7 @@ private fun NowPlayingTrackControlsSection(
 
         NowPlayingTransportRow(
             isPlaying = playbackState.isPlaying,
+            isPreparingPlayback = playbackState.isPreparingPlayback,
             shuffleEnabled = playbackState.queue.shuffleEnabled,
             repeatMode = playbackState.queue.repeatMode,
             onToggleShuffle = onToggleShuffle,
@@ -669,10 +670,10 @@ private fun NowPlayingTrackControlsSection(
         Spacer(modifier = Modifier.height(if (compactVerticalSpacing) 6.dp else 14.dp))
 
         NowPlayingUtilityStrip(
-            queueSize = playbackState.queue.size,
             onOpenQueue = onOpenQueue,
             onOpenLyrics = onOpenLyrics,
             onOpenDiagnostics = onOpenDiagnostics,
+            isBitPerfectActive = playbackState.engineState.diagnostics.isBitPerfectMixerActive,
         )
     }
 }

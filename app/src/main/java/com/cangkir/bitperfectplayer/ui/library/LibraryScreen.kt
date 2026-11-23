@@ -195,9 +195,9 @@ fun LibraryScreen(
     val isBitPerfectActive = playbackState.engineState.diagnostics.isBitPerfectMixerActive
     val isBitPerfectOptIn = playbackState.engineState.safetyState.mode == AudioOutputMode.BIT_PERFECT_OPT_IN
     val statusText = when {
-        isBitPerfectActive -> "Bit-Perfect USB · Offline"
-        isBitPerfectOptIn -> "Clean Native · Offline"
-        else -> "Safe Mode · Offline"
+        isBitPerfectActive -> "Bit-Perfect USB"
+        isBitPerfectOptIn -> "Clean Native"
+        else -> "Safe Mode"
     }
 
     val launchImportFolder = remember(folderPickerLauncher) { { folderPickerLauncher.launch(null) } }

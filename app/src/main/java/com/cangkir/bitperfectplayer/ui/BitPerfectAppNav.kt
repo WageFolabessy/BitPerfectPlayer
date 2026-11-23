@@ -21,8 +21,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
+import androidx.compose.material.icons.automirrored.outlined.PlaylistPlay
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.outlined.LibraryMusic
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -35,7 +38,6 @@ import androidx.compose.material3.NavigationRailItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -81,23 +83,26 @@ private object Routes {
 
 internal fun DefaultHomepage.toStartDestinationRoute(): String = if (isPlaylistsRoute) Routes.PLAYLISTS else Routes.LIBRARY
 
-private data class TopLevelTab(val route: String, val label: String, val icon: ImageVector)
+private data class TopLevelTab(val route: String, val label: String, val selectedIcon: ImageVector, val unselectedIcon: ImageVector)
 
 private val TOP_LEVEL_TABS = listOf(
     TopLevelTab(
         route = Routes.LIBRARY,
         label = "Library",
-        icon = Icons.Filled.LibraryMusic,
+        selectedIcon = Icons.Filled.LibraryMusic,
+        unselectedIcon = Icons.Outlined.LibraryMusic,
     ),
     TopLevelTab(
         route = Routes.PLAYLISTS,
         label = "Playlists",
-        icon = Icons.AutoMirrored.Filled.PlaylistPlay,
+        selectedIcon = Icons.AutoMirrored.Filled.PlaylistPlay,
+        unselectedIcon = Icons.AutoMirrored.Outlined.PlaylistPlay,
     ),
     TopLevelTab(
         route = Routes.SETTINGS,
         label = "Settings",
-        icon = Icons.Filled.Settings,
+        selectedIcon = Icons.Filled.Settings,
+        unselectedIcon = Icons.Outlined.Settings,
     ),
 )
 
@@ -596,23 +601,19 @@ internal fun BitPerfectBottomNavBar(currentRoute: String, onSelectTab: (String) 
             NavigationBarItem(
                 selected = selected,
                 onClick = { onSelectTab(tab.route) },
-                modifier = Modifier.semantics {
-                    contentDescription = tab.label
-                },
+                modifier = Modifier
+                    .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                    .semantics {
+                        contentDescription = tab.label
+                    },
                 icon = {
                     Icon(
-                        imageVector = tab.icon,
+                        imageVector = if (selected) tab.selectedIcon else tab.unselectedIcon,
                         contentDescription = null,
                     )
                 },
-                label = {
-                    Text(
-                        text = tab.label,
-                        style = MaterialTheme.typography.labelSmall,
-                        maxLines = 1,
-                        softWrap = false,
-                    )
-                },
+                label = null,
+                alwaysShowLabel = false,
                 colors = NavigationBarItemDefaults.colors(
                     selectedIconColor = MaterialTheme.colorScheme.onPrimary,
                     selectedTextColor = MaterialTheme.colorScheme.primary,
@@ -649,18 +650,12 @@ internal fun BitPerfectNavigationRail(currentRoute: String, onSelectTab: (String
                     },
                 icon = {
                     Icon(
-                        imageVector = tab.icon,
+                        imageVector = if (selected) tab.selectedIcon else tab.unselectedIcon,
                         contentDescription = null,
                     )
                 },
-                label = {
-                    Text(
-                        text = tab.label,
-                        style = MaterialTheme.typography.labelSmall,
-                        maxLines = 1,
-                        softWrap = false,
-                    )
-                },
+                label = null,
+                alwaysShowLabel = false,
                 colors = NavigationRailItemDefaults.colors(
                     selectedIconColor = MaterialTheme.colorScheme.onPrimary,
                     selectedTextColor = MaterialTheme.colorScheme.primary,

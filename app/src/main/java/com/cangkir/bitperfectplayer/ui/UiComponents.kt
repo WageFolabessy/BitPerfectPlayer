@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -56,6 +57,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.cangkir.bitperfectplayer.audio.AudioFormatFormatter
 import com.cangkir.bitperfectplayer.audio.AudioOutputMode
+import com.cangkir.bitperfectplayer.audio.AudioStartPathPolicy
 import com.cangkir.bitperfectplayer.audio.NotificationSubtitleFormatter
 import com.cangkir.bitperfectplayer.audio.PlaybackControllerState
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
@@ -437,16 +439,31 @@ fun MiniPlayerBar(
 
                 Spacer(modifier = Modifier.width(6.dp))
 
-                IconButton(
-                    onClick = onTogglePlayPause,
+                val showPreparingIndicator = rememberDelayedPreparingIndicator(playbackState.isPreparingPlayback)
+                Box(
                     modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
+                    contentAlignment = Alignment.Center,
                 ) {
-                    Icon(
-                        imageVector = if (playbackState.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                        contentDescription = if (playbackState.isPlaying) "Pause playback" else "Resume playback",
-                        tint = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.size(26.dp),
-                    )
+                    if (showPreparingIndicator) {
+                        CircularProgressIndicator(
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier
+                                .size(38.dp)
+                                .semantics { contentDescription = "Preparing playback" },
+                        )
+                    }
+                    IconButton(
+                        onClick = onTogglePlayPause,
+                        modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
+                    ) {
+                        Icon(
+                            imageVector = if (playbackState.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                            contentDescription = if (playbackState.isPlaying) "Pause playback" else "Resume playback",
+                            tint = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(26.dp),
+                        )
+                    }
                 }
 
                 IconButton(
@@ -463,4 +480,19 @@ fun MiniPlayerBar(
             }
         }
     }
+}
+
+@Composable
+internal fun rememberDelayedPreparingIndicator(isPreparingPlayback: Boolean): Boolean {
+    var visible by remember { mutableStateOf(false) }
+    LaunchedEffect(isPreparingPlayback) {
+        if (!isPreparingPlayback) {
+            visible = false
+        } else {
+            visible = false
+            delay(AudioStartPathPolicy.PREPARING_INDICATOR_DELAY_MS)
+            visible = true
+        }
+    }
+    return visible
 }

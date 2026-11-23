@@ -8,7 +8,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -31,6 +30,7 @@ import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -40,7 +40,6 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
@@ -58,6 +57,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -69,6 +70,7 @@ import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
 import com.cangkir.bitperfectplayer.library.EmbeddedArtworkSlot
 import com.cangkir.bitperfectplayer.ui.TrackArtworkThumbnail
 import com.cangkir.bitperfectplayer.ui.formatDurationMs
+import com.cangkir.bitperfectplayer.ui.rememberDelayedPreparingIndicator
 import com.cangkir.bitperfectplayer.ui.theme.ObsidianBackground
 import com.cangkir.bitperfectplayer.ui.theme.TextMuted
 import kotlinx.coroutines.flow.StateFlow
@@ -287,7 +289,9 @@ internal fun NowPlayingTransportRow(
     onTogglePlayPause: () -> Unit,
     onNext: () -> Unit,
     onCycleRepeatMode: () -> Unit,
+    isPreparingPlayback: Boolean = false,
 ) {
+    val showPreparingHalo = rememberDelayedPreparingIndicator(isPreparingPlayback)
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -316,20 +320,34 @@ internal fun NowPlayingTransportRow(
             )
         }
 
-        FilledIconButton(
-            onClick = onTogglePlayPause,
-            modifier = Modifier.size(64.dp),
-            shape = CircleShape,
-            colors = IconButtonDefaults.filledIconButtonColors(
-                containerColor = MaterialTheme.colorScheme.primary,
-                contentColor = MaterialTheme.colorScheme.onPrimary,
-            ),
+        Box(
+            modifier = Modifier.size(68.dp),
+            contentAlignment = Alignment.Center,
         ) {
-            Icon(
-                imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                contentDescription = if (isPlaying) "Pause playback" else "Play audio",
-                modifier = Modifier.size(32.dp),
-            )
+            if (showPreparingHalo) {
+                CircularProgressIndicator(
+                    strokeWidth = 2.5.dp,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier
+                        .size(68.dp)
+                        .semantics { contentDescription = "Preparing playback" },
+                )
+            }
+            FilledIconButton(
+                onClick = onTogglePlayPause,
+                modifier = Modifier.size(62.dp),
+                shape = CircleShape,
+                colors = IconButtonDefaults.filledIconButtonColors(
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                ),
+            ) {
+                Icon(
+                    imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                    contentDescription = if (isPlaying) "Pause playback" else "Play audio",
+                    modifier = Modifier.size(32.dp),
+                )
+            }
         }
 
         IconButton(
@@ -406,78 +424,48 @@ internal fun NowPlayingAudioModeStrip(modeDotColor: Color, modeShortLabel: Strin
 }
 
 @Composable
-internal fun NowPlayingUtilityStrip(queueSize: Int, onOpenQueue: () -> Unit, onOpenLyrics: () -> Unit, onOpenDiagnostics: () -> Unit) {
+internal fun NowPlayingUtilityStrip(
+    onOpenQueue: () -> Unit,
+    onOpenLyrics: () -> Unit,
+    onOpenDiagnostics: () -> Unit,
+    isLyricsActive: Boolean = false,
+    isBitPerfectActive: Boolean = false,
+) {
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.SpaceEvenly,
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        TextButton(
+        IconButton(
             onClick = onOpenQueue,
-            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
-            modifier = Modifier
-                .weight(1.1f)
-                .sizeIn(minHeight = 48.dp),
+            modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
         ) {
             Icon(
                 imageVector = Icons.AutoMirrored.Filled.QueueMusic,
-                contentDescription = null,
+                contentDescription = "Open playback queue",
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(18.dp),
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-            Text(
-                text = "Queue ($queueSize)",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                softWrap = false,
-                overflow = TextOverflow.Ellipsis,
             )
         }
 
-        TextButton(
+        IconButton(
             onClick = onOpenLyrics,
-            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
-            modifier = Modifier
-                .weight(0.95f)
-                .sizeIn(minHeight = 48.dp),
+            modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
         ) {
             Icon(
                 imageVector = Icons.Filled.Lyrics,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(18.dp),
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-            Text(
-                text = "Lyrics",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                softWrap = false,
+                contentDescription = "Lyrics",
+                tint = if (isLyricsActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
 
-        TextButton(
+        IconButton(
             onClick = onOpenDiagnostics,
-            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
-            modifier = Modifier
-                .weight(1f)
-                .sizeIn(minHeight = 48.dp),
+            modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
         ) {
             Icon(
                 imageVector = Icons.Filled.GraphicEq,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(18.dp),
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-            Text(
-                text = "Audio Path",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                softWrap = false,
+                contentDescription = "Audio Path",
+                tint = if (isBitPerfectActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }

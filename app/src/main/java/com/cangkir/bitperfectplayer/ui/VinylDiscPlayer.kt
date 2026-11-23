@@ -59,6 +59,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
 import com.cangkir.bitperfectplayer.audio.VinylScrubMath
 import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
+import com.cangkir.bitperfectplayer.library.ArtistDetailHelper
 import com.cangkir.bitperfectplayer.library.EmbeddedArtworkSlot
 import kotlin.math.abs
 import kotlin.math.atan2
@@ -713,46 +714,94 @@ private fun VinylStationarySheenCanvas(modifier: Modifier = Modifier) {
 
 @Composable
 private fun VinylCircularArtwork(track: PlaybackTrack, artworkLoader: AlbumArtworkLoader, modifier: Modifier = Modifier) {
-    val targetSizePx = AlbumArtworkLoader.HERO_SIZE_PX
-    val cacheIdentity = remember(track.uriString, track.album, track.artist, track.dateModifiedSeconds, targetSizePx) {
-        artworkLoader.memoryKeyFor(track, targetSizePx)
+    val discTargetSizePx = AlbumArtworkLoader.DISC_SIZE_PX
+    val heroTargetSizePx = AlbumArtworkLoader.HERO_SIZE_PX
+    val discKey = remember(
+        track.uriString,
+        track.artist,
+        track.album,
+        track.discNumber,
+        track.parentTreeUriString,
+        track.folderName,
+        track.dateModifiedSeconds,
+        track.fileSizeBytes,
+        discTargetSizePx,
+    ) {
+        artworkLoader.slotCacheKeyFor(track, EmbeddedArtworkSlot.DISC, discTargetSizePx)
     }
-    var discBitmap by remember(track.uriString, track.dateModifiedSeconds, targetSizePx) {
+    val frontKey = remember(
+        track.uriString,
+        track.album,
+        track.artist,
+        track.parentTreeUriString,
+        track.folderName,
+        track.dateModifiedSeconds,
+        track.fileSizeBytes,
+        heroTargetSizePx,
+    ) {
+        artworkLoader.memoryKeyFor(track, heroTargetSizePx)
+    }
+    val discSupported = remember(track.fileName, track.mimeType) {
+        ArtistDetailHelper.supportsEmbeddedMultiArtwork(track)
+    }
+    var discBitmap by remember(discKey) {
         mutableStateOf<Bitmap?>(
-            artworkLoader.getCachedTrackSlotBitmap(track, EmbeddedArtworkSlot.DISC, targetSizePx),
+            artworkLoader.getCachedTrackSlotBitmap(track, EmbeddedArtworkSlot.DISC, discTargetSizePx),
         )
     }
-    var frontBitmap by remember(cacheIdentity) {
-        mutableStateOf<Bitmap?>(artworkLoader.getCachedFromMemory(track, targetSizePx))
+    var discLookupCompleted by remember(discKey) {
+        mutableStateOf(
+            !discSupported ||
+                discBitmap != null ||
+                artworkLoader.isTrackSlotKnownMissing(track, EmbeddedArtworkSlot.DISC, discTargetSizePx),
+        )
+    }
+    var frontBitmap by remember(frontKey) {
+        mutableStateOf<Bitmap?>(
+            if (discLookupCompleted && discBitmap == null) {
+                artworkLoader.getCachedFromMemory(track, heroTargetSizePx)
+            } else {
+                null
+            },
+        )
     }
 
-    LaunchedEffect(track.uriString, cacheIdentity) {
-        if (discBitmap == null) {
+    LaunchedEffect(track.uriString, discKey, frontKey) {
+        if (!discLookupCompleted) {
             discBitmap = artworkLoader.loadTrackSlotBitmap(
                 track = track,
                 slot = EmbeddedArtworkSlot.DISC,
-                targetSizePx = targetSizePx,
+                targetSizePx = discTargetSizePx,
             )
+            discLookupCompleted = true
         }
         if (discBitmap == null && frontBitmap == null) {
-            frontBitmap = artworkLoader.loadArtwork(track, targetSizePx)
+            frontBitmap = artworkLoader.getCachedFromMemory(track, heroTargetSizePx)
+                ?: artworkLoader.loadArtwork(track, heroTargetSizePx)
         }
     }
 
     Box(
         modifier = modifier
             .clip(CircleShape)
-            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .background(if (!discLookupCompleted) VinylBaseInner else MaterialTheme.colorScheme.surfaceVariant)
             .border(width = 1.dp, color = VinylArtworkBorder, shape = CircleShape),
         contentAlignment = Alignment.Center,
     ) {
-        val displayedBitmap = discBitmap ?: frontBitmap
+        val displayedBitmap = if (!discLookupCompleted) null else discBitmap ?: frontBitmap
         val imageBitmap = remember(displayedBitmap) {
             if (displayedBitmap != null && !displayedBitmap.isRecycled) displayedBitmap.asImageBitmap() else null
         }
-        if (imageBitmap != null) {
+        if (!discLookupCompleted) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(VinylBaseInner)
+                    .semantics { contentDescription = "Loading disc artwork for ${track.title}" },
+            )
+        } else if (imageBitmap != null) {
             // Option B: Preserve the authentic circular vinyl center label using uniform,
-            // distortion-free center-fill over embedded Disc art (preferred) or Front Cover.
+            // distortion-free center-fill over embedded Disc art (preferred) or Front Cover fallback.
             Image(
                 bitmap = imageBitmap,
                 contentDescription = if (discBitmap != null) {

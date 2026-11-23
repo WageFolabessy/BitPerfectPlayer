@@ -12,6 +12,12 @@ object TrackTransitionStatePolicy {
         return engineTrackUri == null || engineTrackUri == activeTrack.uriString
     }
 
+    fun shouldPreservePlayingUiOnTrackSwitch(wasPlaying: Boolean, autoPlay: Boolean): Boolean = wasPlaying && autoPlay
+
+    fun isEffectivelyPlayingForUi(status: PlaybackStatus, preservePlayingUiDuringTransition: Boolean): Boolean =
+        status == PlaybackStatus.PLAYING ||
+            (preservePlayingUiDuringTransition && status == PlaybackStatus.PREPARING)
+
     fun resolveDisplayDurationMs(
         activeTrack: PlaybackTrack?,
         engineTrackUri: String?,

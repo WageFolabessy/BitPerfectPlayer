@@ -81,17 +81,29 @@ class AudioRouteEventFilter(private val coalesceWindowMs: Long = DEFAULT_NOISY_C
     }
 
     /**
+     * Returns `true` when an `ACTION_AUDIO_BECOMING_NOISY` disconnect happened inside the coalesce
+     * window and startup should avoid querying or binding to the disconnecting external sink.
+     */
+    @Synchronized
+    fun isWithinNoisyCooldown(nowElapsedMs: Long): Boolean {
+        val pending = pendingNoisyDisconnect ?: return false
+        if (!isWithinCoalesceWindow(pending.timestampMs, nowElapsedMs)) {
+            pendingNoisyDisconnect = null
+            return false
+        }
+        return true
+    }
+
+    /**
      * Returns the external device ID that recently triggered `ACTION_AUDIO_BECOMING_NOISY` while
      * awaiting its delayed `onAudioDevicesRemoved` callback, or `null` if no suppression is active.
      */
     @Synchronized
     fun suppressedNoisyExternalDeviceId(nowElapsedMs: Long): Int? {
-        val pending = pendingNoisyDisconnect ?: return null
-        if (!isWithinCoalesceWindow(pending.timestampMs, nowElapsedMs)) {
-            pendingNoisyDisconnect = null
+        if (!isWithinNoisyCooldown(nowElapsedMs)) {
             return null
         }
-        return pending.previousDeviceId
+        return pendingNoisyDisconnect?.previousDeviceId
     }
 
     @Synchronized

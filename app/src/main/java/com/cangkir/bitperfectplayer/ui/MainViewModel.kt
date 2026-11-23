@@ -7,8 +7,10 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.cangkir.bitperfectplayer.AppContainer
 import com.cangkir.bitperfectplayer.audio.PlaybackControllerState
+import com.cangkir.bitperfectplayer.audio.PlaybackStatus
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
 import com.cangkir.bitperfectplayer.audio.QueueContext
+import com.cangkir.bitperfectplayer.audio.RepeatMode
 import com.cangkir.bitperfectplayer.audio.ReplayGainMode
 import com.cangkir.bitperfectplayer.audio.SleepTimerPreset
 import com.cangkir.bitperfectplayer.audio.SleepTimerState
@@ -235,6 +237,50 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
                     container.coverThemeColorCache.resolveTokens(track)
                 }
             }
+        }
+
+        // Preload adjacent Next/Previous DISC artwork strictly once playback reaches PLAYING.
+        viewModelScope.launch {
+            playbackState
+                .map { state ->
+                    if (state.engineState.status == PlaybackStatus.PLAYING) {
+                        val items = state.queue.items
+                        val idx = state.queue.currentIndex
+                        val repeat = state.queue.repeatMode
+                        if (idx in items.indices && items.size > 1) {
+                            val nextIdx = when {
+                                idx + 1 < items.size -> idx + 1
+                                repeat == RepeatMode.ALL -> 0
+                                else -> -1
+                            }
+                            val prevIdx = when {
+                                idx - 1 >= 0 -> idx - 1
+                                repeat == RepeatMode.ALL -> items.lastIndex
+                                else -> -1
+                            }
+                            Pair(items.getOrNull(nextIdx), items.getOrNull(prevIdx))
+                        } else {
+                            null
+                        }
+                    } else {
+                        null
+                    }
+                }
+                .distinctUntilChanged { old, new ->
+                    old?.first?.uriString == new?.first?.uriString &&
+                        old?.second?.uriString == new?.second?.uriString
+                }
+                .collectLatest { pair ->
+                    val (nextCandidate, prevCandidate) = pair ?: return@collectLatest
+                    withContext(Dispatchers.IO) {
+                        if (nextCandidate != null) {
+                            container.albumArtworkLoader.preloadDiscArtwork(nextCandidate)
+                        }
+                        if (prevCandidate != null && prevCandidate.uriString != nextCandidate?.uriString) {
+                            container.albumArtworkLoader.preloadDiscArtwork(prevCandidate)
+                        }
+                    }
+                }
         }
     }
 

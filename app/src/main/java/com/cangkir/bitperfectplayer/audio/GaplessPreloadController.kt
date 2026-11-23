@@ -170,6 +170,24 @@ internal class GaplessPreloadController(
         return null
     }
 
+    fun takePreloadedTrackMatchingUri(targetUri: Uri): PreloadedTrack? = synchronized(preloadLock) {
+        val existing = preloadedTrack ?: return@synchronized null
+        if (existing.request.uri != targetUri) return@synchronized null
+        preloadedTrack = null
+        preloadingUri = null
+        existing
+    }
+
+    fun clearPreloadedUnlessMatchesAsync(targetUri: Uri, startPositionMs: Long) {
+        if (startPositionMs == 0L) {
+            val matches = synchronized(preloadLock) {
+                preloadedTrack?.request?.uri == targetUri || preloadingUri == targetUri
+            }
+            if (matches) return
+        }
+        clearPreloadedNextAsync()
+    }
+
     fun consumeQueuedNextRequestIfMatches(uri: Uri) {
         if (queuedNextRequest?.uri == uri) {
             queuedNextRequest = null
@@ -242,7 +260,7 @@ internal class GaplessPreloadController(
             fileName = request.fileName,
             mimeType = request.mimeType,
         )
-        val openedDecoder = openDecoderForPreload(request)
+        val openedDecoder = openDecoderForPreload(request, expectedGeneration)
         if (openedDecoder == null) {
             clearPreloadingUri(request.uri)
             return
@@ -266,13 +284,16 @@ internal class GaplessPreloadController(
         decoderToClose?.let { runCatching { it.close() } }
     }
 
-    private fun openDecoderForPreload(request: EngineTrackRequest): PcmAudioDecoder? = try {
+    private fun openDecoderForPreload(request: EngineTrackRequest, expectedGeneration: Long): PcmAudioDecoder? = try {
         MediaCodecAudioDecoder.open(
             context = appContext,
             uri = request.uri,
             fileName = request.fileName,
             mimeHint = request.mimeType,
+            isCancelled = { !isPreloadStillValid(request, expectedGeneration) },
         )
+    } catch (_: AudioDecodeException.Cancelled) {
+        null
     } catch (e: AudioDecodeException) {
         Log.w(TAG, "Gapless preload skipped for ${request.fileName}: ${e.message}")
         null
@@ -293,7 +314,7 @@ internal class GaplessPreloadController(
         }
     }
 
-    private fun closeDecoderOffMainThread(decoder: PcmAudioDecoder) {
+    internal fun closeDecoderOffMainThread(decoder: PcmAudioDecoder) {
         if (releasedFlag.get()) {
             runCatching { decoder.close() }
             return

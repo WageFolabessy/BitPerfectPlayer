@@ -97,7 +97,9 @@ class AppContainer(context: Context) {
             fingerprintProvider = fingerprintProvider,
             foregroundPlaybackGate = foregroundPlaybackGate,
             diagnosticLogger = diagnosticLogger,
-        )
+        ).also { controller ->
+            albumArtworkLoader.bindPlaybackOpeningUriFlow(controller.openingTrackUri)
+        }
     }
     val playbackController: PlaybackController
         get() = playbackControllerLazy.value

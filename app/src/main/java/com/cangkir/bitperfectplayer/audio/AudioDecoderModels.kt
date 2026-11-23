@@ -51,6 +51,8 @@ sealed class AudioDecodeException(message: String, cause: Throwable? = null) : I
     class TransientCodecState(message: String, cause: Throwable? = null) : AudioDecodeException(message, cause)
 
     class DeadAudioTrack(message: String, cause: Throwable? = null) : AudioDecodeException(message, cause)
+
+    class Cancelled(message: String = "Audio decoder open cancelled", cause: Throwable? = null) : AudioDecodeException(message, cause)
 }
 
 /**
