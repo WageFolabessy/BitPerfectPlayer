@@ -182,4 +182,71 @@ class AudioSafetyControllerTest {
             AudioSafetyController.formatAutoPauseNotice(null),
         )
     }
+
+    @Test
+    fun onBecomingNoisy_withFallbackDevice_immediatelyUpdatesOutputPillAndClearsUsbMixerEvenInSafeMode() {
+        val controller = AudioSafetyController()
+        controller.syncInitialOutputDevice(
+            deviceName = "USB-Audio - Audio hs 2.0 headset",
+            isUsbAudio = true,
+            isHardwareVolumeVerified = false,
+        )
+        assertEquals(AudioOutputMode.SAFE_VOLUME_MODE, controller.state().mode)
+        assertTrue(controller.state().isUsbAudioConnected)
+
+        val cmd = controller.onBecomingNoisy(
+            fallbackDeviceName = "Internal Speaker",
+            fallbackIsUsbAudio = false,
+        )
+        assertEquals(SafetyEventType.AUTO_PAUSE, cmd.type)
+        assertEquals(AutoPauseReason.BECOMING_NOISY, cmd.autoPauseReason)
+        assertTrue(cmd.requiresClearPreferredMixerAttributes)
+
+        val updated = controller.state()
+        assertEquals(AudioOutputMode.SAFE_VOLUME_MODE, updated.mode)
+        assertEquals("Internal Speaker", updated.activeDeviceName)
+        assertFalse(updated.isUsbAudioConnected)
+    }
+
+    @Test
+    fun syncActiveOutputDeviceMetadata_refreshesDeviceLabelWithoutTriggeringSecondAutoPause() {
+        val controller = AudioSafetyController()
+        controller.syncInitialOutputDevice(
+            deviceName = "USB-Audio - Audio hs 2.0 headset",
+            isUsbAudio = true,
+        )
+        controller.syncActiveOutputDeviceMetadata(
+            deviceName = "Internal Speaker",
+            isUsbAudio = false,
+        )
+
+        val state = controller.state()
+        assertEquals("Internal Speaker", state.activeDeviceName)
+        assertFalse(state.isUsbAudioConnected)
+        assertEquals(null, state.lastAutoPauseReason)
+    }
+
+    @Test
+    fun wasBitPerfectModeFlag_capturesPreviousModeStrictlyAcrossSafetyTransitions() {
+        val controller = AudioSafetyController()
+        controller.syncInitialOutputDevice("USB DAC", isUsbAudio = true)
+
+        val safeNoisy = controller.onBecomingNoisy("Internal Speaker", fallbackIsUsbAudio = false)
+        assertFalse(safeNoisy.wasBitPerfectMode)
+
+        controller.requestBitPerfectMode()
+        controller.confirmBitPerfectWarning()
+        assertEquals(AudioOutputMode.BIT_PERFECT_OPT_IN, controller.state().mode)
+
+        val bpDisconnect = controller.onUsbDisconnected("Internal Speaker")
+        assertTrue(bpDisconnect.wasBitPerfectMode)
+
+        controller.requestBitPerfectMode()
+        controller.confirmBitPerfectWarning()
+        val bpSwitchSafe = controller.switchToSafeMode()
+        assertTrue(bpSwitchSafe.wasBitPerfectMode)
+
+        val safeRouteChange = controller.onOutputRouteChanged("Speaker", isUsbAudio = false)
+        assertFalse(safeRouteChange.wasBitPerfectMode)
+    }
 }

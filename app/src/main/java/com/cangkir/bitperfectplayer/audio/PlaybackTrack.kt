@@ -27,6 +27,7 @@ data class PlaybackTrack(
     val relativePath: String? = null,
     val discNumber: Int = 0,
     val trackNumber: Int = 0,
+    val year: Int = 0,
 ) {
     /**
      * Precomputed subtle non-redundant metadata line using exact Hz units (e.g., `FLAC · 24-bit · 96,000 Hz`).
@@ -51,7 +52,11 @@ data class PlaybackTrack(
     /**
      * Precomputed secondary artist/album line for smooth list scrolling.
      */
-    val artistAlbumLine: String = "$artist · $album"
+    val artistAlbumLine: String = run {
+        val cleanArtist = artist.trim().ifEmpty { "Unknown Artist" }
+        val cleanAlbum = album.trim().ifEmpty { "Unknown Album" }
+        "$cleanArtist · $cleanAlbum"
+    }
 
     /**
      * Precomputed concise track-position badge for Album detail rows (e.g., `"3"`, `"2·04"`),

@@ -202,4 +202,21 @@ class PlaybackQueueManagerTest {
         assertFalse(manager.moveItem(5, 0))
         assertEquals("T2", manager.currentItem)
     }
+
+    @Test
+    fun clear_resetsItemsAndActiveIndexWhilePreservingShuffleAndRepeatPreferences() {
+        val manager = PlaybackQueueManager<String>()
+        manager.setQueue(listOf("T1", "T2", "T3"), startIndex = 1)
+        manager.setShuffle(true, random = Random(11))
+        manager.setRepeatMode(RepeatMode.ALL)
+
+        val cleared = manager.clear()
+        assertTrue(cleared.isEmpty)
+        assertTrue(cleared.items.isEmpty())
+        assertTrue(cleared.entryIds.isEmpty())
+        assertEquals(-1, cleared.currentIndex)
+        assertNull(cleared.currentItem)
+        assertTrue(cleared.shuffleEnabled)
+        assertEquals(RepeatMode.ALL, cleared.repeatMode)
+    }
 }

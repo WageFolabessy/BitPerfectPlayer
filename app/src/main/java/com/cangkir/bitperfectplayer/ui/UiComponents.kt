@@ -1,14 +1,22 @@
 package com.cangkir.bitperfectplayer.ui
 
 import android.graphics.Bitmap
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -21,12 +29,17 @@ import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -37,16 +50,26 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChanged
+import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -56,17 +79,21 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.cangkir.bitperfectplayer.audio.AudioFormatFormatter
 import com.cangkir.bitperfectplayer.audio.AudioOutputMode
+import com.cangkir.bitperfectplayer.audio.AudioStartPathPolicy
+import com.cangkir.bitperfectplayer.audio.NotificationSubtitleFormatter
 import com.cangkir.bitperfectplayer.audio.PlaybackControllerState
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
+import com.cangkir.bitperfectplayer.audio.TrackTransitionStatePolicy
 import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
 import com.cangkir.bitperfectplayer.ui.theme.AmberIndicatedContainer
 import com.cangkir.bitperfectplayer.ui.theme.EmeraldSafeContainer
-import com.cangkir.bitperfectplayer.ui.theme.IcePrimaryContainer
 import com.cangkir.bitperfectplayer.ui.theme.OnAmberIndicatedContainer
 import com.cangkir.bitperfectplayer.ui.theme.OnEmeraldSafeContainer
-import com.cangkir.bitperfectplayer.ui.theme.OnIcePrimaryContainer
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
+
+const val MINI_PLAYER_BAR_TEST_TAG = "mini_player_bar"
 
 fun formatDurationMs(durationMs: Long): String = AudioFormatFormatter.formatDurationMs(durationMs)
 
@@ -146,6 +173,84 @@ fun TrackArtworkThumbnail(
                 tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
                 modifier = Modifier.size(iconSize),
             )
+        }
+    }
+}
+
+/**
+ * Consistent `Play All` + `Shuffle` + overflow action header shared by Album Detail,
+ * Folder Detail, Playlist Detail, and Most Played Detail screens.
+ */
+@Composable
+fun DetailActionHeaderRow(
+    hasTracks: Boolean,
+    onPlayAll: () -> Unit,
+    onShuffle: () -> Unit,
+    overflowContentDescription: String,
+    modifier: Modifier = Modifier,
+    overflowMenuItems: @Composable ColumnScope.(dismiss: () -> Unit) -> Unit,
+) {
+    var menuExpanded by remember { mutableStateOf(false) }
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, end = 6.dp, bottom = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Button(
+            onClick = onPlayAll,
+            enabled = hasTracks,
+            shape = RoundedCornerShape(24.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
+            ),
+            modifier = Modifier
+                .weight(1f)
+                .sizeIn(minHeight = 48.dp),
+        ) {
+            Icon(Icons.Filled.PlayArrow, contentDescription = null)
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("Play All", maxLines = 1, softWrap = false)
+        }
+        FilledTonalButton(
+            onClick = onShuffle,
+            enabled = hasTracks,
+            shape = RoundedCornerShape(24.dp),
+            colors = ButtonDefaults.filledTonalButtonColors(
+                containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                contentColor = MaterialTheme.colorScheme.onSurface,
+            ),
+            modifier = Modifier
+                .weight(1f)
+                .sizeIn(minHeight = 48.dp),
+        ) {
+            Icon(Icons.Filled.Shuffle, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("Shuffle", maxLines = 1, softWrap = false)
+        }
+        Box {
+            IconButton(
+                onClick = { menuExpanded = true },
+                enabled = hasTracks,
+                modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.MoreVert,
+                    contentDescription = overflowContentDescription,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (menuExpanded) {
+                DropdownMenu(
+                    expanded = true,
+                    onDismissRequest = { menuExpanded = false },
+                ) {
+                    overflowMenuItems { menuExpanded = false }
+                }
+            }
         }
     }
 }
@@ -240,8 +345,8 @@ fun AudioModeSegmentedSwitch(
                     .sizeIn(minHeight = 48.dp),
                 colors = if (!isSafe) {
                     ButtonDefaults.buttonColors(
-                        containerColor = if (isBitPerfectMixerActive) IcePrimaryContainer else AmberIndicatedContainer,
-                        contentColor = if (isBitPerfectMixerActive) OnIcePrimaryContainer else OnAmberIndicatedContainer,
+                        containerColor = if (isBitPerfectMixerActive) MaterialTheme.colorScheme.primary else AmberIndicatedContainer,
+                        contentColor = if (isBitPerfectMixerActive) MaterialTheme.colorScheme.onPrimary else OnAmberIndicatedContainer,
                     )
                 } else {
                     ButtonDefaults.textButtonColors(
@@ -262,12 +367,74 @@ fun AudioModeSegmentedSwitch(
 }
 
 /**
+ * Renders a single-line `Artist · Compact Audio Spec` row where long artist names ellipsize while
+ * the compact `kHz` audio specification (`FLAC 24-bit · 96 kHz`, `MP3 · 44.1 kHz`, etc.) stays
+ * pinned and unclipped on the right. Shared by [MiniPlayerBar] and [QueueScreen].
+ */
+@Composable
+fun PinnedArtistAudioSpecRow(artist: String, compactSpec: String, modifier: Modifier = Modifier) {
+    val cleanArtist = remember(artist) { artist.trim() }
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        when {
+            cleanArtist.isNotEmpty() && compactSpec.isNotEmpty() -> {
+                Text(
+                    text = cleanArtist,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                Text(
+                    text = " · $compactSpec",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    softWrap = false,
+                )
+            }
+            compactSpec.isNotEmpty() -> {
+                Text(
+                    text = compactSpec,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    softWrap = false,
+                )
+            }
+            else -> {
+                Text(
+                    text = cleanArtist.ifEmpty { NotificationSubtitleFormatter.UNKNOWN_ARTIST_LABEL },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+/**
  * Narrow leaf composable collecting 20 Hz playback progress so neither [MiniPlayerBar]'s content
  * nor host screens recompose during playback.
  */
 @Composable
-private fun MiniPlayerProgressBar(durationMs: Long, playbackPositionMsFlow: StateFlow<Long>) {
-    val currentPositionMs by playbackPositionMsFlow.collectAsStateWithLifecycle()
+private fun MiniPlayerProgressBar(
+    activeTrack: PlaybackTrack,
+    engineTrackUri: String?,
+    durationMs: Long,
+    playbackPositionMsFlow: StateFlow<Long>,
+) {
+    val livePositionMs by playbackPositionMsFlow.collectAsStateWithLifecycle()
+    val currentPositionMs = TrackTransitionStatePolicy.resolveDisplayPositionMs(
+        activeTrack = activeTrack,
+        engineTrackUri = engineTrackUri,
+        livePositionMs = livePositionMs,
+    )
     val progress = if (durationMs > 0L) {
         (currentPositionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
     } else {
@@ -284,7 +451,8 @@ private fun MiniPlayerProgressBar(durationMs: Long, playbackPositionMsFlow: Stat
 }
 
 /**
- * Minimalist persistent bottom mini-player bar with local album art thumbnail and >= 48 dp targets.
+ * Minimalist persistent bottom mini-player bar with local album art thumbnail, `>= 48 dp` targets,
+ * and right-to-left swipe-to-dismiss (stopping playback and clearing the active Now Playing session).
  */
 @Composable
 fun MiniPlayerBar(
@@ -295,11 +463,200 @@ fun MiniPlayerBar(
     onTogglePlayPause: () -> Unit,
     onNext: () -> Unit,
     modifier: Modifier = Modifier,
+    onDismissPlayback: () -> Unit = {},
 ) {
     val track = playbackState.activeTrack ?: return
+    val currentOnOpenNowPlaying by rememberUpdatedState(onOpenNowPlaying)
+    val currentOnDismissPlayback by rememberUpdatedState(onDismissPlayback)
+    val coroutineScope = rememberCoroutineScope()
+    val density = LocalDensity.current
+    val minDismissThresholdPx = with(density) { MiniPlayerSwipeMath.MIN_DISMISS_THRESHOLD_DP.dp.toPx() }
+    val maxDismissThresholdPx = with(density) { MiniPlayerSwipeMath.MAX_DISMISS_THRESHOLD_DP.dp.toPx() }
+    val flingVelocityThresholdPxPerSec =
+        with(density) { MiniPlayerSwipeMath.FLING_VELOCITY_THRESHOLD_DP_PER_SEC.dp.toPx() }
+    val minFlingDragPx = with(density) { MiniPlayerSwipeMath.MIN_FLING_DRAG_DP.dp.toPx() }
+    val swipeUpOpenThresholdPx = with(density) { MiniPlayerSwipeMath.UPWARD_OPEN_THRESHOLD_DP.dp.toPx() }
+
+    var containerWidthPx by remember { mutableFloatStateOf(0f) }
+    var isDismissing by remember(track.uriString) { mutableStateOf(false) }
+    val translationX = remember { Animatable(0f) }
+    LaunchedEffect(track.uriString) {
+        translationX.snapTo(0f)
+        isDismissing = false
+    }
+    val dismissThresholdPx = MiniPlayerSwipeMath.computeDismissThresholdPx(
+        containerWidthPx = containerWidthPx,
+        minThresholdPx = minDismissThresholdPx,
+        maxThresholdPx = maxDismissThresholdPx,
+    )
+
+    val engineTrackUri = playbackState.engineState.activeTrackUri?.toString()
+    val diagnosticsMatchTrack = TrackTransitionStatePolicy.isEngineSyncedToActiveTrack(
+        activeTrack = track,
+        engineTrackUri = engineTrackUri,
+        engineStatus = playbackState.engineState.status,
+    )
+    val runtimeSourceSampleRateHz = if (diagnosticsMatchTrack) playbackState.engineState.diagnostics.sourceSampleRateHz else 0
+    val runtimeSourceBitDepth = if (diagnosticsMatchTrack) playbackState.engineState.diagnostics.sourceBitDepth else null
+    val compactSpec = remember(
+        track.container,
+        track.codec,
+        track.bitDepth,
+        track.sampleRateHz,
+        runtimeSourceSampleRateHz,
+        runtimeSourceBitDepth,
+    ) {
+        NotificationSubtitleFormatter.formatAudioSpec(
+            track = track,
+            runtimeSampleRateHz = runtimeSourceSampleRateHz,
+            runtimeBitDepth = runtimeSourceBitDepth,
+        )
+    }
 
     Surface(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag(MINI_PLAYER_BAR_TEST_TAG)
+            .onSizeChanged { containerWidthPx = it.width.toFloat() }
+            .pointerInput(
+                track.uriString,
+                minDismissThresholdPx,
+                maxDismissThresholdPx,
+                flingVelocityThresholdPxPerSec,
+                minFlingDragPx,
+                swipeUpOpenThresholdPx,
+            ) {
+                val touchSlop = viewConfiguration.touchSlop
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    if (isDismissing) return@awaitEachGesture
+                    val pointerId = down.id
+                    val velocityTracker = VelocityTracker()
+                    velocityTracker.addPosition(down.uptimeMillis, down.position)
+
+                    var prevPos = down.position
+                    var totalDx = 0f
+                    var totalDy = 0f
+                    var rawDragX = 0f
+                    var horizontalLocked = false
+                    var verticalLocked = false
+                    var gestureAborted = false
+                    var dragEnded = false
+
+                    while (!dragEnded && !gestureAborted) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull { it.id == pointerId } ?: event.changes.firstOrNull()
+                        if (change == null || !change.pressed) {
+                            dragEnded = true
+                        } else {
+                            velocityTracker.addPosition(change.uptimeMillis, change.position)
+                            val stepDx = change.position.x - prevPos.x
+                            val stepDy = change.position.y - prevPos.y
+                            prevPos = change.position
+                            totalDx += stepDx
+                            totalDy += stepDy
+
+                            if (!horizontalLocked && !verticalLocked) {
+                                when {
+                                    change.isConsumed -> gestureAborted = true
+                                    MiniPlayerSwipeMath.shouldAbortForVerticalDrag(totalDx, totalDy, touchSlop) -> {
+                                        verticalLocked = true
+                                        if (totalDy < 0f && change.positionChanged()) {
+                                            change.consume()
+                                        }
+                                    }
+                                    MiniPlayerSwipeMath.shouldLockHorizontalDrag(totalDx, totalDy, touchSlop) -> {
+                                        horizontalLocked = true
+                                        rawDragX = totalDx
+                                        if (change.positionChanged()) {
+                                            change.consume()
+                                        }
+                                        val clamped = MiniPlayerSwipeMath.clampLeftwardTranslationPx(
+                                            rawDragX = rawDragX,
+                                            containerWidthPx = size.width.toFloat(),
+                                        )
+                                        coroutineScope.launch { translationX.snapTo(clamped) }
+                                    }
+                                }
+                            } else if (verticalLocked) {
+                                if (totalDy < 0f && change.positionChanged()) {
+                                    change.consume()
+                                }
+                            } else {
+                                rawDragX += stepDx
+                                if (change.positionChanged()) {
+                                    change.consume()
+                                }
+                                val clamped = MiniPlayerSwipeMath.clampLeftwardTranslationPx(
+                                    rawDragX = rawDragX,
+                                    containerWidthPx = size.width.toFloat(),
+                                )
+                                coroutineScope.launch { translationX.snapTo(clamped) }
+                            }
+                        }
+                    }
+
+                    if (verticalLocked && !gestureAborted) {
+                        if (
+                            MiniPlayerSwipeMath.shouldTriggerSwipeUpToOpen(
+                                totalDxPx = totalDx,
+                                totalDyPx = totalDy,
+                                openThresholdPx = swipeUpOpenThresholdPx,
+                            )
+                        ) {
+                            currentOnOpenNowPlaying()
+                        }
+                    } else if (horizontalLocked && !gestureAborted) {
+                        val effectiveThresholdPx = MiniPlayerSwipeMath.computeDismissThresholdPx(
+                            containerWidthPx = size.width.toFloat(),
+                            minThresholdPx = minDismissThresholdPx,
+                            maxThresholdPx = maxDismissThresholdPx,
+                        )
+                        val velocityX = velocityTracker.calculateVelocity().x
+                        val shouldDismiss = MiniPlayerSwipeMath.shouldDismissOnRelease(
+                            totalDragX = rawDragX,
+                            velocityXPxPerSec = velocityX,
+                            dismissThresholdPx = effectiveThresholdPx,
+                            flingVelocityThresholdPxPerSec = flingVelocityThresholdPxPerSec,
+                            minFlingDragPx = minFlingDragPx,
+                        )
+                        if (shouldDismiss) {
+                            isDismissing = true
+                            val targetOffscreenX = -size.width.toFloat().coerceAtLeast(1f)
+                            coroutineScope.launch {
+                                try {
+                                    translationX.animateTo(
+                                        targetValue = targetOffscreenX,
+                                        animationSpec = tween(durationMillis = 140, easing = FastOutSlowInEasing),
+                                    )
+                                    currentOnDismissPlayback()
+                                } finally {
+                                    isDismissing = false
+                                }
+                            }
+                        } else {
+                            coroutineScope.launch {
+                                translationX.animateTo(
+                                    targetValue = 0f,
+                                    animationSpec = spring(
+                                        dampingRatio = Spring.DampingRatioNoBouncy,
+                                        stiffness = Spring.StiffnessMediumLow,
+                                    ),
+                                )
+                            }
+                        }
+                    } else if (translationX.value != 0f) {
+                        coroutineScope.launch { translationX.snapTo(0f) }
+                    }
+                }
+            }
+            .graphicsLayer {
+                this.translationX = translationX.value
+                this.alpha = MiniPlayerSwipeMath.computeAlpha(
+                    translationX = translationX.value,
+                    dismissThresholdPx = dismissThresholdPx,
+                )
+            },
         color = MaterialTheme.colorScheme.surfaceVariant,
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
@@ -308,13 +665,15 @@ fun MiniPlayerBar(
                 color = MaterialTheme.colorScheme.outline.copy(alpha = 0.6f),
             )
             MiniPlayerProgressBar(
+                activeTrack = track,
+                engineTrackUri = engineTrackUri,
                 durationMs = playbackState.durationMs,
                 playbackPositionMsFlow = playbackPositionMsFlow,
             )
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable(onClick = onOpenNowPlaying)
+                    .clickable(enabled = !isDismissing, onClick = onOpenNowPlaying)
                     .semantics { contentDescription = "Open Now Playing for ${track.title}" }
                     .padding(start = 14.dp, end = 6.dp, top = 8.dp, bottom = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -342,28 +701,40 @@ fun MiniPlayerBar(
                             overflow = TextOverflow.Ellipsis,
                         )
                         Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = "${track.artist} · ${track.formatBadge}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
+                        PinnedArtistAudioSpecRow(
+                            artist = track.artist,
+                            compactSpec = compactSpec,
                         )
                     }
                 }
 
-                Spacer(modifier = Modifier.width(4.dp))
+                Spacer(modifier = Modifier.width(6.dp))
 
-                IconButton(
-                    onClick = onTogglePlayPause,
+                val showPreparingIndicator = rememberDelayedPreparingIndicator(playbackState.isPreparingPlayback)
+                Box(
                     modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
+                    contentAlignment = Alignment.Center,
                 ) {
-                    Icon(
-                        imageVector = if (playbackState.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                        contentDescription = if (playbackState.isPlaying) "Pause playback" else "Resume playback",
-                        tint = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.size(26.dp),
-                    )
+                    if (showPreparingIndicator) {
+                        CircularProgressIndicator(
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier
+                                .size(38.dp)
+                                .semantics { contentDescription = "Preparing playback" },
+                        )
+                    }
+                    IconButton(
+                        onClick = onTogglePlayPause,
+                        modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
+                    ) {
+                        Icon(
+                            imageVector = if (playbackState.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                            contentDescription = if (playbackState.isPlaying) "Pause playback" else "Resume playback",
+                            tint = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(26.dp),
+                        )
+                    }
                 }
 
                 IconButton(
@@ -380,4 +751,19 @@ fun MiniPlayerBar(
             }
         }
     }
+}
+
+@Composable
+internal fun rememberDelayedPreparingIndicator(isPreparingPlayback: Boolean): Boolean {
+    var visible by remember { mutableStateOf(false) }
+    LaunchedEffect(isPreparingPlayback) {
+        if (!isPreparingPlayback) {
+            visible = false
+        } else {
+            visible = false
+            delay(AudioStartPathPolicy.PREPARING_INDICATOR_DELAY_MS)
+            visible = true
+        }
+    }
+    return visible
 }

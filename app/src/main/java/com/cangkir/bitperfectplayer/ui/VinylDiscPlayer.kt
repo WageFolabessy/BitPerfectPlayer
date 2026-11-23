@@ -59,10 +59,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
 import com.cangkir.bitperfectplayer.audio.VinylScrubMath
 import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
-import com.cangkir.bitperfectplayer.ui.theme.IcePrimary
-import com.cangkir.bitperfectplayer.ui.theme.ObsidianSurfaceVariant
-import com.cangkir.bitperfectplayer.ui.theme.TextPrimary
-import com.cangkir.bitperfectplayer.ui.theme.TextSecondary
+import com.cangkir.bitperfectplayer.library.ArtistDetailHelper
+import com.cangkir.bitperfectplayer.library.EmbeddedArtworkSlot
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.roundToLong
@@ -212,6 +210,20 @@ fun InteractiveVinylDisc(
                     val downDx = down.position.x - centerX
                     val downDy = down.position.y - centerY
                     if (!VinylScrubMath.isWithinScrubRing(downDx, downDy, outerRadiusPx, innerDeadZonePx)) {
+                        if (downDx * downDx + downDy * downDy <= outerRadiusPx * outerRadiusPx) {
+                            down.consume()
+                            var spindleHeld = true
+                            while (spindleHeld) {
+                                val event = awaitPointerEvent()
+                                val change = event.changes.firstOrNull { it.id == down.id }
+                                if (change == null || !change.pressed) {
+                                    change?.consume()
+                                    spindleHeld = false
+                                } else if (change.position != change.previousPosition) {
+                                    change.consume()
+                                }
+                            }
+                        }
                         return@awaitEachGesture
                     }
 
@@ -716,37 +728,101 @@ private fun VinylStationarySheenCanvas(modifier: Modifier = Modifier) {
 
 @Composable
 private fun VinylCircularArtwork(track: PlaybackTrack, artworkLoader: AlbumArtworkLoader, modifier: Modifier = Modifier) {
-    val targetSizePx = AlbumArtworkLoader.HERO_SIZE_PX
-    val cacheIdentity = remember(track.uriString, track.album, track.artist, track.dateModifiedSeconds, targetSizePx) {
-        artworkLoader.memoryKeyFor(track, targetSizePx)
+    val discTargetSizePx = AlbumArtworkLoader.DISC_SIZE_PX
+    val heroTargetSizePx = AlbumArtworkLoader.HERO_SIZE_PX
+    val discKey = remember(
+        track.uriString,
+        track.artist,
+        track.album,
+        track.discNumber,
+        track.parentTreeUriString,
+        track.folderName,
+        track.dateModifiedSeconds,
+        track.fileSizeBytes,
+        discTargetSizePx,
+    ) {
+        artworkLoader.slotCacheKeyFor(track, EmbeddedArtworkSlot.DISC, discTargetSizePx)
     }
-    var bitmap by remember(cacheIdentity) {
-        mutableStateOf<Bitmap?>(artworkLoader.getCachedFromMemory(track, targetSizePx))
+    val frontKey = remember(
+        track.uriString,
+        track.album,
+        track.artist,
+        track.parentTreeUriString,
+        track.folderName,
+        track.dateModifiedSeconds,
+        track.fileSizeBytes,
+        heroTargetSizePx,
+    ) {
+        artworkLoader.memoryKeyFor(track, heroTargetSizePx)
+    }
+    val discSupported = remember(track.fileName, track.mimeType) {
+        ArtistDetailHelper.supportsEmbeddedMultiArtwork(track)
+    }
+    var discBitmap by remember(discKey) {
+        mutableStateOf<Bitmap?>(
+            artworkLoader.getCachedTrackSlotBitmap(track, EmbeddedArtworkSlot.DISC, discTargetSizePx),
+        )
+    }
+    var discLookupCompleted by remember(discKey) {
+        mutableStateOf(
+            !discSupported ||
+                discBitmap != null ||
+                artworkLoader.isTrackSlotKnownMissing(track, EmbeddedArtworkSlot.DISC, discTargetSizePx),
+        )
+    }
+    var frontBitmap by remember(frontKey) {
+        mutableStateOf<Bitmap?>(
+            if (discLookupCompleted && discBitmap == null) {
+                artworkLoader.getCachedFromMemory(track, heroTargetSizePx)
+            } else {
+                null
+            },
+        )
     }
 
-    LaunchedEffect(cacheIdentity) {
-        if (bitmap == null) {
-            bitmap = artworkLoader.loadArtwork(track, targetSizePx)
+    LaunchedEffect(track.uriString, discKey, frontKey) {
+        if (!discLookupCompleted) {
+            discBitmap = artworkLoader.loadTrackSlotBitmap(
+                track = track,
+                slot = EmbeddedArtworkSlot.DISC,
+                targetSizePx = discTargetSizePx,
+            )
+            discLookupCompleted = true
+        }
+        if (discBitmap == null && frontBitmap == null) {
+            frontBitmap = artworkLoader.getCachedFromMemory(track, heroTargetSizePx)
+                ?: artworkLoader.loadArtwork(track, heroTargetSizePx)
         }
     }
 
     Box(
         modifier = modifier
             .clip(CircleShape)
-            .background(ObsidianSurfaceVariant)
+            .background(if (!discLookupCompleted) VinylBaseInner else MaterialTheme.colorScheme.surfaceVariant)
             .border(width = 1.dp, color = VinylArtworkBorder, shape = CircleShape),
         contentAlignment = Alignment.Center,
     ) {
-        val currentBitmap = bitmap
-        val imageBitmap = remember(currentBitmap) {
-            if (currentBitmap != null && !currentBitmap.isRecycled) currentBitmap.asImageBitmap() else null
+        val displayedBitmap = if (!discLookupCompleted) null else discBitmap ?: frontBitmap
+        val imageBitmap = remember(displayedBitmap) {
+            if (displayedBitmap != null && !displayedBitmap.isRecycled) displayedBitmap.asImageBitmap() else null
         }
-        if (imageBitmap != null) {
+        if (!discLookupCompleted) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(VinylBaseInner)
+                    .semantics { contentDescription = "Loading disc artwork for ${track.title}" },
+            )
+        } else if (imageBitmap != null) {
             // Option B: Preserve the authentic circular vinyl center label using uniform,
-            // distortion-free center-fill over the aspect-preserved bitmap from AlbumArtworkLoader.
+            // distortion-free center-fill over embedded Disc art (preferred) or Front Cover fallback.
             Image(
                 bitmap = imageBitmap,
-                contentDescription = "Album art for ${track.title}",
+                contentDescription = if (discBitmap != null) {
+                    "Disc artwork for ${track.title}"
+                } else {
+                    "Album art for ${track.title}"
+                },
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
             )
@@ -801,7 +877,7 @@ private fun VinylScrubPillLeaf(
                 text = formatDurationMs(displayMs),
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.SemiBold,
-                color = TextPrimary,
+                color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
                 softWrap = false,
             )
@@ -809,7 +885,7 @@ private fun VinylScrubPillLeaf(
                 text = VinylScrubMath.formatSignedDeltaMs(deltaMs),
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.Medium,
-                color = IcePrimary,
+                color = MaterialTheme.colorScheme.primary,
                 maxLines = 1,
                 softWrap = false,
             )
@@ -818,7 +894,7 @@ private fun VinylScrubPillLeaf(
                     text = VinylScrubMath.formatPlaybackRateBadge(liveSpeed),
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.SemiBold,
-                    color = TextSecondary,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     softWrap = false,
                 )

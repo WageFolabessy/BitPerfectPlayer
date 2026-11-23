@@ -23,6 +23,7 @@ import com.cangkir.bitperfectplayer.data.CachedTrackSourceKind
 import com.cangkir.bitperfectplayer.data.FavoriteTrackRecord
 import com.cangkir.bitperfectplayer.data.LocalPersistenceRepository
 import com.cangkir.bitperfectplayer.data.TrackPositionBackfill
+import com.cangkir.bitperfectplayer.data.TrackYearBackfill
 import com.cangkir.bitperfectplayer.data.UserPreferences
 import com.cangkir.bitperfectplayer.data.UserPreferencesRepository
 import com.cangkir.bitperfectplayer.data.toCachedEntity
@@ -141,18 +142,26 @@ class LocalLibraryRepository(
         val scannedSources: Set<CachedTrackSourceKind>,
     )
 
-    private data class SyncMutations(val entitiesToUpsert: List<CachedTrackEntity>, val positionBackfills: List<TrackPositionBackfill>)
+    private data class SyncMutations(
+        val entitiesToUpsert: List<CachedTrackEntity>,
+        val positionBackfills: List<TrackPositionBackfill>,
+        val yearBackfills: List<TrackYearBackfill>,
+    )
 
     /**
      * Runs an incremental background library synchronization without ever clearing the displayed
      * track list. Only newly added or modified (`size` / `dateModified`) files incur metadata parsing.
+     *
+     * Also automatically backfills missing release years (`year == 0`, e.g., after upgrading from
+     * `v1.2` Room v4 -> v5) across both MediaStore and SAF tracks via cursor tags, fast FLAC/ID3v2
+     * header reads, and `MediaMetadataRetriever` fallback.
      */
-    suspend fun refreshLibrary() = withContext(Dispatchers.IO) {
+    suspend fun refreshLibrary(forceYearBackfill: Boolean = false) = withContext(Dispatchers.IO) {
         syncMutex.withLock {
             isScanning.value = true
             scanWarning.value = null
             try {
-                syncLibraryOnceLocked()
+                syncLibraryOnceLocked(forceYearBackfill = forceYearBackfill)
             } catch (ce: CancellationException) {
                 throw ce
             } catch (e: IOException) {
@@ -171,7 +180,7 @@ class LocalLibraryRepository(
         }
     }
 
-    private suspend fun syncLibraryOnceLocked() {
+    private suspend fun syncLibraryOnceLocked(forceYearBackfill: Boolean) {
         val cachedEntities = persistenceRepository.getAllCachedTracks()
         val cachedByUri = cachedEntities.associateBy { it.uriString }
         val cachedSignatures = cachedEntities.map { entity ->
@@ -182,7 +191,11 @@ class LocalLibraryRepository(
         }
 
         val prefs = runCatching { preferencesRepository.getSnapshot() }.getOrNull()
+        val backfillMask = runCatching { preferencesRepository.getYearBackfillMask() }.getOrDefault(0)
         val discovered = discoverLibrarySnapshot(prefs)
+        val deepMediaStoreYearBackfill = forceYearBackfill || (backfillMask and YEAR_BACKFILL_BIT_MEDIA_STORE) == 0
+        val deepSafYearBackfill = forceYearBackfill || (backfillMask and YEAR_BACKFILL_BIT_SAF) == 0
+
         val plan = LibrarySyncDiffer.computePlan(
             cached = cachedSignatures,
             discovered = discovered.signatures,
@@ -193,6 +206,8 @@ class LocalLibraryRepository(
             cachedByUri = cachedByUri,
             toParseUris = plan.toParseUris,
             nowEpoch = System.currentTimeMillis(),
+            deepMediaStoreYearBackfill = deepMediaStoreYearBackfill,
+            deepSafYearBackfill = deepSafYearBackfill,
         )
 
         if (mutations.entitiesToUpsert.isNotEmpty()) {
@@ -201,8 +216,19 @@ class LocalLibraryRepository(
         if (mutations.positionBackfills.isNotEmpty()) {
             persistenceRepository.backfillCachedTrackPositions(mutations.positionBackfills)
         }
+        if (mutations.yearBackfills.isNotEmpty()) {
+            persistenceRepository.backfillCachedTrackYears(mutations.yearBackfills)
+        }
         if (plan.toPruneUris.isNotEmpty()) {
             persistenceRepository.deleteCachedTracksByUris(plan.toPruneUris)
+        }
+
+        if (discovered.mediaStorePass.permissionGranted && (backfillMask and YEAR_BACKFILL_BIT_MEDIA_STORE) == 0) {
+            runCatching { preferencesRepository.markYearBackfillBit(YEAR_BACKFILL_BIT_MEDIA_STORE) }
+        }
+        val hasSafDiscovered = discovered.safTreeEntries.isNotEmpty() || discovered.safFileEntries.isNotEmpty()
+        if (hasSafDiscovered && (backfillMask and YEAR_BACKFILL_BIT_SAF) == 0) {
+            runCatching { preferencesRepository.markYearBackfillBit(YEAR_BACKFILL_BIT_SAF) }
         }
     }
 
@@ -267,9 +293,12 @@ class LocalLibraryRepository(
         cachedByUri: Map<String, CachedTrackEntity>,
         toParseUris: Set<String>,
         nowEpoch: Long,
+        deepMediaStoreYearBackfill: Boolean,
+        deepSafYearBackfill: Boolean,
     ): SyncMutations {
         val entitiesToUpsert = mutableListOf<CachedTrackEntity>()
         val positionBackfills = mutableListOf<TrackPositionBackfill>()
+        val yearBackfills = mutableListOf<TrackYearBackfill>()
 
         for (candidate in discovered.mediaStorePass.candidates) {
             val existing = cachedByUri[candidate.uriString]
@@ -278,22 +307,14 @@ class LocalLibraryRepository(
                     parseMediaStoreCandidate(candidate, existingFingerprint = existing?.contentFingerprint)
                         .toCachedEntity(CachedTrackSourceKind.MEDIA_STORE, nowEpoch),
                 )
-            } else if (existing != null && existing.discNumber == 0 && existing.trackNumber == 0) {
-                val resolved = TrackNumberParser.resolve(
-                    mediaStorePackedTrack = candidate.packedTrack,
-                    trackNumberTag = candidate.cdTrackNumber,
-                    discNumberTag = candidate.discNumber,
-                    fileName = candidate.displayName,
+            } else if (existing != null) {
+                collectExistingMediaStoreBackfills(
+                    candidate = candidate,
+                    existing = existing,
+                    deepYearBackfill = deepMediaStoreYearBackfill,
+                    positionBackfills = positionBackfills,
+                    yearBackfills = yearBackfills,
                 )
-                if (resolved.hasPosition) {
-                    positionBackfills.add(
-                        TrackPositionBackfill(
-                            uriString = candidate.uriString,
-                            discNumber = resolved.discNumber,
-                            trackNumber = resolved.trackNumber,
-                        ),
-                    )
-                }
             }
         }
 
@@ -303,8 +324,10 @@ class LocalLibraryRepository(
             cachedByUri = cachedByUri,
             toParseUris = toParseUris,
             nowEpoch = nowEpoch,
+            deepYearBackfill = deepSafYearBackfill,
             entitiesToUpsert = entitiesToUpsert,
             positionBackfills = positionBackfills,
+            yearBackfills = yearBackfills,
         )
         collectSafSyncMutations(
             entries = discovered.safFileEntries,
@@ -312,11 +335,57 @@ class LocalLibraryRepository(
             cachedByUri = cachedByUri,
             toParseUris = toParseUris,
             nowEpoch = nowEpoch,
+            deepYearBackfill = deepSafYearBackfill,
             entitiesToUpsert = entitiesToUpsert,
             positionBackfills = positionBackfills,
+            yearBackfills = yearBackfills,
         )
 
-        return SyncMutations(entitiesToUpsert = entitiesToUpsert, positionBackfills = positionBackfills)
+        return SyncMutations(
+            entitiesToUpsert = entitiesToUpsert,
+            positionBackfills = positionBackfills,
+            yearBackfills = yearBackfills,
+        )
+    }
+
+    private fun collectExistingMediaStoreBackfills(
+        candidate: RawMediaStoreCandidate,
+        existing: CachedTrackEntity,
+        deepYearBackfill: Boolean,
+        positionBackfills: MutableList<TrackPositionBackfill>,
+        yearBackfills: MutableList<TrackYearBackfill>,
+    ) {
+        if (existing.discNumber == 0 && existing.trackNumber == 0) {
+            val resolved = TrackNumberParser.resolve(
+                mediaStorePackedTrack = candidate.packedTrack,
+                trackNumberTag = candidate.cdTrackNumber,
+                discNumberTag = candidate.discNumber,
+                fileName = candidate.displayName,
+            )
+            if (resolved.hasPosition) {
+                positionBackfills.add(
+                    TrackPositionBackfill(
+                        uriString = candidate.uriString,
+                        discNumber = resolved.discNumber,
+                        trackNumber = resolved.trackNumber,
+                    ),
+                )
+            }
+        }
+        if (ReleaseYearParser.sanitizeYear(existing.year) == 0) {
+            val resolvedYear = candidate.year.takeIf { it > 0 } ?: if (deepYearBackfill) {
+                metadataReader.readReleaseYearFallback(
+                    uri = candidate.uri,
+                    fileName = candidate.displayName,
+                    mimeType = candidate.mimeType,
+                )
+            } else {
+                0
+            }
+            if (resolvedYear > 0) {
+                yearBackfills.add(TrackYearBackfill(uriString = candidate.uriString, year = resolvedYear))
+            }
+        }
     }
 
     private fun collectSafSyncMutations(
@@ -325,8 +394,10 @@ class LocalLibraryRepository(
         cachedByUri: Map<String, CachedTrackEntity>,
         toParseUris: Set<String>,
         nowEpoch: Long,
+        deepYearBackfill: Boolean,
         entitiesToUpsert: MutableList<CachedTrackEntity>,
         positionBackfills: MutableList<TrackPositionBackfill>,
+        yearBackfills: MutableList<TrackYearBackfill>,
     ) {
         for (entry in entries) {
             val existing = cachedByUri[entry.uriString]
@@ -335,16 +406,28 @@ class LocalLibraryRepository(
                     parseSafEntry(entry, existingFingerprint = existing?.contentFingerprint)
                         .toCachedEntity(sourceKind, nowEpoch),
                 )
-            } else if (existing != null && existing.discNumber == 0 && existing.trackNumber == 0) {
-                val resolved = TrackNumberParser.parseFilenamePosition(entry.fileName)
-                if (resolved.hasPosition) {
-                    positionBackfills.add(
-                        TrackPositionBackfill(
-                            uriString = entry.uriString,
-                            discNumber = resolved.discNumber,
-                            trackNumber = resolved.trackNumber,
-                        ),
+            } else if (existing != null) {
+                if (existing.discNumber == 0 && existing.trackNumber == 0) {
+                    val resolved = TrackNumberParser.parseFilenamePosition(entry.fileName)
+                    if (resolved.hasPosition) {
+                        positionBackfills.add(
+                            TrackPositionBackfill(
+                                uriString = entry.uriString,
+                                discNumber = resolved.discNumber,
+                                trackNumber = resolved.trackNumber,
+                            ),
+                        )
+                    }
+                }
+                if (deepYearBackfill && ReleaseYearParser.sanitizeYear(existing.year) == 0) {
+                    val resolvedYear = metadataReader.readReleaseYearFallback(
+                        uri = entry.uri,
+                        fileName = entry.fileName,
+                        mimeType = entry.mimeType,
                     )
+                    if (resolvedYear > 0) {
+                        yearBackfills.add(TrackYearBackfill(uriString = entry.uriString, year = resolvedYear))
+                    }
                 }
             }
         }
@@ -473,6 +556,7 @@ class LocalLibraryRepository(
         val packedTrack: Int,
         val cdTrackNumber: String?,
         val discNumber: String?,
+        val year: Int,
         val folderName: String,
         val relativePath: String?,
     )
@@ -505,6 +589,7 @@ class LocalLibraryRepository(
         val artist = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST)
         val album = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM)
         val track = cursor.getColumnIndex(MediaStore.Audio.Media.TRACK)
+        val year = cursor.getColumnIndex(MediaStore.Audio.Media.YEAR)
         val cdTrack = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             cursor.getColumnIndex(MediaStore.Audio.Media.CD_TRACK_NUMBER)
         } else {
@@ -582,6 +667,7 @@ class LocalLibraryRepository(
         add(MediaStore.Audio.Media.ARTIST)
         add(MediaStore.Audio.Media.ALBUM)
         add(MediaStore.Audio.Media.TRACK)
+        add(MediaStore.Audio.Media.YEAR)
         add(MediaStore.Audio.Media.DURATION)
         add(MediaStore.Audio.Media.SIZE)
         add(MediaStore.Audio.Media.DATE_MODIFIED)
@@ -649,6 +735,7 @@ class LocalLibraryRepository(
         )
         val folderName = resolveMediaStoreFolderName(bucketName, relativePath, legacyDataPath)
         val packedTrack = if (cols.track >= 0 && !cursor.isNull(cols.track)) cursor.getInt(cols.track) else 0
+        val rawYear = if (cols.year >= 0 && !cursor.isNull(cols.year)) cursor.getInt(cols.year) else 0
 
         return RawMediaStoreCandidate(
             uri = contentUri,
@@ -665,6 +752,7 @@ class LocalLibraryRepository(
             packedTrack = packedTrack,
             cdTrackNumber = cursor.getNonNullTrimmedStringOrNull(cols.cdTrack),
             discNumber = cursor.getNonNullTrimmedStringOrNull(cols.disc),
+            year = ReleaseYearParser.sanitizeYear(rawYear),
             folderName = folderName,
             relativePath = relativePath,
         )
@@ -699,6 +787,7 @@ class LocalLibraryRepository(
             cursorPackedTrack = candidate.packedTrack,
             cursorCdTrackNumber = candidate.cdTrackNumber,
             cursorDiscNumber = candidate.discNumber,
+            cursorYear = candidate.year,
         )
 
         return PlaybackTrack(
@@ -720,6 +809,7 @@ class LocalLibraryRepository(
             relativePath = candidate.relativePath,
             discNumber = meta.discNumber,
             trackNumber = meta.trackNumber,
+            year = meta.year,
         )
     }
 
@@ -815,10 +905,13 @@ class LocalLibraryRepository(
             parentTreeUriString = entry.parentTreeUriString,
             discNumber = meta.discNumber,
             trackNumber = meta.trackNumber,
+            year = meta.year,
         )
     }
 
     companion object {
         private const val MAX_SAF_TRAVERSAL_DEPTH = 8
+        private const val YEAR_BACKFILL_BIT_MEDIA_STORE = 1 shl 0
+        private const val YEAR_BACKFILL_BIT_SAF = 1 shl 1
     }
 }

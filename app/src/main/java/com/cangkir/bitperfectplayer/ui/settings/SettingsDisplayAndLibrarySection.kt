@@ -50,10 +50,8 @@ import androidx.compose.ui.unit.dp
 import com.cangkir.bitperfectplayer.data.DefaultHomepage
 import com.cangkir.bitperfectplayer.data.NowPlayingArtworkStyle
 import com.cangkir.bitperfectplayer.data.SpectrumColorStyle
-import com.cangkir.bitperfectplayer.ui.theme.IcePrimary
-import com.cangkir.bitperfectplayer.ui.theme.IcePrimaryContainer
-import com.cangkir.bitperfectplayer.ui.theme.OnIcePrimaryContainer
 import com.cangkir.bitperfectplayer.ui.theme.TextMuted
+import com.cangkir.bitperfectplayer.ui.theme.studioSwitchColors
 
 @Composable
 internal fun SettingsDisplaySection(
@@ -67,6 +65,8 @@ internal fun SettingsDisplaySection(
     onSetSpectrumColorStyle: (SpectrumColorStyle) -> Unit,
     spectrumSparksEnabled: Boolean,
     onSetSpectrumSparksEnabled: (Boolean) -> Unit,
+    dynamicCoverThemeEnabled: Boolean,
+    onSetDynamicCoverThemeEnabled: (Boolean) -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         SettingsSectionHeader("DISPLAY")
@@ -159,8 +159,8 @@ internal fun SettingsDisplaySection(
                                     .sizeIn(minHeight = 48.dp),
                                 colors = if (selected) {
                                     ButtonDefaults.buttonColors(
-                                        containerColor = IcePrimaryContainer,
-                                        contentColor = OnIcePrimaryContainer,
+                                        containerColor = MaterialTheme.colorScheme.primary,
+                                        contentColor = MaterialTheme.colorScheme.onPrimary,
                                     )
                                 } else {
                                     ButtonDefaults.textButtonColors(
@@ -208,6 +208,7 @@ internal fun SettingsDisplaySection(
                 Switch(
                     checked = spectrumVisualizerEnabled,
                     onCheckedChange = onSetSpectrumVisualizerEnabled,
+                    colors = studioSwitchColors(),
                     modifier = Modifier.semantics {
                         contentDescription = "Toggle spectrum visualizer"
                     },
@@ -253,8 +254,8 @@ internal fun SettingsDisplaySection(
                                         },
                                     colors = if (selected) {
                                         ButtonDefaults.buttonColors(
-                                            containerColor = IcePrimaryContainer,
-                                            contentColor = OnIcePrimaryContainer,
+                                            containerColor = MaterialTheme.colorScheme.primary,
+                                            contentColor = MaterialTheme.colorScheme.onPrimary,
                                         )
                                     } else {
                                         ButtonDefaults.textButtonColors(
@@ -298,12 +299,49 @@ internal fun SettingsDisplaySection(
                         Switch(
                             checked = spectrumSparksEnabled,
                             onCheckedChange = onSetSpectrumSparksEnabled,
+                            colors = studioSwitchColors(),
                             modifier = Modifier.semantics {
                                 contentDescription = "Toggle kinetic sparks"
                             },
                         )
                     }
                 }
+            }
+
+            SettingsHairline()
+
+            // Opt-in Dynamic Theme toggle (defaults OFF -> Monochrome Studio)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .sizeIn(minHeight = 60.dp)
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Dynamic Theme",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "Adapt accent and dark surfaces (including navigation bar) to the playing " +
+                            "track or opened album, artist, or playlist. Falls back to Monochrome Studio " +
+                            "when off or monochrome.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Spacer(modifier = Modifier.width(12.dp))
+                Switch(
+                    checked = dynamicCoverThemeEnabled,
+                    onCheckedChange = onSetDynamicCoverThemeEnabled,
+                    colors = studioSwitchColors(),
+                    modifier = Modifier.semantics {
+                        contentDescription = "Toggle dynamic theme"
+                    },
+                )
             }
         }
     }
@@ -327,23 +365,25 @@ internal fun SettingsLibraryStorageSection(
             ) {
                 OutlinedButton(
                     onClick = onAddFolderClick,
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                     modifier = Modifier
                         .weight(1f)
                         .sizeIn(minHeight = 48.dp),
                 ) {
                     Icon(Icons.Filled.CreateNewFolder, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("Add Folder (SAF)", maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
+                    Text("Add Folder", maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                 }
                 OutlinedButton(
                     onClick = onRefreshLibrary,
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                     modifier = Modifier
-                        .weight(0.95f)
+                        .weight(1f)
                         .sizeIn(minHeight = 48.dp),
                 ) {
                     Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("Refresh Library", maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
+                    Text("Refresh", maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                 }
             }
 
@@ -448,7 +488,7 @@ internal fun DefaultHomepageBottomSheet(
             )
             Spacer(modifier = Modifier.height(4.dp))
 
-            DefaultHomepage.entries.forEach { option ->
+            DEFAULT_HOMEPAGE_DISPLAY_ORDER.forEach { option ->
                 val selected = option == currentHomepage
                 Row(
                     modifier = Modifier
@@ -464,13 +504,13 @@ internal fun DefaultHomepageBottomSheet(
                         text = option.displayName,
                         style = MaterialTheme.typography.bodyLarge,
                         fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                        color = if (selected) IcePrimary else MaterialTheme.colorScheme.onSurface,
+                        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                     )
                     if (selected) {
                         Icon(
                             imageVector = Icons.Filled.Check,
                             contentDescription = "Selected default homepage",
-                            tint = IcePrimary,
+                            tint = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.size(20.dp),
                         )
                     }
@@ -481,6 +521,16 @@ internal fun DefaultHomepageBottomSheet(
         }
     }
 }
+
+private val DEFAULT_HOMEPAGE_DISPLAY_ORDER = listOf(
+    DefaultHomepage.ALL_SONGS,
+    DefaultHomepage.ARTISTS,
+    DefaultHomepage.ALBUMS,
+    DefaultHomepage.RECENT,
+    DefaultHomepage.FAVORITES,
+    DefaultHomepage.FOLDERS,
+    DefaultHomepage.PLAYLISTS,
+)
 
 private fun formatReadableSafLabel(uriString: String): String {
     val decoded = runCatching { Uri.decode(uriString) }.getOrDefault(uriString)

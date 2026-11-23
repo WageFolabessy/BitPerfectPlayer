@@ -44,18 +44,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.cangkir.bitperfectplayer.ui.InlineSortTriggerButton
 import com.cangkir.bitperfectplayer.ui.LibraryTab
-import com.cangkir.bitperfectplayer.ui.theme.IcePrimary
 import com.cangkir.bitperfectplayer.ui.theme.TextMuted
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun LibraryTopAppBar(
     openedGroupTitle: String?,
-    selectedTabLabel: String,
+    backTargetLabel: String,
     statusText: String,
     statusDotColor: Color,
     isBitPerfectActive: Boolean,
@@ -99,7 +99,7 @@ internal fun LibraryTopAppBar(
                 ) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Back to $selectedTabLabel",
+                        contentDescription = "Back to $backTargetLabel",
                     )
                 }
             }
@@ -132,7 +132,7 @@ internal fun LibraryTopAppBar(
                 Icon(
                     imageVector = Icons.Filled.GraphicEq,
                     contentDescription = "Open Audio Diagnostics Panel",
-                    tint = if (isBitPerfectActive) IcePrimary else MaterialTheme.colorScheme.onSurface,
+                    tint = if (isBitPerfectActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                 )
             }
         },
@@ -148,7 +148,7 @@ internal fun LibraryTabRow(selectedTab: LibraryTab, onSelectTab: (LibraryTab) ->
     PrimaryScrollableTabRow(
         selectedTabIndex = selectedTab.ordinal,
         containerColor = MaterialTheme.colorScheme.background,
-        contentColor = MaterialTheme.colorScheme.onSurface,
+        contentColor = MaterialTheme.colorScheme.primary,
         edgePadding = 16.dp,
         divider = {
             HorizontalDivider(
@@ -168,8 +168,9 @@ internal fun LibraryTabRow(selectedTab: LibraryTab, onSelectTab: (LibraryTab) ->
                         maxLines = 1,
                         softWrap = false,
                         style = MaterialTheme.typography.labelLarge,
+                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
                         color = if (selected) {
-                            MaterialTheme.colorScheme.onSurface
+                            MaterialTheme.colorScheme.primary
                         } else {
                             MaterialTheme.colorScheme.onSurfaceVariant
                         },

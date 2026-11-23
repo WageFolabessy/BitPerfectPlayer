@@ -20,6 +20,8 @@ data class ArtworkDimensions(val width: Int, val height: Int)
 object AlbumArtworkHelper {
     const val THUMBNAIL_BUCKET_PX = 160
     const val HERO_BUCKET_PX = 600
+    const val DISC_BUCKET_PX = 512
+    const val SLOT_LARGE_BUCKET_PX = 960
     const val DISK_PRUNE_WRITE_INTERVAL = 50
 
     /**
@@ -67,6 +69,69 @@ object AlbumArtworkHelper {
      * decoding and keep disk/memory usage minimal.
      */
     fun normalizeSizeBucket(targetSizePx: Int): Int = if (targetSizePx <= 240) THUMBNAIL_BUCKET_PX else HERO_BUCKET_PX
+
+    /**
+     * Bounds decoded dimensions per embedded artwork slot so circular Vinyl [EmbeddedArtworkSlot.DISC]
+     * center labels never exceed `512 px` (`~1 MB` ARGB_8888) and large Back/Artist slots stay `<= 960 px`.
+     */
+    fun resolveSlotTargetSizePx(slot: EmbeddedArtworkSlot, requestedSizePx: Int): Int {
+        val normalized = if (requestedSizePx <= 240) THUMBNAIL_BUCKET_PX else requestedSizePx.coerceAtLeast(1)
+        return when (slot) {
+            EmbeddedArtworkSlot.DISC -> minOf(normalized, DISC_BUCKET_PX)
+            else -> minOf(normalized, SLOT_LARGE_BUCKET_PX)
+        }
+    }
+
+    /**
+     * Returns `true` when [folderName] is specific enough to scope fallback `DISC` artwork caches
+     * when a track has no distinct `album` tag.
+     */
+    fun isDistinctFolderFallback(folderName: String?): Boolean {
+        val trimmed = folderName?.trim().orEmpty()
+        if (trimmed.isEmpty()) return false
+        val lower = trimmed.lowercase(Locale.ROOT)
+        return lower !in GENERIC_FOLDER_NAMES
+    }
+
+    /**
+     * Builds a lightweight slot memory cache key. For [EmbeddedArtworkSlot.DISC], keys by normalized
+     * `artist + album + discNumber` (or distinct SAF folder fallback) so intra-album skips hit in `0 ms`.
+     */
+    fun buildSlotCacheKey(
+        slot: EmbeddedArtworkSlot,
+        trackUri: String,
+        artist: String?,
+        album: String?,
+        discNumber: Int?,
+        parentTreeUriString: String?,
+        folderName: String?,
+        dateModifiedSeconds: Long,
+        fileSizeBytes: Long,
+        targetSizePx: Int,
+    ): String {
+        val bucket = resolveSlotTargetSizePx(slot, targetSizePx)
+        if (slot == EmbeddedArtworkSlot.DISC) {
+            val discTag = discNumber?.takeIf { it > 0 }?.toString() ?: "0"
+            val scope = if (!parentTreeUriString.isNullOrBlank()) {
+                val normFolder = folderName?.trim()?.lowercase(Locale.ROOT).orEmpty()
+                "saf:${parentTreeUriString.trim()}|$normFolder"
+            } else {
+                "ms"
+            }
+            if (isDistinctAlbumName(album)) {
+                val normAlbum = album!!.trim().lowercase(Locale.ROOT)
+                val normArtist = artist?.trim()?.lowercase(Locale.ROOT)
+                    ?.takeIf { it.isNotEmpty() && it != "<unknown>" }
+                    ?: "unknown"
+                return "slot:${slot.name}|alb|$scope|$normArtist|$normAlbum|d$discTag|$bucket"
+            }
+            if (!parentTreeUriString.isNullOrBlank() && isDistinctFolderFallback(folderName)) {
+                return "slot:${slot.name}|fld|$scope|d$discTag|$bucket"
+            }
+        }
+        return "slot:${slot.name}|${trackUri.trim()}|${dateModifiedSeconds.coerceAtLeast(0L)}|" +
+            "${fileSizeBytes.coerceAtLeast(0L)}|$bucket"
+    }
 
     /**
      * Returns `true` when [album] identifies a real album name eligible for album-level artwork
@@ -237,4 +302,17 @@ object AlbumArtworkHelper {
     }
 
     private const val HEX_DIGITS = "0123456789abcdef"
+    private val GENERIC_FOLDER_NAMES = setOf(
+        "unknown",
+        "<unknown>",
+        "music",
+        "audio",
+        "download",
+        "downloads",
+        "root",
+        "internal storage",
+        "sd card",
+        "songs",
+        "tracks",
+    )
 }

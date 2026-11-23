@@ -16,6 +16,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
@@ -34,6 +35,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
+import com.cangkir.bitperfectplayer.library.PlaylistMembershipPolicy
 import com.cangkir.bitperfectplayer.library.ResolvedPlaylist
 import com.cangkir.bitperfectplayer.ui.theme.TextMuted
 
@@ -145,6 +147,13 @@ fun AddToPlaylistDialog(
                             key = { "pick_pl_${it.id}" },
                             contentType = { "playlist_picker_row" },
                         ) { playlist ->
+                            val alreadyAdded = remember(
+                                track.uriString,
+                                track.contentFingerprint,
+                                playlist.entries,
+                            ) {
+                                PlaylistMembershipPolicy.isTrackInPlaylist(track, playlist)
+                            }
                             Column(modifier = Modifier.fillMaxWidth()) {
                                 Row(
                                     modifier = Modifier
@@ -164,6 +173,23 @@ fun AddToPlaylistDialog(
                                         modifier = Modifier.weight(1f),
                                     )
                                     Spacer(modifier = Modifier.width(8.dp))
+                                    if (alreadyAdded) {
+                                        Icon(
+                                            imageVector = Icons.Filled.Check,
+                                            contentDescription = "Already added to ${playlist.name}",
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(16.dp),
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(
+                                            text = "Added",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.primary,
+                                            maxLines = 1,
+                                            softWrap = false,
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                    }
                                     Text(
                                         text = "${playlist.trackCount}",
                                         style = MaterialTheme.typography.labelSmall,

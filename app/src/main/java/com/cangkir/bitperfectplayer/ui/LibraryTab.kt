@@ -4,11 +4,16 @@ import com.cangkir.bitperfectplayer.data.DefaultHomepage
 
 enum class LibraryTab(val label: String) {
     ALL_SONGS("All Songs"),
-    FOLDERS("Folders"),
     ARTISTS("Artists"),
     ALBUMS("Albums"),
     RECENT("Recent"),
     FAVORITES("Favorites"),
+    FOLDERS("Folders"),
+    ;
+
+    companion object {
+        fun fromPageIndex(pageIndex: Int): LibraryTab = entries[pageIndex.coerceIn(0, entries.lastIndex)]
+    }
 }
 
 /**

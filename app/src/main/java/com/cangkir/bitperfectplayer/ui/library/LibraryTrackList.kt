@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
@@ -41,6 +42,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -60,6 +63,8 @@ internal fun TrackListView(
     activeTrackUri: String?,
     favoriteTrackUris: Set<String>,
     favoriteFingerprints: Set<String>,
+    modifier: Modifier = Modifier,
+    listState: LazyListState = rememberLazyListState(),
     showTrackNumber: Boolean = false,
     onPlayTracks: (List<PlaybackTrack>, Int) -> Unit,
     onEnqueueTrack: (PlaybackTrack) -> Unit,
@@ -71,7 +76,7 @@ internal fun TrackListView(
 ) {
     if (tracks.isEmpty()) {
         Column(
-            modifier = Modifier
+            modifier = modifier
                 .fillMaxSize()
                 .padding(28.dp),
             verticalArrangement = Arrangement.Center,
@@ -114,7 +119,6 @@ internal fun TrackListView(
         return
     }
 
-    val listState = rememberLazyListState()
     var previousResetKey by remember { mutableStateOf(scrollResetKey) }
     LaunchedEffect(scrollResetKey) {
         if (previousResetKey != scrollResetKey) {
@@ -125,7 +129,7 @@ internal fun TrackListView(
 
     LazyColumn(
         state = listState,
-        modifier = Modifier.fillMaxSize(),
+        modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(bottom = 12.dp),
     ) {
         itemsIndexed(
@@ -177,6 +181,7 @@ internal fun TrackListRow(
     onShowTrackInfo: (PlaybackTrack) -> Unit,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
+    val haptic = LocalHapticFeedback.current
 
     Row(
         modifier = Modifier
@@ -263,7 +268,10 @@ internal fun TrackListRow(
         }
 
         IconButton(
-            onClick = { onToggleFavorite(track) },
+            onClick = {
+                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                onToggleFavorite(track)
+            },
             modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
         ) {
             Icon(

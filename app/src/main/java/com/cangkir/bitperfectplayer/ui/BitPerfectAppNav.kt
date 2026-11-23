@@ -1,7 +1,9 @@
 package com.cangkir.bitperfectplayer.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -19,10 +21,16 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.sizeIn
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PagerState
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
+import androidx.compose.material.icons.automirrored.outlined.PlaylistPlay
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.outlined.LibraryMusic
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -33,76 +41,119 @@ import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.NavigationRailItemDefaults
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Text
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.SaveableStateHolder
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.cangkir.bitperfectplayer.audio.PlaybackControllerState
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
 import com.cangkir.bitperfectplayer.audio.QueueContext
 import com.cangkir.bitperfectplayer.audio.QueueSourceType
 import com.cangkir.bitperfectplayer.data.DefaultHomepage
+import com.cangkir.bitperfectplayer.library.LibrarySnapshot
 import com.cangkir.bitperfectplayer.ui.library.LibraryScreen
+import com.cangkir.bitperfectplayer.ui.nowplaying.LocalSwipeExclusionBounds
+import com.cangkir.bitperfectplayer.ui.nowplaying.NOW_PLAYING_SWIPE_CONTAINER_TEST_TAG
 import com.cangkir.bitperfectplayer.ui.nowplaying.NowPlayingScreen
+import com.cangkir.bitperfectplayer.ui.nowplaying.NowPlayingSwipeExclusionBounds
+import com.cangkir.bitperfectplayer.ui.nowplaying.PageExclusionGuardBox
+import com.cangkir.bitperfectplayer.ui.nowplaying.ROOT_HORIZONTAL_PAGER_TEST_TAG
+import com.cangkir.bitperfectplayer.ui.nowplaying.SETTINGS_SWIPE_CONTAINER_TEST_TAG
+import com.cangkir.bitperfectplayer.ui.nowplaying.SETTINGS_TAB_SWIPE_CONTAINER_TEST_TAG
+import com.cangkir.bitperfectplayer.ui.nowplaying.TOP_LEVEL_HORIZONTAL_PAGER_TEST_TAG
 import com.cangkir.bitperfectplayer.ui.playlists.AddToPlaylistDialog
 import com.cangkir.bitperfectplayer.ui.playlists.PlaylistsScreen
 import com.cangkir.bitperfectplayer.ui.settings.SettingsScreen
-import com.cangkir.bitperfectplayer.ui.theme.IcePrimaryContainer
-import com.cangkir.bitperfectplayer.ui.theme.TextMuted
+import kotlinx.coroutines.launch
 
 private object Routes {
+    const val MAIN_SHELL = "main_shell"
     const val LIBRARY = "library"
     const val PLAYLISTS = "playlists"
     const val SETTINGS = "settings"
-    const val NOW_PLAYING = "now_playing"
     const val QUEUE = "queue"
     const val LYRICS = "lyrics"
     const val DIAGNOSTICS = "diagnostics"
 }
 
-internal fun DefaultHomepage.toStartDestinationRoute(): String = if (isPlaylistsRoute) Routes.PLAYLISTS else Routes.LIBRARY
-
-private data class TopLevelTab(val route: String, val label: String, val icon: ImageVector)
+private data class TopLevelTab(val route: String, val label: String, val selectedIcon: ImageVector, val unselectedIcon: ImageVector)
 
 private val TOP_LEVEL_TABS = listOf(
     TopLevelTab(
         route = Routes.LIBRARY,
         label = "Library",
-        icon = Icons.Filled.LibraryMusic,
+        selectedIcon = Icons.Filled.LibraryMusic,
+        unselectedIcon = Icons.Outlined.LibraryMusic,
     ),
     TopLevelTab(
         route = Routes.PLAYLISTS,
         label = "Playlists",
-        icon = Icons.AutoMirrored.Filled.PlaylistPlay,
+        selectedIcon = Icons.AutoMirrored.Filled.PlaylistPlay,
+        unselectedIcon = Icons.AutoMirrored.Outlined.PlaylistPlay,
     ),
     TopLevelTab(
         route = Routes.SETTINGS,
         label = "Settings",
-        icon = Icons.Filled.Settings,
+        selectedIcon = Icons.Filled.Settings,
+        unselectedIcon = Icons.Outlined.Settings,
     ),
 )
 
-private val TOP_LEVEL_ROUTES = setOf(Routes.LIBRARY, Routes.PLAYLISTS, Routes.SETTINGS)
+@Stable
+internal class RootPagerNavigator {
+    var openNowPlaying: () -> Unit = {}
+    var openSettingsFromNowPlaying: () -> Unit = {}
+    var backToContent: () -> Unit = {}
+    var isLibraryDetailOpen: Boolean by mutableStateOf(false)
+    var isPlaylistsDetailOpen: Boolean by mutableStateOf(false)
+    var isLibraryPageForeground: Boolean by mutableStateOf(true)
+    var isPlaylistsPageForeground: Boolean by mutableStateOf(false)
+}
+
+@Composable
+internal fun rememberRootPagerNavigator(): RootPagerNavigator = remember { RootPagerNavigator() }
+
+private fun topLevelRouteForPage(page: Int): String = when (page) {
+    RootPagerPolicy.TOP_LEVEL_PAGE_PLAYLISTS -> Routes.PLAYLISTS
+    RootPagerPolicy.TOP_LEVEL_PAGE_SETTINGS -> Routes.SETTINGS
+    else -> Routes.LIBRARY
+}
+
+private fun topLevelPageForRoute(route: String): Int = when (route) {
+    Routes.PLAYLISTS -> RootPagerPolicy.TOP_LEVEL_PAGE_PLAYLISTS
+    Routes.SETTINGS -> RootPagerPolicy.TOP_LEVEL_PAGE_SETTINGS
+    else -> RootPagerPolicy.TOP_LEVEL_PAGE_LIBRARY
+}
 
 @Composable
 fun BitPerfectAppRoot(viewModel: MainViewModel) {
@@ -125,32 +176,47 @@ fun BitPerfectAppRoot(viewModel: MainViewModel) {
 @Composable
 private fun BitPerfectAppRootContent(viewModel: MainViewModel, startupHomepage: DefaultHomepage) {
     val navController = rememberNavController()
+    val rootPagerNavigator = rememberRootPagerNavigator()
     val libraryState by viewModel.libraryState.collectAsStateWithLifecycle()
     val playlistsState by viewModel.playlistsState.collectAsStateWithLifecycle()
     val favoriteTrackUris by viewModel.favoriteTrackUris.collectAsStateWithLifecycle()
     val playbackState by viewModel.playbackState.collectAsStateWithLifecycle()
     val lyricsUiState by viewModel.lyricsUiState.collectAsStateWithLifecycle()
     val trackInfoState by viewModel.trackInfoState.collectAsStateWithLifecycle()
-    val uiMessage by viewModel.uiMessage.collectAsStateWithLifecycle()
+    val uiSnackbarMessage by viewModel.uiSnackbarMessage.collectAsStateWithLifecycle()
 
     var trackPendingAddToPlaylist by remember { mutableStateOf<PlaybackTrack?>(null) }
 
     val snackbarHostState = remember { SnackbarHostState() }
-    LaunchedEffect(uiMessage) {
-        val msg = uiMessage ?: return@LaunchedEffect
-        snackbarHostState.showSnackbar(msg)
-        viewModel.clearUiMessage()
+    LaunchedEffect(uiSnackbarMessage?.id) {
+        val current = uiSnackbarMessage ?: return@LaunchedEffect
+        try {
+            snackbarHostState.currentSnackbarData?.dismiss()
+            val result = snackbarHostState.showSnackbar(
+                message = current.message,
+                actionLabel = current.actionLabel,
+                duration = SnackbarDuration.Short,
+            )
+            if (result == SnackbarResult.ActionPerformed) {
+                current.onAction?.invoke()
+            }
+        } finally {
+            viewModel.clearUiMessage(current.id)
+        }
     }
 
     val openAddToPlaylist = remember { { track: PlaybackTrack -> trackPendingAddToPlaylist = track } }
-    val openNowPlaying = remember(navController) {
-        { navController.navigate(Routes.NOW_PLAYING) { launchSingleTop = true } }
+    val openNowPlaying = remember(rootPagerNavigator) {
+        { rootPagerNavigator.openNowPlaying() }
     }
     val openQueue = remember(navController) {
         { navController.navigate(Routes.QUEUE) { launchSingleTop = true } }
     }
     val openDiagnostics = remember(navController) {
         { navController.navigate(Routes.DIAGNOSTICS) { launchSingleTop = true } }
+    }
+    val openLyrics = remember(navController) {
+        { navController.navigate(Routes.LYRICS) { launchSingleTop = true } }
     }
     val popBack = remember(navController) {
         {
@@ -199,9 +265,12 @@ private fun BitPerfectAppRootContent(viewModel: MainViewModel, startupHomepage: 
                 onOpenNowPlaying = openNowPlaying,
                 onTogglePlayPause = viewModel::togglePlayPause,
                 onNext = viewModel::next,
+                onDismissPlayback = viewModel::dismissActiveSession,
             )
         },
         libraryContent = { initialLibraryTab ->
+            val dynamicCoverThemeEnabled by viewModel.dynamicCoverThemeEnabled.collectAsStateWithLifecycle()
+            val artistPhotoRevision by viewModel.artistPhotoRevision.collectAsStateWithLifecycle()
             LibraryScreen(
                 libraryState = libraryState,
                 favoriteTrackUris = favoriteTrackUris,
@@ -220,13 +289,29 @@ private fun BitPerfectAppRootContent(viewModel: MainViewModel, startupHomepage: 
                 onSetGroupSort = viewModel::setGroupSort,
                 onAddToPlaylist = openAddToPlaylist,
                 onShowTrackInfo = viewModel::openTrackInfo,
-                onToggleFavorite = viewModel::toggleFavorite,
-                onOpenQueue = openQueue,
+                onToggleFavorite = { track -> viewModel.toggleFavorite(track) },
+                onToggleFavoriteFromFavorites = { track ->
+                    viewModel.toggleFavorite(track, showRemovalUndoSnackbar = true)
+                },
                 onOpenDiagnostics = openDiagnostics,
+                onOpenQueue = openQueue,
                 initialTab = initialLibraryTab,
+                dynamicCoverThemeEnabled = dynamicCoverThemeEnabled,
+                coverThemeColorCache = viewModel.coverThemeColorCache,
+                artistPhotoStore = viewModel.artistPhotoStore,
+                artistPhotoRevision = artistPhotoRevision,
+                onShuffleTracks = { tracks, context -> viewModel.playTracks(tracks, context = context, shuffled = true) },
+                onSetCustomArtistPhoto = { artist, uri -> viewModel.updateCustomArtistPhoto(artist, uri) },
+                onResetCustomArtistPhoto = { artist -> viewModel.updateCustomArtistPhoto(artist, null) },
+                onDetailViewOpenChanged = { isOpen -> rootPagerNavigator.isLibraryDetailOpen = isOpen },
+                onContextualDynamicThemeChanged = { tokens ->
+                    viewModel.setContextualDynamicTheme("library", tokens)
+                },
+                isForegroundPage = rootPagerNavigator.isLibraryPageForeground,
             )
         },
         playlistsContent = {
+            val dynamicCoverThemeEnabled by viewModel.dynamicCoverThemeEnabled.collectAsStateWithLifecycle()
             PlaylistsScreen(
                 playlistsState = playlistsState,
                 activeTrackUri = playbackState.activeTrack?.uriString,
@@ -237,122 +322,70 @@ private fun BitPerfectAppRootContent(viewModel: MainViewModel, startupHomepage: 
                 onEnqueueTracks = viewModel::enqueueTracks,
                 onEnqueueTracksNext = viewModel::enqueueTracksNext,
                 onSetPlaylistSort = viewModel::setTrackSort,
-                onOpenQueue = openQueue,
                 onCreatePlaylist = viewModel::createPlaylist,
                 onRenamePlaylist = viewModel::renamePlaylist,
                 onDeletePlaylist = viewModel::deletePlaylist,
-                onRemovePlaylistEntry = viewModel::removePlaylistEntry,
-                onMovePlaylistEntry = viewModel::movePlaylistEntry,
+                onRemovePlaylistEntry = { playlistId, entryId ->
+                    viewModel.removePlaylistEntry(playlistId, entryId)
+                },
                 onExportPlaylist = viewModel::exportPlaylistToM3u8,
                 onImportPlaylist = viewModel::importPlaylistFromM3u8,
+                onOpenQueue = openQueue,
+                favoriteTrackUris = favoriteTrackUris,
+                favoriteFingerprints = libraryState.favoriteFingerprints,
+                onShuffleTracks = { tracks, context -> viewModel.playTracks(tracks, context = context, shuffled = true) },
+                onToggleFavorite = { track -> viewModel.toggleFavorite(track) },
+                onEnqueueTrack = viewModel::enqueueTrack,
+                onEnqueueNext = viewModel::enqueueTrackNext,
+                onAddToPlaylist = openAddToPlaylist,
+                onShowTrackInfo = viewModel::openTrackInfo,
+                onRemovePlaylistEntryWithTitle = { playlistId, entryId, playlistName, trackTitle ->
+                    viewModel.removePlaylistEntry(playlistId, entryId, playlistName, trackTitle)
+                },
+                onCommitPlaylistOrder = viewModel::commitPlaylistOrder,
+                dynamicCoverThemeEnabled = dynamicCoverThemeEnabled,
+                coverThemeColorCache = viewModel.coverThemeColorCache,
+                isForegroundPage = rootPagerNavigator.isPlaylistsPageForeground,
+                onDetailViewOpenChanged = { isOpen -> rootPagerNavigator.isPlaylistsDetailOpen = isOpen },
+                onContextualDynamicThemeChanged = { tokens ->
+                    viewModel.setContextualDynamicTheme("playlists", tokens)
+                },
             )
         },
         settingsContent = {
-            val context = LocalContext.current
-            val defaultHomepage by viewModel.defaultHomepage.collectAsStateWithLifecycle()
-            val nowPlayingArtworkStyle by viewModel.nowPlayingArtworkStyle.collectAsStateWithLifecycle()
-            val spectrumVisualizerEnabled by viewModel.spectrumVisualizerEnabled.collectAsStateWithLifecycle()
-            val spectrumColorStyle by viewModel.spectrumColorStyle.collectAsStateWithLifecycle()
-            val spectrumSparksEnabled by viewModel.spectrumSparksEnabled.collectAsStateWithLifecycle()
-            val diagnosticLoggingEnabled by viewModel.diagnosticLoggingEnabled.collectAsStateWithLifecycle()
-            val diagnosticLogStats by viewModel.diagnosticLogStats.collectAsStateWithLifecycle()
-            SettingsScreen(
+            BitPerfectSettingsDestination(
+                viewModel = viewModel,
                 libraryState = libraryState,
                 playbackState = playbackState,
-                sleepTimerStateFlow = viewModel.sleepTimerState,
-                defaultHomepage = defaultHomepage,
-                onSetDefaultHomepage = viewModel::setDefaultHomepage,
-                artworkStyle = nowPlayingArtworkStyle,
-                onSetArtworkStyle = viewModel::setNowPlayingArtworkStyle,
-                spectrumVisualizerEnabled = spectrumVisualizerEnabled,
-                onSetSpectrumVisualizerEnabled = viewModel::setSpectrumVisualizerEnabled,
-                spectrumColorStyle = spectrumColorStyle,
-                onSetSpectrumColorStyle = viewModel::setSpectrumColorStyle,
-                spectrumSparksEnabled = spectrumSparksEnabled,
-                onSetSpectrumSparksEnabled = viewModel::setSpectrumSparksEnabled,
-                diagnosticLoggingEnabled = diagnosticLoggingEnabled,
-                diagnosticLogStats = diagnosticLogStats,
-                onSetDiagnosticLoggingEnabled = viewModel::setDiagnosticLoggingEnabled,
-                onExportDiagnosticLogs = viewModel::exportDiagnosticLogs,
-                onShareDiagnosticLogs = {
-                    viewModel.shareDiagnosticLogs { shareIntent ->
-                        runCatching {
-                            context.startActivity(shareIntent)
-                        }.onFailure {
-                            viewModel.showUiMessage("No app available to share diagnostic logs")
-                        }
-                    }
-                },
-                onClearDiagnosticLogs = viewModel::clearDiagnosticLogs,
-                onRefreshDiagnosticLogStats = viewModel::refreshDiagnosticLogStats,
-                onImportFolder = viewModel::importSafFolder,
-                onRemoveSafFolder = viewModel::removeSafFolder,
-                onRefreshLibrary = viewModel::refreshLibrary,
-                onSetGaplessEnabled = viewModel::setGaplessEnabled,
-                onSetReplayGainMode = viewModel::setReplayGainMode,
-                onSetReplayGainPreampDb = viewModel::setReplayGainPreampDb,
-                onSetReplayGainPreventClipping = viewModel::setReplayGainPreventClipping,
-                onSelectSleepTimerPreset = viewModel::setSleepTimerPreset,
-                onExportLocalBackup = viewModel::exportLocalBackup,
-                onImportLocalBackup = viewModel::importLocalBackup,
                 onOpenDiagnostics = openDiagnostics,
             )
         },
-    ) {
-        composable(Routes.NOW_PLAYING) {
-            val nowPlayingArtworkStyle by viewModel.nowPlayingArtworkStyle.collectAsStateWithLifecycle()
-            val spectrumVisualizerEnabled by viewModel.spectrumVisualizerEnabled.collectAsStateWithLifecycle()
-            val spectrumColorStyle by viewModel.spectrumColorStyle.collectAsStateWithLifecycle()
-            val spectrumSparksEnabled by viewModel.spectrumSparksEnabled.collectAsStateWithLifecycle()
-            val activeTrack = playbackState.activeTrack
-            val isFav = activeTrack != null &&
-                (
-                    activeTrack.uriString in favoriteTrackUris ||
-                        activeTrack.contentFingerprint?.lowercase()?.let { it in libraryState.favoriteFingerprints } == true
-                    )
-            NowPlayingScreen(
+        hasActiveTrack = playbackState.activeTrack != null,
+        rootPagerNavigator = rootPagerNavigator,
+        nowPlayingContent = { isPageActive, onBack, _ ->
+            BitPerfectNowPlayingDestination(
+                viewModel = viewModel,
+                libraryState = libraryState,
+                favoriteTrackUris = favoriteTrackUris,
                 playbackState = playbackState,
-                playbackPositionMsFlow = viewModel.playbackPositionMs,
-                sleepTimerStateFlow = viewModel.sleepTimerState,
-                albumArtworkLoader = viewModel.albumArtworkLoader,
-                isFavorite = isFav,
-                artworkStyle = nowPlayingArtworkStyle,
-                onSetArtworkStyle = viewModel::setNowPlayingArtworkStyle,
-                spectrumVisualizerEnabled = spectrumVisualizerEnabled,
-                onSetSpectrumVisualizerEnabled = viewModel::setSpectrumVisualizerEnabled,
-                spectrumColorStyle = spectrumColorStyle,
-                onCycleSpectrumColorStyle = viewModel::cycleSpectrumColorStyle,
-                spectrumSparksEnabled = spectrumSparksEnabled,
-                onSetSpectrumSparksEnabled = viewModel::setSpectrumSparksEnabled,
-                onSetSpectrumVisualizerActive = viewModel::setSpectrumVisualizerActive,
-                onSampleSpectrumWindow = viewModel::sampleCurrentSpectrumWindow,
-                onBack = popBack,
-                onToggleFavorite = viewModel::toggleFavorite,
+                isPageActive = isPageActive,
+                onBack = onBack,
                 onAddToPlaylist = openAddToPlaylist,
-                onShowTrackInfo = viewModel::openTrackInfo,
-                onSelectSleepTimerPreset = viewModel::setSleepTimerPreset,
-                onTogglePlayPause = viewModel::togglePlayPause,
-                onPrevious = viewModel::previous,
-                onNext = viewModel::next,
-                onSeekTo = viewModel::seekTo,
-                onBeginTurntableScratch = viewModel::beginTurntableScratch,
-                onUpdateTurntableScratchRate = viewModel::updateTurntableScratchRate,
-                onEndTurntableScratch = viewModel::endTurntableScratch,
-                onToggleShuffle = viewModel::toggleShuffle,
-                onCycleRepeatMode = viewModel::cycleRepeatMode,
-                onRequestBitPerfectMode = viewModel::requestBitPerfectMode,
-                onConfirmBitPerfectWarning = viewModel::confirmBitPerfectWarning,
-                onDismissSafetyWarning = viewModel::dismissSafetyWarning,
-                onSwitchToSafeMode = viewModel::switchToSafeMode,
-                onClearAutoPauseNotice = viewModel::clearAutoPauseNotice,
                 onOpenQueue = openQueue,
-                onOpenLyrics = {
-                    navController.navigate(Routes.LYRICS) { launchSingleTop = true }
-                },
+                onOpenLyrics = openLyrics,
                 onOpenDiagnostics = openDiagnostics,
             )
-        }
-
+        },
+        settingsFromNowPlayingContent = { onBack ->
+            BitPerfectSettingsDestination(
+                viewModel = viewModel,
+                libraryState = libraryState,
+                playbackState = playbackState,
+                onOpenDiagnostics = openDiagnostics,
+                onBack = onBack,
+            )
+        },
+    ) {
         composable(
             route = Routes.QUEUE,
             enterTransition = { EnterTransition.None },
@@ -360,45 +393,12 @@ private fun BitPerfectAppRootContent(viewModel: MainViewModel, startupHomepage: 
             popEnterTransition = { EnterTransition.None },
             popExitTransition = { ExitTransition.None },
         ) {
-            val queueContext = playbackState.queueContext
-            val activeContextTracks = remember(
-                queueContext,
-                libraryState.albums,
-                libraryState.artists,
-                libraryState.folders,
-                libraryState.recentlyPlayed,
-                libraryState.favorites,
-                playlistsState.playlists,
-                playlistsState.mostPlayed,
-            ) {
-                val key = queueContext.sourceKey ?: queueContext.sourceLabel
-                when (queueContext.sourceType) {
-                    QueueSourceType.ALBUM -> libraryState.albums.firstOrNull { it.name == key }?.tracks.orEmpty()
-                    QueueSourceType.ARTIST -> libraryState.artists.firstOrNull { it.name == key }?.tracks.orEmpty()
-                    QueueSourceType.FOLDER -> libraryState.folders.firstOrNull { it.name == key }?.tracks.orEmpty()
-                    QueueSourceType.PLAYLIST -> playlistsState.playlists.firstOrNull { it.id.toString() == key }?.tracks.orEmpty()
-                    QueueSourceType.RECENT -> libraryState.recentlyPlayed
-                    QueueSourceType.FAVORITES -> libraryState.favorites
-                    QueueSourceType.CUSTOM -> if (queueContext.sourceKey == QueueContext.MOST_PLAYED_KEY) {
-                        playlistsState.mostPlayed.map { it.track }
-                    } else {
-                        emptyList()
-                    }
-                    QueueSourceType.ALL_SONGS -> emptyList()
-                }
-            }
-            QueueScreen(
+            BitPerfectQueueDestination(
+                viewModel = viewModel,
+                libraryState = libraryState,
+                playlistsState = playlistsState,
                 playbackState = playbackState,
-                libraryTracks = libraryState.allSongs,
-                activeContextTracks = activeContextTracks,
-                albumArtworkLoader = viewModel.albumArtworkLoader,
                 onBack = popBack,
-                onSelectQueueIndex = viewModel::playTrackAtQueueIndex,
-                onAddTrackToQueue = viewModel::enqueueTrack,
-                onRemoveQueueItem = viewModel::removeQueueItem,
-                onMoveQueueItem = viewModel::moveQueueItem,
-                onToggleShuffle = viewModel::toggleShuffle,
-                onCycleRepeatMode = viewModel::cycleRepeatMode,
             )
         }
 
@@ -430,6 +430,185 @@ private fun BitPerfectAppRootContent(viewModel: MainViewModel, startupHomepage: 
 }
 
 @Composable
+private fun BitPerfectNowPlayingDestination(
+    viewModel: MainViewModel,
+    libraryState: LibrarySnapshot,
+    favoriteTrackUris: Set<String>,
+    playbackState: PlaybackControllerState,
+    isPageActive: Boolean,
+    onBack: () -> Unit,
+    onAddToPlaylist: (PlaybackTrack) -> Unit,
+    onOpenQueue: () -> Unit,
+    onOpenLyrics: () -> Unit,
+    onOpenDiagnostics: () -> Unit,
+) {
+    val nowPlayingArtworkStyle by viewModel.nowPlayingArtworkStyle.collectAsStateWithLifecycle()
+    val spectrumVisualizerEnabled by viewModel.spectrumVisualizerEnabled.collectAsStateWithLifecycle()
+    val spectrumColorStyle by viewModel.spectrumColorStyle.collectAsStateWithLifecycle()
+    val spectrumSparksEnabled by viewModel.spectrumSparksEnabled.collectAsStateWithLifecycle()
+    val activeTrack = playbackState.activeTrack
+    val isFav = activeTrack != null &&
+        (
+            activeTrack.uriString in favoriteTrackUris ||
+                activeTrack.contentFingerprint?.lowercase()?.let { it in libraryState.favoriteFingerprints } == true
+            )
+    NowPlayingScreen(
+        playbackState = playbackState,
+        playbackPositionMsFlow = viewModel.playbackPositionMs,
+        sleepTimerStateFlow = viewModel.sleepTimerState,
+        albumArtworkLoader = viewModel.albumArtworkLoader,
+        isFavorite = isFav,
+        artworkStyle = nowPlayingArtworkStyle,
+        onSetArtworkStyle = viewModel::setNowPlayingArtworkStyle,
+        spectrumVisualizerEnabled = spectrumVisualizerEnabled,
+        onSetSpectrumVisualizerEnabled = viewModel::setSpectrumVisualizerEnabled,
+        spectrumColorStyle = spectrumColorStyle,
+        onCycleSpectrumColorStyle = { viewModel.setSpectrumColorStyle(spectrumColorStyle.next()) },
+        spectrumSparksEnabled = spectrumSparksEnabled,
+        onSetSpectrumSparksEnabled = viewModel::setSpectrumSparksEnabled,
+        onSetSpectrumVisualizerActive = viewModel::setSpectrumVisualizerActive,
+        onSampleSpectrumWindow = viewModel::sampleCurrentSpectrumWindow,
+        onBack = onBack,
+        onToggleFavorite = viewModel::toggleFavorite,
+        onAddToPlaylist = onAddToPlaylist,
+        onShowTrackInfo = viewModel::openTrackInfo,
+        onSelectSleepTimerPreset = viewModel::setSleepTimerPreset,
+        onTogglePlayPause = viewModel::togglePlayPause,
+        onPrevious = viewModel::previous,
+        onNext = viewModel::next,
+        onSeekTo = viewModel::seekTo,
+        onBeginTurntableScratch = viewModel::beginTurntableScratch,
+        onUpdateTurntableScratchRate = viewModel::updateTurntableScratchRate,
+        onEndTurntableScratch = viewModel::endTurntableScratch,
+        onToggleShuffle = viewModel::toggleShuffle,
+        onCycleRepeatMode = viewModel::cycleRepeatMode,
+        onRequestBitPerfectMode = viewModel::requestBitPerfectMode,
+        onConfirmBitPerfectWarning = viewModel::confirmBitPerfectWarning,
+        onDismissSafetyWarning = viewModel::dismissSafetyWarning,
+        onSwitchToSafeMode = viewModel::switchToSafeMode,
+        onClearAutoPauseNotice = viewModel::clearAutoPauseNotice,
+        onOpenQueue = onOpenQueue,
+        onOpenLyrics = onOpenLyrics,
+        onOpenDiagnostics = onOpenDiagnostics,
+        isPageActive = isPageActive,
+    )
+}
+
+@Composable
+private fun BitPerfectQueueDestination(
+    viewModel: MainViewModel,
+    libraryState: LibrarySnapshot,
+    playlistsState: com.cangkir.bitperfectplayer.library.PlaylistsUiSnapshot,
+    playbackState: PlaybackControllerState,
+    onBack: () -> Unit,
+) {
+    val queueContext = playbackState.queueContext
+    val activeContextTracks = remember(
+        queueContext,
+        libraryState.albums,
+        libraryState.artists,
+        libraryState.folders,
+        libraryState.recentlyPlayed,
+        libraryState.favorites,
+        playlistsState.playlists,
+        playlistsState.mostPlayed,
+    ) {
+        val key = queueContext.sourceKey ?: queueContext.sourceLabel
+        when (queueContext.sourceType) {
+            QueueSourceType.ALBUM -> libraryState.albums.firstOrNull { it.name == key }?.tracks.orEmpty()
+            QueueSourceType.ARTIST -> libraryState.artists.firstOrNull { it.name == key }?.tracks.orEmpty()
+            QueueSourceType.FOLDER -> libraryState.folders.firstOrNull { it.name == key }?.tracks.orEmpty()
+            QueueSourceType.PLAYLIST -> playlistsState.playlists.firstOrNull { it.id.toString() == key }?.tracks.orEmpty()
+            QueueSourceType.RECENT -> libraryState.recentlyPlayed
+            QueueSourceType.FAVORITES -> libraryState.favorites
+            QueueSourceType.CUSTOM -> if (queueContext.sourceKey == QueueContext.MOST_PLAYED_KEY) {
+                playlistsState.mostPlayed.map { it.track }
+            } else {
+                emptyList()
+            }
+            QueueSourceType.ALL_SONGS -> emptyList()
+        }
+    }
+    QueueScreen(
+        playbackState = playbackState,
+        libraryTracks = libraryState.allSongs,
+        activeContextTracks = activeContextTracks,
+        albumArtworkLoader = viewModel.albumArtworkLoader,
+        onBack = onBack,
+        onSelectQueueIndex = viewModel::playTrackAtQueueIndex,
+        onAddTrackToQueue = viewModel::enqueueTrack,
+        onRemoveQueueItem = viewModel::removeQueueItem,
+        onMoveQueueItem = viewModel::moveQueueItem,
+        onToggleShuffle = viewModel::toggleShuffle,
+        onCycleRepeatMode = viewModel::cycleRepeatMode,
+    )
+}
+
+@Composable
+private fun BitPerfectSettingsDestination(
+    viewModel: MainViewModel,
+    libraryState: LibrarySnapshot,
+    playbackState: PlaybackControllerState,
+    onOpenDiagnostics: () -> Unit,
+    onBack: (() -> Unit)? = null,
+) {
+    val context = LocalContext.current
+    val defaultHomepage by viewModel.defaultHomepage.collectAsStateWithLifecycle()
+    val nowPlayingArtworkStyle by viewModel.nowPlayingArtworkStyle.collectAsStateWithLifecycle()
+    val spectrumVisualizerEnabled by viewModel.spectrumVisualizerEnabled.collectAsStateWithLifecycle()
+    val spectrumColorStyle by viewModel.spectrumColorStyle.collectAsStateWithLifecycle()
+    val spectrumSparksEnabled by viewModel.spectrumSparksEnabled.collectAsStateWithLifecycle()
+    val dynamicCoverThemeEnabled by viewModel.dynamicCoverThemeEnabled.collectAsStateWithLifecycle()
+    val diagnosticLoggingEnabled by viewModel.diagnosticLoggingEnabled.collectAsStateWithLifecycle()
+    val diagnosticLogStats by viewModel.diagnosticLogStats.collectAsStateWithLifecycle()
+    SettingsScreen(
+        libraryState = libraryState,
+        playbackState = playbackState,
+        sleepTimerStateFlow = viewModel.sleepTimerState,
+        defaultHomepage = defaultHomepage,
+        onSetDefaultHomepage = viewModel::setDefaultHomepage,
+        artworkStyle = nowPlayingArtworkStyle,
+        onSetArtworkStyle = viewModel::setNowPlayingArtworkStyle,
+        spectrumVisualizerEnabled = spectrumVisualizerEnabled,
+        onSetSpectrumVisualizerEnabled = viewModel::setSpectrumVisualizerEnabled,
+        spectrumColorStyle = spectrumColorStyle,
+        onSetSpectrumColorStyle = viewModel::setSpectrumColorStyle,
+        spectrumSparksEnabled = spectrumSparksEnabled,
+        onSetSpectrumSparksEnabled = viewModel::setSpectrumSparksEnabled,
+        dynamicCoverThemeEnabled = dynamicCoverThemeEnabled,
+        onSetDynamicCoverThemeEnabled = viewModel::setDynamicCoverThemeEnabled,
+        diagnosticLoggingEnabled = diagnosticLoggingEnabled,
+        diagnosticLogStats = diagnosticLogStats,
+        onSetDiagnosticLoggingEnabled = viewModel::setDiagnosticLoggingEnabled,
+        onExportDiagnosticLogs = viewModel::exportDiagnosticLogs,
+        onShareDiagnosticLogs = {
+            viewModel.shareDiagnosticLogs { shareIntent ->
+                runCatching {
+                    context.startActivity(shareIntent)
+                }.onFailure {
+                    viewModel.showUiMessage("No app available to share diagnostic logs")
+                }
+            }
+        },
+        onClearDiagnosticLogs = viewModel::clearDiagnosticLogs,
+        onRefreshDiagnosticLogStats = viewModel::refreshDiagnosticLogStats,
+        onImportFolder = viewModel::importSafFolder,
+        onRemoveSafFolder = viewModel::removeSafFolder,
+        onRefreshLibrary = viewModel::refreshLibrary,
+        onSetGaplessEnabled = viewModel::setGaplessEnabled,
+        onSetReplayGainMode = viewModel::setReplayGainMode,
+        onSetReplayGainPreampDb = viewModel::setReplayGainPreampDb,
+        onSetReplayGainPreventClipping = viewModel::setReplayGainPreventClipping,
+        onSelectSleepTimerPreset = viewModel::setSleepTimerPreset,
+        onExportLocalBackup = viewModel::exportLocalBackup,
+        onImportLocalBackup = viewModel::importLocalBackup,
+        onOpenDiagnostics = onOpenDiagnostics,
+        onBack = onBack,
+    )
+}
+
+@Suppress("UNUSED_PARAMETER")
+@Composable
 internal fun BitPerfectStartupNavHost(
     startupHomepage: DefaultHomepage,
     navController: NavHostController = rememberNavController(),
@@ -438,55 +617,355 @@ internal fun BitPerfectStartupNavHost(
     libraryContent: @Composable (LibraryTab) -> Unit,
     playlistsContent: @Composable () -> Unit,
     settingsContent: @Composable () -> Unit,
+    hasActiveTrack: Boolean = false,
+    rootPagerNavigator: RootPagerNavigator = rememberRootPagerNavigator(),
+    nowPlayingContent: (@Composable (isPageActive: Boolean, onBack: () -> Unit, onOpenSettings: () -> Unit) -> Unit)? = null,
+    settingsFromNowPlayingContent: (@Composable (onBack: () -> Unit) -> Unit)? = null,
     extraRoutes: NavGraphBuilder.() -> Unit = {},
 ) {
-    // Latch start destination & initial Library tab strictly ONCE so later preference changes in
-    // Settings or user tab switches never hijack active navigation.
-    val startDestination = rememberSaveable { startupHomepage.toStartDestinationRoute() }
+    // Latch start tab & initial Library sub-tab strictly ONCE so later preference changes never
+    // hijack active navigation.
+    val startTopLevelPage = rememberSaveable {
+        if (startupHomepage.isPlaylistsRoute) {
+            RootPagerPolicy.TOP_LEVEL_PAGE_PLAYLISTS
+        } else {
+            RootPagerPolicy.TOP_LEVEL_PAGE_LIBRARY
+        }
+    }
     val initialLibraryTab = rememberSaveable { startupHomepage.toInitialLibraryTab() }
+    var lastNonSettingsPage by rememberSaveable { mutableIntStateOf(startTopLevelPage) }
+
+    val pagerState = rememberPagerState(
+        initialPage = RootPagerPolicy.PAGE_CONTENT,
+        pageCount = { RootPagerPolicy.PAGE_COUNT },
+    )
+    val topLevelPagerState = rememberPagerState(
+        initialPage = startTopLevelPage,
+        pageCount = { RootPagerPolicy.TOP_LEVEL_PAGE_COUNT },
+    )
+    var pendingTapTopLevelPage by remember { mutableStateOf<Int?>(null) }
+    val coroutineScope = rememberCoroutineScope()
+    val saveableStateHolder = rememberSaveableStateHolder()
+    val hasNowPlayingPage = nowPlayingContent != null
 
     val backStackEntry by navController.currentBackStackEntryAsState()
-    val currentRoute = backStackEntry?.destination?.route
-    val isTopLevelRoute = currentRoute == null || currentRoute in TOP_LEVEL_ROUTES
+    val currentNavRoute = backStackEntry?.destination?.route
+    val isMainShellActive = currentNavRoute == null || currentNavRoute == Routes.MAIN_SHELL
 
-    val selectTopLevelTab = remember(navController) {
-        { route: String ->
-            navController.navigate(route) {
-                popUpTo(navController.graph.findStartDestination().id) {
-                    saveState = true
+    val selectedTopLevelPage = RootPagerPolicy.resolveSelectedTopLevelPage(
+        currentPage = topLevelPagerState.currentPage,
+        pendingTapPage = pendingTapTopLevelPage,
+    )
+    val selectedTopLevelRoute = topLevelRouteForPage(selectedTopLevelPage)
+
+    LaunchedEffect(topLevelPagerState.settledPage) {
+        val settled = topLevelPagerState.settledPage
+        if (settled == RootPagerPolicy.TOP_LEVEL_PAGE_LIBRARY || settled == RootPagerPolicy.TOP_LEVEL_PAGE_PLAYLISTS) {
+            lastNonSettingsPage = settled
+        }
+    }
+
+    LaunchedEffect(isMainShellActive, pagerState.currentPage, selectedTopLevelPage) {
+        val onContentShell = isMainShellActive && pagerState.currentPage == RootPagerPolicy.PAGE_CONTENT
+        val isLibraryTab = selectedTopLevelPage == RootPagerPolicy.TOP_LEVEL_PAGE_LIBRARY
+        val isPlaylistsTab = selectedTopLevelPage == RootPagerPolicy.TOP_LEVEL_PAGE_PLAYLISTS
+        rootPagerNavigator.isLibraryPageForeground = onContentShell && isLibraryTab
+        rootPagerNavigator.isPlaylistsPageForeground = onContentShell && isPlaylistsTab
+    }
+
+    DisposableEffect(rootPagerNavigator, navController, pagerState, coroutineScope, hasNowPlayingPage) {
+        rootPagerNavigator.openNowPlaying = {
+            if (hasNowPlayingPage) {
+                if (navController.currentDestination?.route != Routes.MAIN_SHELL) {
+                    navController.popBackStack(Routes.MAIN_SHELL, inclusive = false)
                 }
-                launchSingleTop = true
-                restoreState = true
+                coroutineScope.launch {
+                    pagerState.animateScrollToPage(
+                        page = RootPagerPolicy.PAGE_NOW_PLAYING,
+                        animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
+                    )
+                }
+            }
+        }
+        rootPagerNavigator.openSettingsFromNowPlaying = {
+            if (navController.currentDestination?.route != Routes.MAIN_SHELL) {
+                navController.popBackStack(Routes.MAIN_SHELL, inclusive = false)
+            }
+            coroutineScope.launch {
+                pagerState.animateScrollToPage(
+                    page = RootPagerPolicy.PAGE_SETTINGS,
+                    animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
+                )
+            }
+        }
+        rootPagerNavigator.backToContent = {
+            if (navController.currentDestination?.route != Routes.MAIN_SHELL) {
+                navController.popBackStack(Routes.MAIN_SHELL, inclusive = false)
+            }
+            coroutineScope.launch {
+                pagerState.animateScrollToPage(
+                    page = RootPagerPolicy.PAGE_CONTENT,
+                    animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
+                )
+            }
+        }
+        onDispose { }
+    }
+
+    val selectTopLevelTab = remember(navController, pagerState, topLevelPagerState, coroutineScope) {
+        { route: String ->
+            if (navController.currentDestination?.route != Routes.MAIN_SHELL) {
+                navController.popBackStack(Routes.MAIN_SHELL, inclusive = false)
+            }
+            val targetPage = topLevelPageForRoute(route)
+            val fromPage = topLevelPagerState.currentPage
+            pendingTapTopLevelPage = targetPage
+            coroutineScope.launch {
+                try {
+                    if (pagerState.currentPage != RootPagerPolicy.PAGE_CONTENT) {
+                        pagerState.scrollToPage(RootPagerPolicy.PAGE_CONTENT)
+                    }
+                    if (RootPagerPolicy.shouldInstantJumpTopLevelTab(fromPage, targetPage)) {
+                        topLevelPagerState.scrollToPage(targetPage)
+                    } else if (topLevelPagerState.currentPage != targetPage || topLevelPagerState.currentPageOffsetFraction != 0f) {
+                        topLevelPagerState.animateScrollToPage(
+                            page = targetPage,
+                            animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
+                        )
+                    }
+                } finally {
+                    if (pendingTapTopLevelPage == targetPage) {
+                        pendingTapTopLevelPage = null
+                    }
+                }
+            }
+            Unit
+        }
+    }
+
+    val backToNowPlaying = remember(pagerState, coroutineScope) {
+        {
+            coroutineScope.launch {
+                pagerState.animateScrollToPage(
+                    page = RootPagerPolicy.PAGE_NOW_PLAYING,
+                    animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
+                )
+            }
+            Unit
+        }
+    }
+
+    val outerBackTarget = RootPagerPolicy.resolveBackTargetPage(currentPage = pagerState.currentPage)
+    val innerBackTarget = if (pagerState.currentPage == RootPagerPolicy.PAGE_CONTENT) {
+        RootPagerPolicy.resolveTopLevelBackTargetPage(
+            currentPage = topLevelPagerState.currentPage,
+            lastNonSettingsPage = lastNonSettingsPage,
+        )
+    } else {
+        null
+    }
+    BackHandler(enabled = isMainShellActive && (outerBackTarget != null || innerBackTarget != null)) {
+        if (outerBackTarget != null) {
+            coroutineScope.launch {
+                pagerState.animateScrollToPage(
+                    page = outerBackTarget,
+                    animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
+                )
+            }
+        } else if (innerBackTarget != null) {
+            val fromPage = topLevelPagerState.currentPage
+            coroutineScope.launch {
+                if (RootPagerPolicy.shouldInstantJumpTopLevelTab(fromPage, innerBackTarget)) {
+                    topLevelPagerState.scrollToPage(innerBackTarget)
+                } else {
+                    topLevelPagerState.animateScrollToPage(
+                        page = innerBackTarget,
+                        animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
+                    )
+                }
             }
         }
     }
 
-    BitPerfectAdaptiveTopLevelFrame(
-        isTopLevelRoute = isTopLevelRoute,
-        currentRoute = currentRoute ?: startDestination,
-        snackbarHostState = snackbarHostState,
-        onSelectTab = selectTopLevelTab,
-        miniPlayerContent = miniPlayerContent,
-    ) { contentModifier ->
+    val needsOverlaySnackbarHost = !isMainShellActive ||
+        pagerState.settledPage != RootPagerPolicy.PAGE_CONTENT
+
+    Box(modifier = Modifier.fillMaxSize()) {
         NavHost(
             navController = navController,
-            startDestination = startDestination,
-            modifier = contentModifier,
+            startDestination = Routes.MAIN_SHELL,
+            modifier = Modifier.fillMaxSize(),
             enterTransition = { fadeIn(animationSpec = tween(durationMillis = 120)) },
             exitTransition = { fadeOut(animationSpec = tween(durationMillis = 90)) },
             popEnterTransition = { fadeIn(animationSpec = tween(durationMillis = 120)) },
             popExitTransition = { fadeOut(animationSpec = tween(durationMillis = 90)) },
         ) {
-            composable(Routes.LIBRARY) {
-                libraryContent(initialLibraryTab)
-            }
-            composable(Routes.PLAYLISTS) {
-                playlistsContent()
-            }
-            composable(Routes.SETTINGS) {
-                settingsContent()
+            composable(Routes.MAIN_SHELL) {
+                RootMainShellPager(
+                    pagerState = pagerState,
+                    topLevelPagerState = topLevelPagerState,
+                    selectedTopLevelRoute = selectedTopLevelRoute,
+                    isDetailViewOpen = when (selectedTopLevelPage) {
+                        RootPagerPolicy.TOP_LEVEL_PAGE_LIBRARY -> rootPagerNavigator.isLibraryDetailOpen
+                        RootPagerPolicy.TOP_LEVEL_PAGE_PLAYLISTS -> rootPagerNavigator.isPlaylistsDetailOpen
+                        else -> false
+                    },
+                    hasNowPlayingPage = hasNowPlayingPage,
+                    initialLibraryTab = initialLibraryTab,
+                    isMainShellActive = isMainShellActive,
+                    snackbarHostState = snackbarHostState,
+                    saveableStateHolder = saveableStateHolder,
+                    onSelectTopLevelTab = selectTopLevelTab,
+                    onBackToContent = rootPagerNavigator.backToContent,
+                    onOpenSettingsFromNowPlaying = rootPagerNavigator.openSettingsFromNowPlaying,
+                    onBackToNowPlaying = backToNowPlaying,
+                    miniPlayerContent = miniPlayerContent,
+                    libraryContent = libraryContent,
+                    playlistsContent = playlistsContent,
+                    settingsContent = settingsContent,
+                    nowPlayingContent = nowPlayingContent,
+                    settingsFromNowPlayingContent = settingsFromNowPlayingContent,
+                )
             }
             extraRoutes()
+        }
+
+        if (needsOverlaySnackbarHost) {
+            SnackbarHost(
+                hostState = snackbarHostState,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .navigationBarsPadding()
+                    .padding(bottom = 12.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun RootMainShellPager(
+    pagerState: PagerState,
+    topLevelPagerState: PagerState,
+    selectedTopLevelRoute: String,
+    isDetailViewOpen: Boolean,
+    hasNowPlayingPage: Boolean,
+    initialLibraryTab: LibraryTab,
+    isMainShellActive: Boolean,
+    snackbarHostState: SnackbarHostState,
+    saveableStateHolder: SaveableStateHolder,
+    onSelectTopLevelTab: (String) -> Unit,
+    onBackToContent: () -> Unit,
+    onOpenSettingsFromNowPlaying: () -> Unit,
+    onBackToNowPlaying: () -> Unit,
+    miniPlayerContent: @Composable () -> Unit,
+    libraryContent: @Composable (LibraryTab) -> Unit,
+    playlistsContent: @Composable () -> Unit,
+    settingsContent: @Composable () -> Unit,
+    nowPlayingContent: (@Composable (isPageActive: Boolean, onBack: () -> Unit, onOpenSettings: () -> Unit) -> Unit)?,
+    settingsFromNowPlayingContent: (@Composable (onBack: () -> Unit) -> Unit)?,
+) {
+    val nowPlayingExclusionBounds = remember { NowPlayingSwipeExclusionBounds() }
+    val settingsExclusionBounds = remember { NowPlayingSwipeExclusionBounds() }
+    val settingsTabExclusionBounds = remember { NowPlayingSwipeExclusionBounds() }
+
+    val scrollEnabled = RootPagerPolicy.isRootPagerScrollEnabled(
+        hasNowPlayingPage = hasNowPlayingPage,
+        settledPage = pagerState.settledPage,
+        isScrollInProgress = pagerState.isScrollInProgress,
+    )
+
+    HorizontalPager(
+        state = pagerState,
+        beyondViewportPageCount = 0,
+        userScrollEnabled = scrollEnabled,
+        modifier = Modifier
+            .fillMaxSize()
+            .testTag(ROOT_HORIZONTAL_PAGER_TEST_TAG),
+    ) { page ->
+        when (page) {
+            RootPagerPolicy.PAGE_CONTENT -> {
+                val topLevelSwipeEnabled = RootPagerPolicy.isTopLevelTabPagerScrollEnabled(
+                    isDetailViewOpen = isDetailViewOpen,
+                    isScrollInProgress = topLevelPagerState.isScrollInProgress,
+                )
+                BitPerfectAdaptiveTopLevelFrame(
+                    isTopLevelRoute = true,
+                    currentRoute = selectedTopLevelRoute,
+                    snackbarHostState = snackbarHostState,
+                    onSelectTab = onSelectTopLevelTab,
+                    miniPlayerContent = miniPlayerContent,
+                ) { contentModifier ->
+                    HorizontalPager(
+                        state = topLevelPagerState,
+                        beyondViewportPageCount = 0,
+                        userScrollEnabled = topLevelSwipeEnabled,
+                        modifier = contentModifier.testTag(TOP_LEVEL_HORIZONTAL_PAGER_TEST_TAG),
+                    ) { tabPage ->
+                        when (tabPage) {
+                            RootPagerPolicy.TOP_LEVEL_PAGE_LIBRARY -> {
+                                saveableStateHolder.SaveableStateProvider(Routes.LIBRARY) {
+                                    libraryContent(initialLibraryTab)
+                                }
+                            }
+                            RootPagerPolicy.TOP_LEVEL_PAGE_PLAYLISTS -> {
+                                saveableStateHolder.SaveableStateProvider(Routes.PLAYLISTS) {
+                                    playlistsContent()
+                                }
+                            }
+                            RootPagerPolicy.TOP_LEVEL_PAGE_SETTINGS -> {
+                                CompositionLocalProvider(LocalSwipeExclusionBounds provides settingsTabExclusionBounds) {
+                                    PageExclusionGuardBox(
+                                        exclusionBounds = settingsTabExclusionBounds,
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .testTag(SETTINGS_TAB_SWIPE_CONTAINER_TEST_TAG),
+                                    ) {
+                                        saveableStateHolder.SaveableStateProvider(Routes.SETTINGS) {
+                                            settingsContent()
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            RootPagerPolicy.PAGE_NOW_PLAYING -> {
+                CompositionLocalProvider(LocalSwipeExclusionBounds provides nowPlayingExclusionBounds) {
+                    PageExclusionGuardBox(
+                        exclusionBounds = nowPlayingExclusionBounds,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .testTag(NOW_PLAYING_SWIPE_CONTAINER_TEST_TAG),
+                    ) {
+                        nowPlayingContent?.invoke(
+                            RootPagerPolicy.isNowPlayingPageForeground(
+                                isMainShellActive = isMainShellActive,
+                                currentPage = pagerState.currentPage,
+                            ),
+                            onBackToContent,
+                            onOpenSettingsFromNowPlaying,
+                        )
+                    }
+                }
+            }
+            RootPagerPolicy.PAGE_SETTINGS -> {
+                CompositionLocalProvider(LocalSwipeExclusionBounds provides settingsExclusionBounds) {
+                    PageExclusionGuardBox(
+                        exclusionBounds = settingsExclusionBounds,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .testTag(SETTINGS_SWIPE_CONTAINER_TEST_TAG),
+                    ) {
+                        val content = settingsFromNowPlayingContent
+                        if (content != null) {
+                            content(onBackToNowPlaying)
+                        } else {
+                            settingsContent()
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -585,29 +1064,25 @@ internal fun BitPerfectBottomNavBar(currentRoute: String, onSelectTab: (String) 
             NavigationBarItem(
                 selected = selected,
                 onClick = { onSelectTab(tab.route) },
-                modifier = Modifier.semantics {
-                    contentDescription = tab.label
-                },
+                modifier = Modifier
+                    .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                    .semantics {
+                        contentDescription = tab.label
+                    },
                 icon = {
                     Icon(
-                        imageVector = tab.icon,
+                        imageVector = if (selected) tab.selectedIcon else tab.unselectedIcon,
                         contentDescription = null,
                     )
                 },
-                label = {
-                    Text(
-                        text = tab.label,
-                        style = MaterialTheme.typography.labelSmall,
-                        maxLines = 1,
-                        softWrap = false,
-                    )
-                },
+                label = null,
+                alwaysShowLabel = false,
                 colors = NavigationBarItemDefaults.colors(
-                    selectedIconColor = MaterialTheme.colorScheme.primary,
+                    selectedIconColor = MaterialTheme.colorScheme.onPrimary,
                     selectedTextColor = MaterialTheme.colorScheme.primary,
-                    indicatorColor = IcePrimaryContainer,
-                    unselectedIconColor = TextMuted,
-                    unselectedTextColor = TextMuted,
+                    indicatorColor = MaterialTheme.colorScheme.primary,
+                    unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
                 ),
             )
         }
@@ -638,24 +1113,18 @@ internal fun BitPerfectNavigationRail(currentRoute: String, onSelectTab: (String
                     },
                 icon = {
                     Icon(
-                        imageVector = tab.icon,
+                        imageVector = if (selected) tab.selectedIcon else tab.unselectedIcon,
                         contentDescription = null,
                     )
                 },
-                label = {
-                    Text(
-                        text = tab.label,
-                        style = MaterialTheme.typography.labelSmall,
-                        maxLines = 1,
-                        softWrap = false,
-                    )
-                },
+                label = null,
+                alwaysShowLabel = false,
                 colors = NavigationRailItemDefaults.colors(
-                    selectedIconColor = MaterialTheme.colorScheme.primary,
+                    selectedIconColor = MaterialTheme.colorScheme.onPrimary,
                     selectedTextColor = MaterialTheme.colorScheme.primary,
-                    indicatorColor = IcePrimaryContainer,
-                    unselectedIconColor = TextMuted,
-                    unselectedTextColor = TextMuted,
+                    indicatorColor = MaterialTheme.colorScheme.primary,
+                    unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
                 ),
             )
             Spacer(modifier = Modifier.height(8.dp))

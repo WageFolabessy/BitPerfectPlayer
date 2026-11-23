@@ -2,6 +2,7 @@ package com.cangkir.bitperfectplayer.audio
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -187,7 +188,7 @@ class AudioDiagnosticMapperTest {
         assertFalse(safeActive.stages[2].summary.contains("Zero App DSP"))
         assertTrue(safeActive.dspEqVolumeStatusSummary.contains("ReplayGain: Track (-4.2 dB, Safe Mode)"))
 
-        // 3. Bit-Perfect Opt-In strictly forces ReplayGain Bypassed label and Zero App DSP
+        // 3. Bit-Perfect Opt-In forces ReplayGain Bypassed (Bit-Perfect Opt-In) and Zero App DSP
         val bitPerfectBypass = AudioDiagnosticMapper.map(
             AudioDiagnosticInput(
                 isTrackLoaded = true,
@@ -197,13 +198,33 @@ class AudioDiagnosticMapperTest {
                 outputConnectionType = OutputConnectionType.USB_HEADSET,
                 apiLevel = 34,
                 negotiatedMixerBehavior = NegotiatedMixerBehavior.BIT_PERFECT,
-                replayGainSummary = "ReplayGain: Bypassed (Bit-Perfect Active)",
+                replayGainSummary = "ReplayGain: Track (-4.2 dB, Safe Mode)",
                 isReplayGainModifyingSamples = false,
             ),
         )
         assertTrue(bitPerfectBypass.stages[2].summary.contains("Zero App DSP"))
-        assertTrue(bitPerfectBypass.stages[2].summary.contains("ReplayGain: Bypassed (Bit-Perfect Active)"))
-        assertTrue(bitPerfectBypass.dspEqVolumeStatusSummary.contains("ReplayGain: Bypassed (Bit-Perfect Active)"))
+        assertTrue(bitPerfectBypass.stages[2].summary.contains("ReplayGain: Bypassed (Bit-Perfect Opt-In)"))
+        assertTrue(bitPerfectBypass.dspEqVolumeStatusSummary.contains("ReplayGain: Bypassed (Bit-Perfect Opt-In)"))
+        assertFalse(bitPerfectBypass.dspEqVolumeStatusSummary.contains("ReplayGain: Bypassed (Bit-Perfect Active)"))
+
+        // 4. Bit-Perfect Opt-In falling back to DEFAULT_MIXER_FALLBACK never contradicts with "Bit-Perfect Active"
+        val fallbackOptInBypass = AudioDiagnosticMapper.map(
+            AudioDiagnosticInput(
+                isTrackLoaded = true,
+                audioTrackSampleRateHz = 44_100,
+                audioTrackEncodingLabel = "PCM_16BIT",
+                safetyMode = AudioOutputMode.BIT_PERFECT_OPT_IN,
+                outputConnectionType = OutputConnectionType.USB_HEADSET,
+                apiLevel = 34,
+                negotiatedMixerBehavior = NegotiatedMixerBehavior.DEFAULT_MIXER_FALLBACK,
+                negotiatedMixerSummary = "Default System Mixer (USB HAL reported 0 matching bit-perfect or native-rate profiles)",
+                replayGainSummary = ReplayGainProcessor.BYPASSED_BIT_PERFECT_OPT_IN_LABEL,
+                isReplayGainModifyingSamples = false,
+            ),
+        )
+        assertTrue(fallbackOptInBypass.dspEqVolumeStatusSummary.contains("Bit-Perfect Requested — Fallback Mixer Active"))
+        assertTrue(fallbackOptInBypass.dspEqVolumeStatusSummary.contains("ReplayGain: Bypassed (Bit-Perfect Opt-In)"))
+        assertFalse(fallbackOptInBypass.dspEqVolumeStatusSummary.contains("ReplayGain: Bypassed (Bit-Perfect Active)"))
     }
 
     @Test
@@ -238,9 +259,12 @@ class AudioDiagnosticMapperTest {
         assertEquals(AudioDiagnosticMapper.BIT_PERFECT_FALLBACK_NATIVE_RATE_LABEL, bpFallbackNativeRate.pathStatusHeadline)
         assertEquals(VerificationLevel.VERIFIED, bpFallbackNativeRate.stages[3].verificationLevel)
         assertTrue(bpFallbackNativeRate.dspEqVolumeStatusSummary.contains("System Volume Active"))
+        assertTrue(bpFallbackNativeRate.stages[3].detail.contains("OS/USB HAL accepted native sample-rate default mixer profile"))
+        assertFalse(bpFallbackNativeRate.stages[3].detail.contains("0 matching bit-perfect or native-rate profiles"))
+        assertFalse(bpFallbackNativeRate.activeEngineAndMixerSummary.contains("0 matching bit-perfect or native-rate profiles"))
         assertEquals(VerificationLevel.UNVERIFIABLE, bpFallbackNativeRate.stages[5].verificationLevel)
 
-        // 2. Safe Mode on API 34+ USB with MIXER_BEHAVIOR_DEFAULT @ 96 kHz
+        // 2. Safe Mode on API 34+ USB with MIXER_BEHAVIOR_DEFAULT @ 96 kHz (resilient even if stale summary passed)
         val safeModeNativeRate = AudioDiagnosticMapper.map(
             AudioDiagnosticInput(
                 isTrackLoaded = true,
@@ -261,7 +285,7 @@ class AudioDiagnosticMapperTest {
                 outputDeviceName = "KZ EDX Pro 2 USB-C",
                 outputConnectionType = OutputConnectionType.USB_HEADSET,
                 negotiatedMixerBehavior = NegotiatedMixerBehavior.DEFAULT_NATIVE_RATE,
-                negotiatedMixerSummary = "MIXER_BEHAVIOR_DEFAULT (96,000 Hz, PCM_FLOAT — Native Rate, Safe Mode Volume Active)",
+                negotiatedMixerSummary = "Default System Mixer (USB HAL reported 0 matching bit-perfect or native-rate profiles)",
             ),
         )
         assertFalse(safeModeNativeRate.isBitPerfectMixerActive)
@@ -269,5 +293,51 @@ class AudioDiagnosticMapperTest {
         assertEquals(AudioDiagnosticMapper.SAFE_MODE_NATIVE_RATE_LABEL, safeModeNativeRate.pathStatusHeadline)
         assertEquals(VerificationLevel.VERIFIED, safeModeNativeRate.stages[3].verificationLevel)
         assertTrue(safeModeNativeRate.dspEqVolumeStatusSummary.contains("Safe Mode (System Volume Active)"))
+        assertTrue(safeModeNativeRate.activeEngineAndMixerSummary.contains("MIXER_BEHAVIOR_DEFAULT"))
+        assertTrue(safeModeNativeRate.stages[3].detail.contains("OS/USB HAL accepted native sample-rate default mixer profile"))
+        assertFalse(safeModeNativeRate.activeEngineAndMixerSummary.contains("0 matching bit-perfect or native-rate profiles"))
+        assertFalse(safeModeNativeRate.stages[3].detail.contains("0 matching bit-perfect or native-rate profiles"))
+    }
+
+    @Test
+    fun sourceRateAndBitDepth_propagatesOnlySourceValuesAndClearsWhenIdle() {
+        val flac = AudioDiagnosticMapper.map(
+            AudioDiagnosticInput(
+                isTrackLoaded = true,
+                sourceContainer = "FLAC",
+                sourceCodec = "FLAC",
+                sourceSampleRateHz = 96_000,
+                sourceBitDepth = 24,
+                decodedEffectiveBitDepth = 24,
+                decodedSampleRateHz = 96_000,
+            ),
+        )
+        assertEquals(96_000, flac.sourceSampleRateHz)
+        assertEquals(24, flac.sourceBitDepth)
+
+        // Lossy MP3 decodes to 16-bit PCM, but sourceBitDepth must remain null (never claiming "MP3 16-bit")
+        val mp3 = AudioDiagnosticMapper.map(
+            AudioDiagnosticInput(
+                isTrackLoaded = true,
+                sourceContainer = "MP3",
+                sourceCodec = "MP3",
+                sourceSampleRateHz = 44_100,
+                sourceBitDepth = null,
+                decodedEffectiveBitDepth = 16,
+                decodedSampleRateHz = 44_100,
+            ),
+        )
+        assertEquals(44_100, mp3.sourceSampleRateHz)
+        assertNull(mp3.sourceBitDepth)
+
+        val idle = AudioDiagnosticMapper.map(
+            AudioDiagnosticInput(
+                isTrackLoaded = false,
+                sourceSampleRateHz = 96_000,
+                sourceBitDepth = 24,
+            ),
+        )
+        assertEquals(0, idle.sourceSampleRateHz)
+        assertNull(idle.sourceBitDepth)
     }
 }

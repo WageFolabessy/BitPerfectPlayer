@@ -4,6 +4,7 @@ import android.content.Context
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
+import com.cangkir.bitperfectplayer.library.ReleaseYearParser
 import com.cangkir.bitperfectplayer.lyrics.FileChannelSeekableByteSource
 import java.io.FileInputStream
 
@@ -24,6 +25,7 @@ data class AudioTrackMetadata(
     val sourceHeaderVerified: Boolean,
     val discNumber: Int = 0,
     val trackNumber: Int = 0,
+    val year: Int = 0,
 )
 
 /**
@@ -37,9 +39,9 @@ data class AudioTrackMetadata(
 class AudioMetadataReader(private val context: Context) {
     /**
      * Fast-path metadata reader for MediaStore tracks where `TITLE`, `ARTIST`, `ALBUM`, `TRACK`,
-     * and `DURATION` were already indexed by Android's MediaStore cursor. Skips `MediaMetadataRetriever`
-     * completely for FLAC/WAV tracks once direct header parsing resolves `sampleRateHz` and
-     * `durationMs`.
+     * `YEAR`, and `DURATION` were already indexed by Android's MediaStore cursor. Skips
+     * `MediaMetadataRetriever` completely for FLAC/WAV tracks once direct header parsing resolves
+     * `sampleRateHz` and `durationMs`.
      */
     fun readMetadataForMediaStore(
         uri: Uri,
@@ -52,17 +54,21 @@ class AudioMetadataReader(private val context: Context) {
         cursorPackedTrack: Int = 0,
         cursorCdTrackNumber: String? = null,
         cursorDiscNumber: String? = null,
+        cursorYear: Int = 0,
     ): AudioTrackMetadata = readMetadataInternal(
         uri = uri,
         fileName = fileName,
         mimeType = mimeType,
         fallbackDurationMs = cursorDurationMs,
-        cursorTitle = cursorTitle,
-        cursorArtist = cursorArtist,
-        cursorAlbum = cursorAlbum,
-        cursorPackedTrack = cursorPackedTrack,
-        cursorCdTrackNumber = cursorCdTrackNumber,
-        cursorDiscNumber = cursorDiscNumber,
+        cursor = CursorMetaInput(
+            title = cursorTitle,
+            artist = cursorArtist,
+            album = cursorAlbum,
+            packedTrack = cursorPackedTrack,
+            cdTrackNumber = cursorCdTrackNumber,
+            discNumber = cursorDiscNumber,
+            year = cursorYear,
+        ),
         allowSkipRetriever = true,
     )
 
@@ -75,14 +81,19 @@ class AudioMetadataReader(private val context: Context) {
             fileName = fileName,
             mimeType = mimeType,
             fallbackDurationMs = fallbackDurationMs,
-            cursorTitle = null,
-            cursorArtist = null,
-            cursorAlbum = null,
-            cursorPackedTrack = 0,
-            cursorCdTrackNumber = null,
-            cursorDiscNumber = null,
+            cursor = CursorMetaInput(),
             allowSkipRetriever = false,
         )
+
+    private data class CursorMetaInput(
+        val title: String? = null,
+        val artist: String? = null,
+        val album: String? = null,
+        val packedTrack: Int = 0,
+        val cdTrackNumber: String? = null,
+        val discNumber: String? = null,
+        val year: Int = 0,
+    )
 
     private class MutableMetadataState(
         var title: String?,
@@ -98,6 +109,7 @@ class AudioMetadataReader(private val context: Context) {
         var headerTrackNumber: Int = 0,
         var trackNumberTag: String?,
         var discNumberTag: String?,
+        var year: Int = 0,
     )
 
     private fun readMetadataInternal(
@@ -105,12 +117,7 @@ class AudioMetadataReader(private val context: Context) {
         fileName: String,
         mimeType: String?,
         fallbackDurationMs: Long,
-        cursorTitle: String?,
-        cursorArtist: String?,
-        cursorAlbum: String?,
-        cursorPackedTrack: Int,
-        cursorCdTrackNumber: String?,
-        cursorDiscNumber: String?,
+        cursor: CursorMetaInput,
         allowSkipRetriever: Boolean,
     ): AudioTrackMetadata {
         val fallbackTitle = AudioFormatClassifier.baseNameWithoutExtension(fileName)
@@ -119,17 +126,18 @@ class AudioMetadataReader(private val context: Context) {
         val container = classified?.containerLabel ?: "AUDIO"
 
         val state = MutableMetadataState(
-            title = MetadataScanPolicy.sanitizeCursorTag(cursorTitle),
-            artist = MetadataScanPolicy.sanitizeCursorTag(cursorArtist),
-            album = MetadataScanPolicy.sanitizeCursorTag(cursorAlbum),
+            title = MetadataScanPolicy.sanitizeCursorTag(cursor.title),
+            artist = MetadataScanPolicy.sanitizeCursorTag(cursor.artist),
+            album = MetadataScanPolicy.sanitizeCursorTag(cursor.album),
             durationMs = fallbackDurationMs.coerceAtLeast(0L),
             codec = classified?.defaultCodecLabel ?: "Unknown",
-            trackNumberTag = cursorCdTrackNumber,
-            discNumberTag = cursorDiscNumber,
+            trackNumberTag = cursor.cdTrackNumber,
+            discNumberTag = cursor.discNumber,
+            year = ReleaseYearParser.sanitizeYear(cursor.year),
         )
 
-        // 1. Fast direct lossless FileChannel header verification for WAV and FLAC (< 1 ms, zero Binder IPC)
-        applyLosslessHeaderMetadata(uri, classified, state)
+        // 1. Fast direct FileChannel header verification for WAV/FLAC and ID3v2 year for MP3 (< 1 ms, zero Binder IPC)
+        applyFastHeaderMetadata(uri, classified, state)
 
         // 2. Skip MediaMetadataRetriever completely on MediaStore fast path when essential fields are present
         val hasCursorTags = state.title != null || state.artist != null || state.album != null
@@ -146,7 +154,7 @@ class AudioMetadataReader(private val context: Context) {
         }
 
         val resolvedPosition = TrackNumberParser.resolve(
-            mediaStorePackedTrack = cursorPackedTrack,
+            mediaStorePackedTrack = cursor.packedTrack,
             trackNumberTag = state.trackNumberTag,
             discNumberTag = state.discNumberTag,
             headerDiscNumber = state.headerDiscNumber,
@@ -167,10 +175,27 @@ class AudioMetadataReader(private val context: Context) {
             sourceHeaderVerified = state.headerVerified,
             discNumber = resolvedPosition.discNumber,
             trackNumber = resolvedPosition.trackNumber,
+            year = state.year,
         )
     }
 
-    private fun applyLosslessHeaderMetadata(uri: Uri, classified: SupportedAudioFormat?, state: MutableMetadataState) {
+    /**
+     * Lightweight release-year resolver used during automatic `v1.2 -> v1.3` database backfill
+     * when `MediaStore.Audio.Media.YEAR` is `0` or for SAF tracks:
+     * 1. Fast header-only `FileChannel` read (`FLAC` Vorbis `DATE`/`ORIGINALDATE`/`YEAR` or
+     *    `ID3v2` `TDRC`/`TYER`/`TDOR`, zero audio frames read).
+     * 2. `MediaMetadataRetriever` (`METADATA_KEY_YEAR` -> `METADATA_KEY_DATE`) fallback if still `0`.
+     */
+    fun readReleaseYearFallback(uri: Uri, fileName: String, mimeType: String? = null): Int {
+        val classified = AudioFormatClassifier.classify(fileName, mimeType)
+        if (classified == SupportedAudioFormat.FLAC || classified == SupportedAudioFormat.MP3) {
+            val headerYear = readHeaderYearSafely(uri)
+            if (headerYear > 0) return headerYear
+        }
+        return readRetrieverYearSafely(uri)
+    }
+
+    private fun applyFastHeaderMetadata(uri: Uri, classified: SupportedAudioFormat?, state: MutableMetadataState) {
         when (classified) {
             SupportedAudioFormat.WAV -> {
                 readWavHeaderSafely(uri)?.let { wav ->
@@ -192,6 +217,15 @@ class AudioMetadataReader(private val context: Context) {
                     state.headerVerified = true
                     state.headerDiscNumber = flac.discNumber
                     state.headerTrackNumber = flac.trackNumber
+                    if (state.year == 0 && flac.year > 0) {
+                        state.year = ReleaseYearParser.sanitizeYear(flac.year)
+                    }
+                }
+            }
+            SupportedAudioFormat.MP3 -> {
+                if (state.year == 0) {
+                    val headerYear = readHeaderYearSafely(uri)
+                    if (headerYear > 0) state.year = headerYear
                 }
             }
             else -> Unit
@@ -223,6 +257,9 @@ class AudioMetadataReader(private val context: Context) {
             if (state.discNumberTag.isNullOrBlank()) {
                 state.discNumberTag = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DISC_NUMBER)
             }
+            if (state.year == 0) {
+                state.year = extractRetrieverYear(retriever)
+            }
             if (state.durationMs <= 0L) {
                 state.durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
                     ?.toLongOrNull()?.coerceAtLeast(0L) ?: 0L
@@ -241,6 +278,35 @@ class AudioMetadataReader(private val context: Context) {
             // Gracefully fall back to cursor/filename & verified header info without crashing.
         } finally {
             runCatching { retriever.release() }
+        }
+    }
+
+    private fun extractRetrieverYear(retriever: MediaMetadataRetriever): Int {
+        val fromYear = ReleaseYearParser.parse(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_YEAR))
+        if (fromYear > 0) return fromYear
+        return ReleaseYearParser.parse(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DATE))
+    }
+
+    private fun readRetrieverYearSafely(uri: Uri): Int {
+        val retriever = MediaMetadataRetriever()
+        return try {
+            retriever.setDataSource(context, uri)
+            extractRetrieverYear(retriever)
+        } catch (_: Exception) {
+            0
+        } finally {
+            runCatching { retriever.release() }
+        }
+    }
+
+    private fun readHeaderYearSafely(uri: Uri): Int {
+        val pfd = runCatching { context.contentResolver.openFileDescriptor(uri, "r") }.getOrNull() ?: return 0
+        return pfd.use { descriptor ->
+            runCatching {
+                FileInputStream(descriptor.fileDescriptor).use { fis ->
+                    ReleaseYearParser.extractYearFromHeader(FileChannelSeekableByteSource(fis.channel))
+                }
+            }.getOrDefault(0)
         }
     }
 

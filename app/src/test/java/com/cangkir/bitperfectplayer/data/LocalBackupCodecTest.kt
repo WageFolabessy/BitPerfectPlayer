@@ -1,6 +1,7 @@
 package com.cangkir.bitperfectplayer.data
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -188,5 +189,38 @@ class LocalBackupCodecTest {
         """.trimIndent()
         val unknownDecoded = LocalBackupCodec.decode(unknownHomepageJson).getOrThrow()
         assertEquals(DefaultHomepage.ALL_SONGS, unknownDecoded.defaultHomepage)
+        assertFalse(unknownDecoded.dynamicCoverThemeEnabled)
+    }
+
+    @Test
+    fun encodeAndDecode_preservesDynamicCoverThemeAndDefaultsLegacyBackupsToFalse() {
+        val withDynamicTheme = LocalBackupPayload(
+            schemaVersion = LocalBackupCodec.CURRENT_SCHEMA_VERSION,
+            appId = LocalBackupCodec.APP_ID,
+            exportedAtEpochMs = 1_740_000_000_000L,
+            defaultHomepage = DefaultHomepage.ALBUMS,
+            dynamicCoverThemeEnabled = true,
+        )
+        val encoded = LocalBackupCodec.encode(withDynamicTheme)
+        assertTrue(encoded.contains("\"dynamicCoverThemeEnabled\": true"))
+        val decoded = LocalBackupCodec.decode(encoded).getOrThrow()
+        assertEquals(DefaultHomepage.ALBUMS, decoded.defaultHomepage)
+        assertTrue(decoded.dynamicCoverThemeEnabled)
+
+        // Legacy v1.0-v1.2 backup JSON missing dynamicCoverThemeEnabled must default to false (Monochrome Studio)
+        val legacyWithoutDynamicTheme = """
+            {
+              "schemaVersion": 1,
+              "appId": "com.cangkir.bitperfectplayer",
+              "exportedAtEpochMs": 1735000000000,
+              "defaultHomepage": "ALL_SONGS",
+              "playlists": [],
+              "lyrics": [],
+              "favorites": [],
+              "trackStats": []
+            }
+        """.trimIndent()
+        val legacyDecoded = LocalBackupCodec.decode(legacyWithoutDynamicTheme).getOrThrow()
+        assertFalse(legacyDecoded.dynamicCoverThemeEnabled)
     }
 }

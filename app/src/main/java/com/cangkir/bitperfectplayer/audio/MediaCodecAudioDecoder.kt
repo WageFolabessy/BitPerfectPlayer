@@ -15,6 +15,8 @@ import java.io.FileInputStream
 import java.io.IOException
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 
 /**
  * Native Android [MediaExtractor] + [MediaCodec] PCM decoder for FLAC (16/24-bit), MP3,
@@ -30,6 +32,8 @@ import java.util.concurrent.atomic.AtomicInteger
  * - Pumps the codec until `INFO_OUTPUT_FORMAT_CHANGED` or the first output buffer before returning
  *   from [open], so `AudioTrack` creation always uses the confirmed runtime `codec.outputFormat`.
  * - Every [readPcm] call respects exact `BufferInfo.offset`/`size` and returns whole PCM frames.
+ * - Serializes all `MediaCodec` / `MediaExtractor` operations under [codecLock] + [lifecycleGuard]
+ *   so `flush()`, `dequeue*()`, and `release()` can never overlap illegally.
  */
 class MediaCodecAudioDecoder private constructor(
     private val extractor: MediaExtractor,
@@ -53,6 +57,8 @@ class MediaCodecAudioDecoder private constructor(
     override val currentPositionMs: Long
         get() = _currentPositionMs
 
+    private val codecLock = ReentrantLock()
+    private val lifecycleGuard = MediaCodecLifecycleGuard()
     private val closed = AtomicBoolean(false)
     private var inputEos = false
     private var outputEos = false
@@ -63,22 +69,34 @@ class MediaCodecAudioDecoder private constructor(
     private val bufferInfo = MediaCodec.BufferInfo()
 
     override fun readPcm(destination: ByteArray): Int {
-        if (closed.get()) return -1
+        if (closed.get() || lifecycleGuard.isStoppedOrReleased()) return -1
+        return codecLock.withLock {
+            if (closed.get() || lifecycleGuard.isStoppedOrReleased()) return@withLock -1
+            if (!lifecycleGuard.canDecode()) return@withLock 0
 
-        val bytesPerFrame = _format.bytesPerFrame.coerceAtLeast(1)
-        val maxAlignedCopy = PcmStreamRules.alignByteCountToFrame(destination.size, bytesPerFrame)
-        if (maxAlignedCopy <= 0) return 0
+            val bytesPerFrame = _format.bytesPerFrame.coerceAtLeast(1)
+            val maxAlignedCopy = PcmStreamRules.alignByteCountToFrame(destination.size, bytesPerFrame)
+            if (maxAlignedCopy <= 0) return@withLock 0
 
-        val drained = drainPendingPcm(destination, bytesPerFrame, maxAlignedCopy)
-        if (drained > 0) return drained
-        if (outputEos) return -1
+            val drained = drainPendingPcm(destination, bytesPerFrame, maxAlignedCopy)
+            if (drained > 0) return@withLock drained
+            if (outputEos) return@withLock -1
 
-        return try {
-            pumpDecoderUntilOutput(destination)
-        } catch (e: MediaCodec.CodecException) {
-            throw AudioDecodeException.CorruptedFile("Hardware/OS codec error: ${e.diagnosticInfo}", e)
-        } catch (e: IllegalStateException) {
-            throw AudioDecodeException.CorruptedFile("MediaCodec decode error: ${e.message}", e)
+            try {
+                pumpDecoderUntilOutput(destination)
+            } catch (e: MediaCodec.CodecException) {
+                if (closed.get() || lifecycleGuard.isStoppedOrReleased()) {
+                    -1
+                } else {
+                    throw AudioDecodeException.CorruptedFile("Hardware/OS codec error: ${e.diagnosticInfo}", e)
+                }
+            } catch (e: IllegalStateException) {
+                if (closed.get() || lifecycleGuard.isStoppedOrReleased()) {
+                    -1
+                } else {
+                    throw AudioDecodeException.TransientCodecState("MediaCodec decode error: ${e.message}", e)
+                }
+            }
         }
     }
 
@@ -99,7 +117,7 @@ class MediaCodecAudioDecoder private constructor(
 
     private fun pumpDecoderUntilOutput(destination: ByteArray): Int {
         var attempts = 0
-        while (attempts < 64 && !closed.get()) {
+        while (attempts < 64 && !closed.get() && lifecycleGuard.canDecode()) {
             attempts++
             feedInputBufferIfAvailable()
 
@@ -183,32 +201,45 @@ class MediaCodecAudioDecoder private constructor(
     }
 
     override fun seekToMs(positionMs: Long): Long {
-        if (closed.get()) return _currentPositionMs
+        if (closed.get() || lifecycleGuard.isStoppedOrReleased()) return _currentPositionMs
         val clampedMs = positionMs.coerceIn(0L, format.durationMs.coerceAtLeast(0L))
-        try {
-            extractor.seekTo(clampedMs * 1000L, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
-            codec.flush()
-            pendingBytes = null
-            pendingOffset = 0
-            inputEos = false
-            outputEos = false
-            val sampleTimeUs = extractor.sampleTime
-            _currentPositionMs = if (sampleTimeUs >= 0L) sampleTimeUs / 1000L else clampedMs
-            return _currentPositionMs
-        } catch (e: IllegalStateException) {
-            throw AudioDecodeException.IoError("Failed seeking audio stream: ${e.message}", e)
-        } catch (e: IllegalArgumentException) {
-            throw AudioDecodeException.IoError("Failed seeking audio stream: ${e.message}", e)
+        return codecLock.withLock {
+            if (closed.get() || !lifecycleGuard.beginFlush()) return@withLock _currentPositionMs
+            try {
+                extractor.seekTo(clampedMs * 1000L, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
+                codec.flush()
+                pendingBytes = null
+                pendingOffset = 0
+                inputEos = false
+                outputEos = false
+                val sampleTimeUs = extractor.sampleTime
+                _currentPositionMs = if (sampleTimeUs >= 0L) sampleTimeUs / 1000L else clampedMs
+                _currentPositionMs
+            } catch (e: IllegalStateException) {
+                if (closed.get() || lifecycleGuard.isStoppedOrReleased()) {
+                    _currentPositionMs
+                } else {
+                    throw AudioDecodeException.TransientCodecState("MediaCodec seek error: ${e.message}", e)
+                }
+            } catch (e: IllegalArgumentException) {
+                throw AudioDecodeException.IoError("Failed seeking audio stream: ${e.message}", e)
+            } finally {
+                lifecycleGuard.endFlush()
+            }
         }
     }
 
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
-        runCatching { codec.stop() }
-        runCatching { codec.release() }
-        runCatching { extractor.release() }
-        pendingBytes = null
-        pendingOffset = 0
+        lifecycleGuard.beginStop()
+        codecLock.withLock {
+            runCatching { codec.stop() }
+            runCatching { codec.release() }
+            runCatching { extractor.release() }
+            pendingBytes = null
+            pendingOffset = 0
+            lifecycleGuard.markReleased()
+        }
     }
 
     private fun combineWithPending(incoming: ByteArray): ByteArray {
@@ -288,9 +319,12 @@ class MediaCodecAudioDecoder private constructor(
      * Pumps initial input frames until `INFO_OUTPUT_FORMAT_CHANGED` and/or the first decoded PCM
      * buffer arrives so `AudioTrack` creation uses the confirmed runtime `codec.outputFormat`.
      */
-    private fun primeOutputFormat() {
+    private fun primeOutputFormat(isCancelled: () -> Boolean = { false }) {
         var tries = 0
         while (tries < PRIME_MAX_ATTEMPTS && !outputEos) {
+            if (isCancelled()) {
+                throw AudioDecodeException.Cancelled()
+            }
             tries++
             feedInputBufferIfAvailable()
             val outIndex = codec.dequeueOutputBuffer(bufferInfo, DEQUEUE_TIMEOUT_US)
@@ -350,13 +384,19 @@ class MediaCodecAudioDecoder private constructor(
             fileName: String?,
             mimeHint: String? = null,
             diagnosticLogger: LocalDiagnosticLogger? = null,
+            isCancelled: () -> Boolean = { false },
         ): PcmAudioDecoder {
+            if (isCancelled()) throw AudioDecodeException.Cancelled()
             val classified = AudioFormatClassifier.classify(fileName, mimeHint)
             return try {
                 val decoder = if (classified == SupportedAudioFormat.WAV) {
-                    openDirectWavDecoder(context, uri) ?: openMediaCodecDecoder(context, uri, fileName, classified)
+                    openDirectWavDecoder(context, uri) ?: openMediaCodecDecoder(context, uri, fileName, classified, isCancelled)
                 } else {
-                    openMediaCodecDecoder(context, uri, fileName, classified)
+                    openMediaCodecDecoder(context, uri, fileName, classified, isCancelled)
+                }
+                if (isCancelled()) {
+                    runCatching { decoder.close() }
+                    throw AudioDecodeException.Cancelled()
                 }
                 diagnosticLogger?.logAudio("DECODER_CONFIG") {
                     val fmt = decoder.format
@@ -375,6 +415,8 @@ class MediaCodecAudioDecoder private constructor(
                     )
                 }
                 decoder
+            } catch (e: AudioDecodeException.Cancelled) {
+                throw e
             } catch (e: AudioDecodeException) {
                 diagnosticLogger?.logError("DECODER_OPEN_ERROR") {
                     linkedMapOf(
@@ -435,24 +477,33 @@ class MediaCodecAudioDecoder private constructor(
             }
         }
 
+        private fun checkCancelled(isCancelled: () -> Boolean) {
+            if (isCancelled()) throw AudioDecodeException.Cancelled()
+        }
+
         private fun openMediaCodecDecoder(
             context: Context,
             uri: Uri,
             fileName: String?,
             classifiedFormat: SupportedAudioFormat?,
+            isCancelled: () -> Boolean,
         ): PcmAudioDecoder {
+            checkCancelled(isCancelled)
             // Inspect FLAC header directly if applicable so source bit depth (16 vs 24) is verified.
             val flacInfo = if (classifiedFormat == SupportedAudioFormat.FLAC) {
                 readFlacHeaderSafely(context, uri)
             } else {
                 null
             }
+            checkCancelled(isCancelled)
 
             val extractor = MediaExtractor()
             var codec: MediaCodec? = null
             try {
                 extractor.setDataSource(context, uri, null)
+                checkCancelled(isCancelled)
                 val (trackFormat, mime) = selectFirstAudioTrack(extractor, fileName, uri)
+                checkCancelled(isCancelled)
 
                 val sourceSampleRate = flacInfo?.sampleRateHz
                     ?: trackFormat.getIntegerOrDefault(MediaFormat.KEY_SAMPLE_RATE, 44_100)
@@ -526,7 +577,7 @@ class MediaCodecAudioDecoder private constructor(
                     requestedEncoding = requestedPcm,
                     initialFormat = initialDecoded,
                 )
-                decoder.primeOutputFormat()
+                decoder.primeOutputFormat(isCancelled)
                 return decoder
             } catch (e: AudioDecodeException) {
                 releaseInitResources(codec, extractor)

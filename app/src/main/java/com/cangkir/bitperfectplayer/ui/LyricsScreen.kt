@@ -34,6 +34,7 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -43,6 +44,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -68,8 +70,6 @@ import com.cangkir.bitperfectplayer.data.LyricsSourceType
 import com.cangkir.bitperfectplayer.lyrics.LrcLine
 import com.cangkir.bitperfectplayer.lyrics.LrcParser
 import com.cangkir.bitperfectplayer.ui.theme.CoralWarning
-import com.cangkir.bitperfectplayer.ui.theme.IcePrimary
-import com.cangkir.bitperfectplayer.ui.theme.IcePrimaryContainer
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
@@ -117,8 +117,15 @@ fun LyricsScreen(
     if (showDeleteConfirm) {
         AlertDialog(
             onDismissRequest = { showDeleteConfirm = false },
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
             title = { Text("Delete Saved Lyrics?") },
-            text = { Text("This removes the locally stored lyrics bound to this track's SHA-256 fingerprint.") },
+            text = {
+                Text(
+                    text = "This removes the locally stored lyrics bound to this track's SHA-256 fingerprint.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            },
             dismissButton = {
                 TextButton(
                     onClick = { showDeleteConfirm = false },
@@ -128,14 +135,18 @@ fun LyricsScreen(
                 }
             },
             confirmButton = {
-                TextButton(
+                Button(
                     onClick = {
                         showDeleteConfirm = false
                         onDeleteLyrics()
                     },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = CoralWarning,
+                        contentColor = MaterialTheme.colorScheme.background,
+                    ),
                     modifier = Modifier.sizeIn(minHeight = 48.dp),
                 ) {
-                    Text("Delete", color = CoralWarning)
+                    Text("Delete")
                 }
             },
         )
@@ -149,7 +160,8 @@ fun LyricsScreen(
                     Column {
                         Text(
                             text = activeTrack?.title ?: "Lyrics",
-                            style = MaterialTheme.typography.titleMedium,
+                            style = MaterialTheme.typography.titleLarge,
+                            color = MaterialTheme.colorScheme.onSurface,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
@@ -351,7 +363,11 @@ private fun SyncedLyricsList(lines: List<LrcLine>, playbackPositionMsFlow: State
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(10.dp))
                     .background(
-                        if (isActive) IcePrimaryContainer.copy(alpha = 0.65f) else MaterialTheme.colorScheme.background,
+                        if (isActive) {
+                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.85f)
+                        } else {
+                            MaterialTheme.colorScheme.background
+                        },
                     )
                     .clickable { onSeekTo(line.timestampMs) }
                     .padding(horizontal = 14.dp, vertical = 10.dp),
@@ -360,7 +376,11 @@ private fun SyncedLyricsList(lines: List<LrcLine>, playbackPositionMsFlow: State
                     Text(
                         text = timestampLabel,
                         style = MaterialTheme.typography.labelSmall,
-                        color = if (isActive) IcePrimary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        color = if (isActive) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                        },
                         maxLines = 1,
                         softWrap = false,
                     )
@@ -373,7 +393,7 @@ private fun SyncedLyricsList(lines: List<LrcLine>, playbackPositionMsFlow: State
                             MaterialTheme.typography.bodyLarge
                         },
                         color = if (isActive) {
-                            MaterialTheme.colorScheme.onSurface
+                            MaterialTheme.colorScheme.onPrimaryContainer
                         } else {
                             MaterialTheme.colorScheme.onSurfaceVariant
                         },
@@ -439,6 +459,11 @@ private fun LyricsCompactSeekBar(
                     onSeekTo(target)
                 },
                 valueRange = 0f..safeDurationMs.toFloat(),
+                colors = SliderDefaults.colors(
+                    thumbColor = MaterialTheme.colorScheme.primary,
+                    activeTrackColor = MaterialTheme.colorScheme.primary,
+                    inactiveTrackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                ),
                 modifier = Modifier
                     .weight(1f)
                     .padding(horizontal = 8.dp),

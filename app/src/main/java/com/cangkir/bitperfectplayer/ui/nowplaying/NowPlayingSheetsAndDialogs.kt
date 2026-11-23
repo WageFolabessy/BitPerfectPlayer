@@ -52,7 +52,6 @@ import com.cangkir.bitperfectplayer.ui.theme.CoralWarning
 import com.cangkir.bitperfectplayer.ui.theme.CoralWarningContainer
 import com.cangkir.bitperfectplayer.ui.theme.EmeraldSafe
 import com.cangkir.bitperfectplayer.ui.theme.EmeraldSafeContainer
-import com.cangkir.bitperfectplayer.ui.theme.IcePrimary
 import com.cangkir.bitperfectplayer.ui.theme.OnAmberIndicatedContainer
 import com.cangkir.bitperfectplayer.ui.theme.OnCoralWarningContainer
 import com.cangkir.bitperfectplayer.ui.theme.OnEmeraldSafeContainer
@@ -179,7 +178,7 @@ internal fun AudioModeSheetContent(
     val isSafe = mode == AudioOutputMode.SAFE_VOLUME_MODE
     val accentColor = when {
         isSafe -> EmeraldSafe
-        isBitPerfectMixerActive -> IcePrimary
+        isBitPerfectMixerActive -> MaterialTheme.colorScheme.primary
         else -> AmberIndicated
     }
 
@@ -267,6 +266,7 @@ internal fun SafetyAlertBanner(message: String, isError: Boolean, onDismiss: (()
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(10.dp),
+        shadowElevation = 6.dp,
         color = if (isError) CoralWarningContainer else AmberIndicatedContainer,
         border = BorderStroke(
             0.5.dp,

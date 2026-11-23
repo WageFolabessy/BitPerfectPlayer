@@ -1,5 +1,6 @@
 package com.cangkir.bitperfectplayer.audio
 
+import com.cangkir.bitperfectplayer.library.ReleaseYearParser
 import com.cangkir.bitperfectplayer.lyrics.SeekableByteSource
 import java.io.Closeable
 import java.io.IOException
@@ -46,6 +47,12 @@ sealed class AudioDecodeException(message: String, cause: Throwable? = null) : I
     class IoError(message: String, cause: Throwable? = null) : AudioDecodeException(message, cause)
 
     class DecoderInitFailed(message: String, cause: Throwable? = null) : AudioDecodeException(message, cause)
+
+    class TransientCodecState(message: String, cause: Throwable? = null) : AudioDecodeException(message, cause)
+
+    class DeadAudioTrack(message: String, cause: Throwable? = null) : AudioDecodeException(message, cause)
+
+    class Cancelled(message: String = "Audio decoder open cancelled", cause: Throwable? = null) : AudioDecodeException(message, cause)
 }
 
 /**
@@ -145,12 +152,15 @@ data class FlacStreamInfo(
     val durationMs: Long,
     val discNumber: Int = 0,
     val trackNumber: Int = 0,
+    val year: Int = 0,
 )
 
 object FlacStreamInfoParser {
     private const val MIN_FLAC_HEADER_BYTES = 42 // 4 ("fLaC") + 4 (block header) + 34 (STREAMINFO)
     private const val MAX_VORBIS_COMMENT_BYTES = 256 * 1024 // 256 KB OOM safety cap
     private const val MAX_METADATA_BLOCKS_TO_SCAN = 32
+
+    private data class ParsedVorbisMeta(val discNumber: Int = 0, val trackNumber: Int = 0, val year: Int = 0)
 
     private val FLAC_MAGIC = byteArrayOf(
         'f'.code.toByte(),
@@ -175,15 +185,24 @@ object FlacStreamInfoParser {
         if (blockType != 0 || blockLength < 34) return null
 
         val baseInfo = decodeStreamInfoHeader(header) ?: return null
-        val parsedPos = if (!streamInfoIsLast) {
-            readVorbisTrackPositionSafely(source, offset + 8L + blockLength.toLong())
+        val parsedMeta = if (!streamInfoIsLast) {
+            readVorbisMetadataSafely(source, offset + 8L + blockLength.toLong())
         } else {
-            ParsedTrackPosition()
+            ParsedVorbisMeta()
+        }
+
+        val resolvedYear = if (parsedMeta.year > 0) {
+            parsedMeta.year
+        } else if (offset > 0L) {
+            ReleaseYearParser.extractId3v2Year(source)
+        } else {
+            0
         }
 
         return baseInfo.copy(
-            discNumber = parsedPos.discNumber,
-            trackNumber = parsedPos.trackNumber,
+            discNumber = parsedMeta.discNumber,
+            trackNumber = parsedMeta.trackNumber,
+            year = resolvedYear,
         )
     }
 
@@ -237,79 +256,88 @@ object FlacStreamInfoParser {
         )
     }
 
-    private fun readVorbisTrackPositionSafely(source: SeekableByteSource, startOffset: Long): ParsedTrackPosition {
+    private fun readVorbisMetadataSafely(source: SeekableByteSource, startOffset: Long): ParsedVorbisMeta {
         var cursor = startOffset
         val blockHeader = ByteArray(4)
         var blocksVisited = 0
         var reachedLast = false
         while (!reachedLast && cursor + 4L <= source.size && blocksVisited < MAX_METADATA_BLOCKS_TO_SCAN) {
             blocksVisited++
-            if (readFully(source, cursor, blockHeader, 4) < 4) return ParsedTrackPosition()
+            if (readFully(source, cursor, blockHeader, 4) < 4) return ParsedVorbisMeta()
             reachedLast = (blockHeader[0].toInt() and 0x80) != 0
             val blockType = blockHeader[0].toInt() and 0x7F
             val length = ((blockHeader[1].toInt() and 0xFF) shl 16) or
                 ((blockHeader[2].toInt() and 0xFF) shl 8) or
                 (blockHeader[3].toInt() and 0xFF)
             cursor += 4L
-            if (length < 0 || cursor + length.toLong() > source.size) return ParsedTrackPosition()
+            if (length < 0 || cursor + length.toLong() > source.size) return ParsedVorbisMeta()
 
             if (blockType == 4 && length in 8..MAX_VORBIS_COMMENT_BYTES) {
                 val payload = ByteArray(length)
                 return if (readFully(source, cursor, payload, length) == length) {
-                    parseVorbisCommentTrackPosition(payload)
+                    parseVorbisCommentMetadata(payload)
                 } else {
-                    ParsedTrackPosition()
+                    ParsedVorbisMeta()
                 }
             }
 
             cursor += length.toLong()
         }
-        return ParsedTrackPosition()
+        return ParsedVorbisMeta()
     }
 
-    private fun parseVorbisCommentTrackPosition(data: ByteArray): ParsedTrackPosition {
-        var pos = 0
-        if (pos + 4 > data.size) return ParsedTrackPosition()
-        val vendorLen = readInt32Le(data, pos)
-        pos += 4
-        if (vendorLen < 0 || pos + vendorLen > data.size) return ParsedTrackPosition()
-        pos += vendorLen
+    private class MutableVorbisMeta(var disc: Int = 0, var track: Int = 0, var year: Int = 0) {
+        fun isComplete(): Boolean = disc > 0 && track > 0 && year > 0
+        fun toImmutable(): ParsedVorbisMeta = ParsedVorbisMeta(discNumber = disc, trackNumber = track, year = year)
+    }
 
-        if (pos + 4 > data.size) return ParsedTrackPosition()
+    private fun parseVorbisCommentMetadata(data: ByteArray): ParsedVorbisMeta {
+        var pos = skipVorbisVendorHeader(data)
+        if (pos < 0 || pos + 4 > data.size) return ParsedVorbisMeta()
         val count = readInt32Le(data, pos)
         pos += 4
-        if (count <= 0 || count > 4096) return ParsedTrackPosition()
+        if (count <= 0 || count > 4096) return ParsedVorbisMeta()
 
-        var disc = 0
-        var track = 0
+        val meta = MutableVorbisMeta()
         for (i in 0 until count) {
             if (pos + 4 > data.size) break
             val entryLen = readInt32Le(data, pos)
             pos += 4
             if (entryLen <= 0 || pos + entryLen > data.size) break
-            val eqIdx = findAsciiEquals(data, pos, pos + entryLen)
-            if (eqIdx > pos) {
-                val keyLen = eqIdx - pos
-                if (keyLen in 4..11) {
-                    val key = String(data, pos, keyLen, Charsets.UTF_8).trim().uppercase()
-                    when (key) {
-                        "TRACKNUMBER", "TRACK" -> {
-                            val value = String(data, eqIdx + 1, pos + entryLen - (eqIdx + 1), Charsets.UTF_8)
-                            val parsed = TrackNumberParser.parseTagNumber(value)
-                            if (parsed > 0 && track == 0) track = parsed
-                        }
-                        "DISCNUMBER", "DISC" -> {
-                            val value = String(data, eqIdx + 1, pos + entryLen - (eqIdx + 1), Charsets.UTF_8)
-                            val parsed = TrackNumberParser.parseTagNumber(value)
-                            if (parsed > 0 && disc == 0) disc = parsed
-                        }
-                    }
-                }
-            }
+            applyVorbisCommentEntry(data, pos, pos + entryLen, meta)
             pos += entryLen
-            if (disc > 0 && track > 0) break
+            if (meta.isComplete()) break
         }
-        return ParsedTrackPosition(discNumber = disc, trackNumber = track)
+        return meta.toImmutable()
+    }
+
+    private fun skipVorbisVendorHeader(data: ByteArray): Int {
+        if (data.size < 4) return -1
+        val vendorLen = readInt32Le(data, 0)
+        val endOffset = 4 + vendorLen
+        return if (vendorLen < 0 || endOffset > data.size) -1 else endOffset
+    }
+
+    private fun applyVorbisCommentEntry(data: ByteArray, start: Int, end: Int, meta: MutableVorbisMeta) {
+        val eqIdx = findAsciiEquals(data, start, end)
+        val keyLen = eqIdx - start
+        if (eqIdx <= start || keyLen !in 4..12) return
+        val key = String(data, start, keyLen, Charsets.UTF_8).trim().uppercase()
+        val value = String(data, eqIdx + 1, end - (eqIdx + 1), Charsets.UTF_8)
+        when (key) {
+            "TRACKNUMBER", "TRACK" -> if (meta.track == 0) {
+                val parsed = TrackNumberParser.parseTagNumber(value)
+                if (parsed > 0) meta.track = parsed
+            }
+            "DISCNUMBER", "DISC" -> if (meta.disc == 0) {
+                val parsed = TrackNumberParser.parseTagNumber(value)
+                if (parsed > 0) meta.disc = parsed
+            }
+            "DATE", "YEAR", "ORIGINALDATE" -> if (meta.year == 0) {
+                val parsed = ReleaseYearParser.parse(value)
+                if (parsed > 0) meta.year = parsed
+            }
+        }
     }
 
     private fun findAsciiEquals(data: ByteArray, start: Int, end: Int): Int {

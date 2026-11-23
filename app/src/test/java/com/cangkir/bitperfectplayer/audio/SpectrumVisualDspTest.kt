@@ -66,7 +66,7 @@ class SpectrumVisualDspTest {
         val empty = AlbumPaletteExtractor.extractAccentPalette(IntArray(0), 0, 0)
         assertTrue(empty.contentEquals(AlbumPaletteExtractor.FALLBACK_STUDIO_PALETTE))
 
-        // Black, gray, and white checkerboard artwork -> strictly falls back to Studio slate-ice triad.
+        // Black, gray, and white checkerboard artwork -> strictly falls back to Monochrome Studio triad.
         val grayscale = IntArray(40 * 40) { idx ->
             when (idx % 3) {
                 0 -> 0xFF0A0A0A.toInt()
@@ -94,7 +94,7 @@ class SpectrumVisualDspTest {
     fun spectrumColorMapper_producesExpectedHuesForStudioPrismAndAlbumStyles() {
         val customAlbum = intArrayOf(0xFFE65C4F.toInt(), 0xFF47C98F.toInt(), 0xFF8A75E8.toInt())
 
-        // STUDIO keeps consistent slate-ice across bass, mid, and treble.
+        // STUDIO keeps consistent Monochrome Studio silver-ivory across bass, mid, and treble.
         val studioBass = SpectrumColorMapper.resolveBarColorArgb(SpectrumColorStyle.STUDIO, 0f, 0.65f, customAlbum)
         val studioMid = SpectrumColorMapper.resolveBarColorArgb(SpectrumColorStyle.STUDIO, 0.5f, 0.65f, customAlbum)
         val studioTreble = SpectrumColorMapper.resolveBarColorArgb(SpectrumColorStyle.STUDIO, 1f, 0.65f, customAlbum)

@@ -23,13 +23,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.FileOpen
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -46,6 +47,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -56,6 +59,7 @@ import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
 import com.cangkir.bitperfectplayer.library.MostPlayedTrackItem
 import com.cangkir.bitperfectplayer.library.PlaylistsUiSnapshot
 import com.cangkir.bitperfectplayer.library.ResolvedPlaylist
+import com.cangkir.bitperfectplayer.ui.DetailActionHeaderRow
 import com.cangkir.bitperfectplayer.ui.TrackArtworkThumbnail
 import com.cangkir.bitperfectplayer.ui.theme.CoralWarning
 import com.cangkir.bitperfectplayer.ui.theme.TextMuted
@@ -67,6 +71,8 @@ internal fun PlaylistsOverviewList(
     playlistsState: PlaylistsUiSnapshot,
     activeTrackUri: String?,
     albumArtworkLoader: AlbumArtworkLoader,
+    favoriteTrackUris: Set<String> = emptySet(),
+    favoriteFingerprints: Set<String> = emptySet(),
     onOpenMostPlayedAll: () -> Unit,
     onPlayTracks: (List<PlaybackTrack>, Int, QueueContext) -> Unit,
     onOpenPlaylist: (ResolvedPlaylist) -> Unit,
@@ -75,6 +81,11 @@ internal fun PlaylistsOverviewList(
     onRenamePlaylistClick: (ResolvedPlaylist) -> Unit,
     onExportPlaylistClick: (ResolvedPlaylist) -> Unit,
     onDeletePlaylistClick: (ResolvedPlaylist) -> Unit,
+    onToggleFavorite: (PlaybackTrack) -> Unit = {},
+    onEnqueueNext: (PlaybackTrack) -> Unit = {},
+    onEnqueueTrack: (PlaybackTrack) -> Unit = {},
+    onAddToPlaylist: (PlaybackTrack) -> Unit = {},
+    onShowTrackInfo: (PlaybackTrack) -> Unit = {},
 ) {
     val mostPlayedTracks = remember(playlistsState.mostPlayed) { playlistsState.mostPlayed.map { it.track } }
     val mostPlayedPreview = remember(playlistsState.mostPlayed) { playlistsState.mostPlayed.take(MOST_PLAYED_PREVIEW_LIMIT) }
@@ -138,17 +149,25 @@ internal fun PlaylistsOverviewList(
                 key = { _, item -> "mp_preview_${item.track.uriString}" },
                 contentType = { _, _ -> "most_played_row" },
             ) { index, item ->
+                val isFav = item.track.uriString in favoriteTrackUris ||
+                    item.track.contentFingerprint?.lowercase()?.let { it in favoriteFingerprints } == true
                 MostPlayedTrackRow(
                     rank = index + 1,
                     item = item,
                     isActive = item.track.uriString == activeTrackUri,
+                    isFavorite = isFav,
                     albumArtworkLoader = albumArtworkLoader,
                     onClick = { onPlayTracks(mostPlayedTracks, index, QueueContext.mostPlayed()) },
+                    onToggleFavorite = { onToggleFavorite(item.track) },
+                    onAddToPlaylist = { onAddToPlaylist(item.track) },
+                    onEnqueueNext = { onEnqueueNext(item.track) },
+                    onEnqueueTrack = { onEnqueueTrack(item.track) },
+                    onShowTrackInfo = { onShowTrackInfo(item.track) },
                 )
                 HorizontalDivider(
                     thickness = 0.5.dp,
                     color = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f),
-                    modifier = Modifier.padding(start = 90.dp, end = 16.dp),
+                    modifier = Modifier.padding(start = 98.dp, end = 16.dp),
                 )
             }
 
@@ -262,52 +281,132 @@ internal fun MostPlayedTrackRow(
     isActive: Boolean,
     albumArtworkLoader: AlbumArtworkLoader,
     onClick: () -> Unit,
+    isFavorite: Boolean = false,
+    onToggleFavorite: (() -> Unit)? = null,
+    onAddToPlaylist: (() -> Unit)? = null,
+    onEnqueueNext: (() -> Unit)? = null,
+    onEnqueueTrack: (() -> Unit)? = null,
+    onShowTrackInfo: (() -> Unit)? = null,
 ) {
     val track = item.track
+    val haptic = LocalHapticFeedback.current
+    var menuExpanded by remember { mutableStateOf(false) }
+    val cleanArtist = track.artist.trim().ifEmpty { "Unknown Artist" }
+    val playLabel = "${item.playCount} ${if (item.playCount == 1) "play" else "plays"}"
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .background(if (isActive) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent)
             .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+            .padding(start = 16.dp, end = 2.dp, top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
             text = "$rank",
             style = MaterialTheme.typography.labelSmall,
             color = if (isActive) MaterialTheme.colorScheme.primary else TextMuted,
-            modifier = Modifier.width(20.dp),
+            modifier = Modifier.width(22.dp),
             maxLines = 1,
             softWrap = false,
         )
-        TrackArtworkThumbnail(track, albumArtworkLoader, size = 42.dp, cornerRadius = 8.dp)
+        TrackArtworkThumbnail(track, albumArtworkLoader, size = 48.dp, cornerRadius = 8.dp)
         Spacer(modifier = Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = track.title,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Medium,
+                    color = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                if (track.durationLabel.isNotEmpty()) {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = track.durationLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = TextMuted,
+                        maxLines = 1,
+                        softWrap = false,
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(2.dp))
             Text(
-                text = track.title,
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Medium,
-                color = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Spacer(modifier = Modifier.height(1.dp))
-            Text(
-                text = track.artist,
+                text = "$cleanArtist · $playLabel",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = track.formatBadge,
+                style = MaterialTheme.typography.labelSmall,
+                color = TextMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
-        Spacer(modifier = Modifier.width(8.dp))
-        Text(
-            text = "${item.playCount} ${if (item.playCount == 1) "play" else "plays"}",
-            style = MaterialTheme.typography.labelSmall,
-            color = TextMuted,
-            maxLines = 1,
-            softWrap = false,
-        )
+        if (onToggleFavorite != null) {
+            IconButton(
+                onClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    onToggleFavorite()
+                },
+                modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
+            ) {
+                Icon(
+                    imageVector = if (isFavorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+                    contentDescription = if (isFavorite) "Remove ${track.title} from favorites" else "Add ${track.title} to favorites",
+                    tint = if (isFavorite) MaterialTheme.colorScheme.primary else TextMuted,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+        }
+        val overflowItems = listOfNotNull(
+            onAddToPlaylist?.let { "Add to Playlist" to it },
+            onEnqueueNext?.let { "Play Next" to it },
+            onEnqueueTrack?.let { "Add to Queue" to it },
+            onShowTrackInfo?.let { "Track Info" to it },
+        ).takeIf { it.size == 4 }
+        if (overflowItems != null) {
+            Box {
+                IconButton(
+                    onClick = { menuExpanded = true },
+                    modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.MoreVert,
+                        contentDescription = "More actions for ${track.title}",
+                        tint = TextMuted,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+                if (menuExpanded) {
+                    DropdownMenu(
+                        expanded = true,
+                        onDismissRequest = { menuExpanded = false },
+                    ) {
+                        overflowItems.forEach { (label, action) ->
+                            DropdownMenuItem(
+                                text = { Text(label) },
+                                onClick = {
+                                    menuExpanded = false
+                                    action()
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -316,59 +415,53 @@ internal fun MostPlayedDetailView(
     items: List<MostPlayedTrackItem>,
     activeTrackUri: String?,
     albumArtworkLoader: AlbumArtworkLoader,
+    favoriteTrackUris: Set<String> = emptySet(),
+    favoriteFingerprints: Set<String> = emptySet(),
     onPlayTracks: (List<PlaybackTrack>, Int) -> Unit,
+    onShuffleTracks: (List<PlaybackTrack>) -> Unit = { tracks -> onPlayTracks(tracks.shuffled(), 0) },
     onEnqueueAllNext: (List<PlaybackTrack>) -> Unit,
     onEnqueueAll: (List<PlaybackTrack>) -> Unit,
+    onToggleFavorite: (PlaybackTrack) -> Unit = {},
+    onEnqueueNext: (PlaybackTrack) -> Unit = {},
+    onEnqueueTrack: (PlaybackTrack) -> Unit = {},
+    onAddToPlaylist: (PlaybackTrack) -> Unit = {},
+    onShowTrackInfo: (PlaybackTrack) -> Unit = {},
 ) {
     val tracks = remember(items) { items.map { it.track } }
-    var menuExpanded by remember { mutableStateOf(false) }
 
     Column(modifier = Modifier.fillMaxSize()) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 6.dp, top = 8.dp, bottom = 8.dp),
+            modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Text(
                 text = "${items.size} ranked ${if (items.size == 1) "track" else "tracks"}",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
-            if (tracks.isNotEmpty()) {
-                FilledTonalButton(onClick = { onPlayTracks(tracks, 0) }, modifier = Modifier.sizeIn(minHeight = 48.dp)) {
-                    Icon(Icons.Filled.PlayArrow, contentDescription = null)
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Play All", maxLines = 1, softWrap = false)
-                }
-                Box {
-                    IconButton(onClick = { menuExpanded = true }, modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)) {
-                        Icon(
-                            imageVector = Icons.Filled.MoreVert,
-                            contentDescription = "Most Played queue actions",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    if (menuExpanded) {
-                        DropdownMenu(expanded = true, onDismissRequest = { menuExpanded = false }) {
-                            DropdownMenuItem(
-                                text = { Text("Play Next") },
-                                onClick = {
-                                    menuExpanded = false
-                                    onEnqueueAllNext(tracks)
-                                },
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Add All to Queue") },
-                                onClick = {
-                                    menuExpanded = false
-                                    onEnqueueAll(tracks)
-                                },
-                            )
-                        }
-                    }
-                }
-            }
+        }
+        DetailActionHeaderRow(
+            hasTracks = tracks.isNotEmpty(),
+            onPlayAll = { if (tracks.isNotEmpty()) onPlayTracks(tracks, 0) },
+            onShuffle = { if (tracks.isNotEmpty()) onShuffleTracks(tracks) },
+            overflowContentDescription = "Most Played queue actions",
+        ) { dismiss ->
+            DropdownMenuItem(
+                text = { Text("Play Next") },
+                onClick = {
+                    dismiss()
+                    onEnqueueAllNext(tracks)
+                },
+            )
+            DropdownMenuItem(
+                text = { Text("Add All to Queue") },
+                onClick = {
+                    dismiss()
+                    onEnqueueAll(tracks)
+                },
+            )
         }
         HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outline.copy(alpha = 0.55f))
         LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
@@ -377,17 +470,25 @@ internal fun MostPlayedDetailView(
                 key = { _, item -> "mp_full_${item.track.uriString}" },
                 contentType = { _, _ -> "most_played_row" },
             ) { index, item ->
+                val isFav = item.track.uriString in favoriteTrackUris ||
+                    item.track.contentFingerprint?.lowercase()?.let { it in favoriteFingerprints } == true
                 MostPlayedTrackRow(
                     rank = index + 1,
                     item = item,
                     isActive = item.track.uriString == activeTrackUri,
+                    isFavorite = isFav,
                     albumArtworkLoader = albumArtworkLoader,
                     onClick = { onPlayTracks(tracks, index) },
+                    onToggleFavorite = { onToggleFavorite(item.track) },
+                    onAddToPlaylist = { onAddToPlaylist(item.track) },
+                    onEnqueueNext = { onEnqueueNext(item.track) },
+                    onEnqueueTrack = { onEnqueueTrack(item.track) },
+                    onShowTrackInfo = { onShowTrackInfo(item.track) },
                 )
                 HorizontalDivider(
                     thickness = 0.5.dp,
                     color = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f),
-                    modifier = Modifier.padding(start = 90.dp, end = 16.dp),
+                    modifier = Modifier.padding(start = 98.dp, end = 16.dp),
                 )
             }
         }

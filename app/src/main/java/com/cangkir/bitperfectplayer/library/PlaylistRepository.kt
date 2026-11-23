@@ -49,6 +49,11 @@ data class PlaylistsUiSnapshot(
 
 data class M3u8ImportSummary(val playlistId: Long, val playlistName: String, val matchedCount: Int, val unmatchedCount: Int)
 
+enum class AddTrackToPlaylistOutcome {
+    ADDED,
+    ALREADY_EXISTS,
+}
+
 /**
  * Local-only playlists and listening statistics repository backed by Room (`playlists`,
  * `playlist_tracks`, `track_stats`) with 100% offline `.m3u8` SAF import/export.
@@ -82,7 +87,9 @@ class PlaylistRepository(
                 tracksByFp.putIfAbsent(fp, track)
             }
             tracksByUri.putIfAbsent(track.uriString, track)
-            tracksByFileName.putIfAbsent(track.fileName.lowercase(), track)
+            if (track.fileName.isNotBlank()) {
+                tracksByFileName.putIfAbsent(track.fileName.lowercase(), track)
+            }
         }
 
         val playCountsByKey = HashMap<String, Int>(allStats.size * 2).apply {
@@ -102,7 +109,7 @@ class PlaylistRepository(
             val customOrdered = rawEntries.mapNotNull { entry ->
                 val resolvedTrack = entry.contentFingerprint?.lowercase()?.let { tracksByFp[it] }
                     ?: tracksByUri[entry.trackUri]
-                    ?: tracksByFileName[entry.fileName.lowercase()]
+                    ?: entry.fileName.takeIf { it.isNotBlank() }?.let { tracksByFileName[it.lowercase()] }
                     ?: return@mapNotNull null
                 ResolvedPlaylistEntry(
                     entryId = entry.id,
@@ -141,7 +148,7 @@ class PlaylistRepository(
             .mapNotNull { stat ->
                 val resolvedTrack = tracksByFp[stat.contentFingerprint.lowercase()]
                     ?: tracksByUri[stat.trackUri]
-                    ?: tracksByFileName[stat.fileName.lowercase()]
+                    ?: stat.fileName.takeIf { it.isNotBlank() }?.let { tracksByFileName[it.lowercase()] }
                     ?: return@mapNotNull null
                 MostPlayedTrackItem(
                     track = resolvedTrack,
@@ -229,13 +236,81 @@ class PlaylistRepository(
         }
     }
 
-    suspend fun removeEntryFromPlaylist(playlistId: Long, entryId: Long): Result<Unit> = withContext(Dispatchers.IO) {
+    suspend fun addTrackToPlaylistUnique(playlistId: Long, track: PlaybackTrack): Result<AddTrackToPlaylistOutcome> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val now = System.currentTimeMillis()
+                val rawFp = track.contentFingerprint?.takeIf { it.isNotBlank() }
+                    ?: fingerprintProvider.computeFingerprint(track.uriString.toUri()).getOrNull()
+                val normalizedFp = rawFp?.let { PersistenceSanitizer.normalizeFingerprint(it) }?.takeIf { it.isNotEmpty() }
+                val trimmedUri = track.uriString.trim()
+                val existing = playlistDao.getTracksForPlaylist(playlistId)
+                val isDuplicate = PlaylistMembershipPolicy.isTrackDuplicateOfPersisted(
+                    trackFingerprint = normalizedFp,
+                    trackUri = trimmedUri,
+                    persistedFingerprints = existing.map { it.contentFingerprint },
+                    persistedUris = existing.map { it.trackUri },
+                )
+                if (isDuplicate) {
+                    return@runCatching AddTrackToPlaylistOutcome.ALREADY_EXISTS
+                }
+                val nextPos = (playlistDao.getMaxPositionIndex(playlistId) ?: -1) + 1
+                playlistDao.insertPlaylistTrack(
+                    PlaylistTrackEntity(
+                        playlistId = playlistId,
+                        contentFingerprint = normalizedFp,
+                        trackUri = trimmedUri,
+                        fileName = PersistenceSanitizer.sanitizeDisplayText(track.fileName, "Unknown"),
+                        positionIndex = nextPos,
+                        addedAtEpochMs = now,
+                    ),
+                )
+                playlistDao.touchPlaylist(playlistId = playlistId, updatedAtEpochMs = now)
+                AddTrackToPlaylistOutcome.ADDED
+            }
+        }
+
+    suspend fun removeEntryFromPlaylist(playlistId: Long, entryId: Long): Result<PlaylistTrackEntity?> = withContext(Dispatchers.IO) {
         runCatching {
+            val snapshot = playlistDao.getPlaylistTrackById(entryId)
             playlistDao.removeEntryAndCompact(
                 playlistId = playlistId,
                 entryId = entryId,
                 updatedAtEpochMs = System.currentTimeMillis(),
             )
+            snapshot
+        }
+    }
+
+    suspend fun restoreRemovedEntry(entity: PlaylistTrackEntity): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            playlistDao.restoreEntryAtPosition(
+                playlistId = entity.playlistId,
+                entity = entity,
+                updatedAtEpochMs = System.currentTimeMillis(),
+            )
+        }
+    }
+
+    suspend fun commitPlaylistOrder(playlistId: Long, orderedVisibleEntryIds: List<Long>): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            val currentIds = playlistDao.getTracksForPlaylist(playlistId).map { it.id }
+            val visibleQueue = ArrayDeque(orderedVisibleEntryIds.distinct())
+            val visibleSet = orderedVisibleEntryIds.toHashSet()
+            val reconciledIds = currentIds.map { id ->
+                if (id in visibleSet && visibleQueue.isNotEmpty()) {
+                    visibleQueue.removeFirst()
+                } else {
+                    id
+                }
+            }
+            if (reconciledIds != currentIds) {
+                playlistDao.replacePlaylistTrackOrder(
+                    playlistId = playlistId,
+                    orderedEntryIds = reconciledIds,
+                    updatedAtEpochMs = System.currentTimeMillis(),
+                )
+            }
         }
     }
 

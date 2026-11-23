@@ -35,9 +35,6 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.cangkir.bitperfectplayer.audio.SleepTimerPreset
 import com.cangkir.bitperfectplayer.audio.SleepTimerState
-import com.cangkir.bitperfectplayer.ui.theme.IcePrimary
-import com.cangkir.bitperfectplayer.ui.theme.IcePrimaryContainer
-import com.cangkir.bitperfectplayer.ui.theme.OnIcePrimaryContainer
 import com.cangkir.bitperfectplayer.ui.theme.TextMuted
 import kotlinx.coroutines.flow.StateFlow
 
@@ -54,8 +51,7 @@ fun SleepTimerTopBarButton(sleepTimerStateFlow: StateFlow<SleepTimerState>, onCl
                 .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
                 .clickable(onClick = onClick),
             shape = RoundedCornerShape(20.dp),
-            color = IcePrimaryContainer,
-            border = BorderStroke(0.5.dp, IcePrimary.copy(alpha = 0.55f)),
+            color = MaterialTheme.colorScheme.primary,
         ) {
             Row(
                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
@@ -64,14 +60,14 @@ fun SleepTimerTopBarButton(sleepTimerStateFlow: StateFlow<SleepTimerState>, onCl
                 Icon(
                     imageVector = Icons.Filled.Bedtime,
                     contentDescription = "Sleep timer active: ${timerState.compactBadgeLabel}",
-                    tint = OnIcePrimaryContainer,
+                    tint = MaterialTheme.colorScheme.onPrimary,
                     modifier = Modifier.size(16.dp),
                 )
                 Spacer(modifier = Modifier.width(4.dp))
                 Text(
                     text = timerState.compactBadgeLabel,
                     style = MaterialTheme.typography.labelSmall,
-                    color = OnIcePrimaryContainer,
+                    color = MaterialTheme.colorScheme.onPrimary,
                     fontWeight = FontWeight.Medium,
                     maxLines = 1,
                     softWrap = false,
@@ -107,7 +103,7 @@ fun SleepTimerSettingsValueLeaf(sleepTimerStateFlow: StateFlow<SleepTimerState>)
     Text(
         text = summary,
         style = MaterialTheme.typography.bodySmall,
-        color = if (timerState.isActive) IcePrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+        color = if (timerState.isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
         maxLines = 1,
         softWrap = false,
     )
@@ -154,7 +150,7 @@ fun SleepTimerBottomSheet(
                             timerState.compactBadgeLabel
                         },
                         style = MaterialTheme.typography.labelLarge,
-                        color = IcePrimary,
+                        color = MaterialTheme.colorScheme.primary,
                         maxLines = 1,
                         softWrap = false,
                     )
@@ -197,13 +193,13 @@ fun SleepTimerBottomSheet(
                                 text = preset.label,
                                 style = MaterialTheme.typography.bodyLarge,
                                 fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                                color = if (selected) IcePrimary else MaterialTheme.colorScheme.onSurface,
+                                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                             )
                             if (selected) {
                                 Icon(
                                     imageVector = Icons.Filled.Check,
                                     contentDescription = "Selected",
-                                    tint = IcePrimary,
+                                    tint = MaterialTheme.colorScheme.primary,
                                     modifier = Modifier.size(20.dp),
                                 )
                             } else if (preset == SleepTimerPreset.END_OF_TRACK) {

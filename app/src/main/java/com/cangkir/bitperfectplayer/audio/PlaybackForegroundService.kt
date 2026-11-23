@@ -17,6 +17,7 @@ import android.media.MediaMetadata
 import android.media.session.MediaSession
 import android.media.session.PlaybackState
 import android.os.Build
+import android.os.Bundle
 import android.os.IBinder
 import android.os.SystemClock
 import android.util.Log
@@ -26,23 +27,32 @@ import com.cangkir.bitperfectplayer.BitPerfectApplication
 import com.cangkir.bitperfectplayer.MainActivity
 import com.cangkir.bitperfectplayer.R
 import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
+import com.cangkir.bitperfectplayer.library.FavoriteStateReducer
+import com.cangkir.bitperfectplayer.library.LocalLibraryRepository
+import com.cangkir.bitperfectplayer.library.NotificationArtworkFramer
+import com.cangkir.bitperfectplayer.library.NotificationArtworkHelper
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Foreground media playback service (`foregroundServiceType="mediaPlayback"`) exposing system
  * `Notification.MediaStyle` and platform `android.media.session.MediaSession` controls
- * (`Play`, `Pause`, `Next`, `Previous`, `Seek`) with local offline artwork and zero network dependencies.
+ * (`Play`, `Pause`, `Next`, `Previous`, `Seek`, `Favorite`, `Shuffle`) with uncropped square-framed
+ * local offline artwork, concise audiophile format subtitle, and custom monochrome status icon.
  */
 class PlaybackForegroundService : Service() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     private lateinit var playbackController: PlaybackController
+    private lateinit var libraryRepository: LocalLibraryRepository
     private lateinit var foregroundPlaybackGate: ForegroundPlaybackGate
     private lateinit var albumArtworkLoader: AlbumArtworkLoader
     private lateinit var notificationManager: NotificationManager
@@ -53,6 +63,9 @@ class PlaybackForegroundService : Service() {
     private var artworkBitmap: Bitmap? = null
     private var artworkLoadJob: Job? = null
 
+    private var favoriteUris: Set<String> = emptySet()
+    private var favoriteFingerprints: Set<String> = emptySet()
+
     private var lastMetadataKey: MediaMetadataKey? = null
     private var lastNotificationKey: NotificationContentKey? = null
     private var lastPublishedPlaybackState: PublishedPlaybackState? = null
@@ -61,9 +74,14 @@ class PlaybackForegroundService : Service() {
         super.onCreate()
         val app = application as BitPerfectApplication
         playbackController = app.container.playbackController
+        libraryRepository = app.container.libraryRepository
         foregroundPlaybackGate = app.container.foregroundPlaybackGate
         albumArtworkLoader = app.container.albumArtworkLoader
         notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+        val initialLib = libraryRepository.librarySnapshot.value
+        favoriteUris = initialLib.favoriteUris
+        favoriteFingerprints = initialLib.favoriteFingerprints
 
         createNotificationChannel()
         initMediaSession()
@@ -71,7 +89,7 @@ class PlaybackForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
+        when (val action = intent?.action) {
             ACTION_PLAY_PAUSE -> {
                 if (playbackController.state.value.isPlaying) {
                     playbackController.togglePlayPause()
@@ -88,6 +106,11 @@ class PlaybackForegroundService : Service() {
                 if (ensurePromotedToForeground()) {
                     playbackController.previous()
                 }
+            }
+            MediaSessionCustomActions.ACTION_TOGGLE_FAVORITE,
+            MediaSessionCustomActions.ACTION_TOGGLE_SHUFFLE,
+            -> {
+                handleCustomAction(action)
             }
             ACTION_STOP -> {
                 playbackController.pause()
@@ -152,6 +175,10 @@ class PlaybackForegroundService : Service() {
                         playbackController.seekTo(pos)
                     }
 
+                    override fun onCustomAction(action: String, extras: Bundle?) {
+                        handleCustomAction(action)
+                    }
+
                     override fun onStop() {
                         playbackController.pause()
                         stopForegroundCompat()
@@ -160,6 +187,27 @@ class PlaybackForegroundService : Service() {
                 },
             )
             isActive = true
+        }
+    }
+
+    private fun handleCustomAction(action: String?) {
+        when (MediaSessionCustomActions.resolveCommand(action)) {
+            MediaCustomActionCommand.TOGGLE_FAVORITE -> {
+                val state = playbackController.state.value
+                val track = state.activeTrack ?: return
+                val trackWithFp = if (track.contentFingerprint.isNullOrBlank() && !state.activeFingerprint.isNullOrBlank()) {
+                    track.copy(contentFingerprint = state.activeFingerprint)
+                } else {
+                    track
+                }
+                serviceScope.launch {
+                    libraryRepository.toggleFavorite(trackWithFp)
+                }
+            }
+            MediaCustomActionCommand.TOGGLE_SHUFFLE -> {
+                playbackController.toggleShuffle()
+            }
+            MediaCustomActionCommand.UNKNOWN -> Unit
         }
     }
 
@@ -174,6 +222,19 @@ class PlaybackForegroundService : Service() {
             playbackController.playbackPositionMs.collect { positionMs ->
                 syncMediaSessionPlaybackStateOnly(playbackController.state.value, positionMs)
             }
+        }
+        serviceScope.launch {
+            libraryRepository.librarySnapshot
+                .map { it.favoriteUris to it.favoriteFingerprints }
+                .distinctUntilChanged()
+                .collect { (uris, fps) ->
+                    favoriteUris = uris
+                    favoriteFingerprints = fps
+                    syncMediaSessionAndNotification(
+                        playbackController.state.value,
+                        playbackController.playbackPositionMs.value,
+                    )
+                }
         }
     }
 
@@ -190,13 +251,19 @@ class PlaybackForegroundService : Service() {
         }
 
         val cached = albumArtworkLoader.getCachedFromMemory(track, AlbumArtworkLoader.HERO_SIZE_PX)
-        artworkBitmap = cached
-        if (cached != null) return
+        if (cached != null && isAlreadyReadyForNotification(cached)) {
+            artworkBitmap = cached
+            return
+        }
 
+        artworkBitmap = null
         artworkLoadJob = serviceScope.launch {
-            val loaded = albumArtworkLoader.loadArtwork(track, AlbumArtworkLoader.HERO_SIZE_PX)
-            if (artworkTrackUri == track.uriString && loaded !== artworkBitmap) {
-                artworkBitmap = loaded
+            val raw = cached ?: albumArtworkLoader.loadArtwork(track, AlbumArtworkLoader.HERO_SIZE_PX)
+            val framed = withContext(Dispatchers.Default) {
+                NotificationArtworkFramer.frameForMediaNotification(raw)
+            }
+            if (artworkTrackUri == track.uriString && framed !== artworkBitmap) {
+                artworkBitmap = framed
                 syncMediaSessionAndNotification(
                     playbackController.state.value,
                     playbackController.playbackPositionMs.value,
@@ -204,6 +271,12 @@ class PlaybackForegroundService : Service() {
             }
         }
     }
+
+    private fun isAlreadyReadyForNotification(bitmap: Bitmap): Boolean = !bitmap.isRecycled &&
+        bitmap.width > 0 &&
+        bitmap.width == bitmap.height &&
+        bitmap.width <= NotificationArtworkHelper.MAX_NOTIFICATION_COVER_PX &&
+        bitmap.config != Bitmap.Config.HARDWARE
 
     private fun syncMediaSessionAndNotification(state: PlaybackControllerState, positionMs: Long) {
         val artworkToken = resolveArtworkToken(state.activeTrack)
@@ -234,15 +307,18 @@ class PlaybackForegroundService : Service() {
         artworkToken: Int = resolveArtworkToken(state.activeTrack),
     ) {
         val track = state.activeTrack
+        val subtitle = resolveNotificationSubtitle(state)
         val metadataKey = MediaMetadataKey(
             trackUri = track?.uriString,
             durationMs = state.durationMs,
             artworkToken = artworkToken,
+            subtitle = subtitle,
         )
         if (MediaSessionUpdatePolicy.shouldUpdateMetadata(lastMetadataKey, metadataKey)) {
             val metadataBuilder = MediaMetadata.Builder()
                 .putString(MediaMetadata.METADATA_KEY_TITLE, track?.title ?: getString(R.string.app_name))
-                .putString(MediaMetadata.METADATA_KEY_ARTIST, track?.artist ?: "Offline Bit-Perfect Audio")
+                .putString(MediaMetadata.METADATA_KEY_ARTIST, subtitle)
+                .putString(MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE, subtitle)
                 .putString(MediaMetadata.METADATA_KEY_ALBUM, track?.album ?: "")
                 .putLong(MediaMetadata.METADATA_KEY_DURATION, state.durationMs)
             val currentArtwork = resolveActiveArtworkBitmap(track)
@@ -260,6 +336,8 @@ class PlaybackForegroundService : Service() {
         val track = state.activeTrack
         val nowElapsedMs = SystemClock.elapsedRealtime()
         val playbackSpeed = if (state.isPlaying) 1.0f else 0.0f
+        val isFavorite = isActiveTrackFavorite(state)
+        val shuffleEnabled = state.queue.shuffleEnabled
         if (
             MediaSessionUpdatePolicy.shouldUpdatePlaybackState(
                 last = lastPublishedPlaybackState,
@@ -269,6 +347,8 @@ class PlaybackForegroundService : Service() {
                 positionMs = positionMs,
                 playbackSpeed = playbackSpeed,
                 nowElapsedMs = nowElapsedMs,
+                isFavorite = isFavorite,
+                shuffleEnabled = shuffleEnabled,
             )
         ) {
             val sessionState = when (state.engineState.status) {
@@ -295,6 +375,20 @@ class PlaybackForegroundService : Service() {
                     playbackSpeed,
                     nowElapsedMs,
                 )
+            val customSpecs = MediaSessionCustomActions.buildCustomActionSpecs(
+                isFavorite = isFavorite,
+                shuffleEnabled = shuffleEnabled,
+                hasActiveTrack = track != null,
+            )
+            for (spec in customSpecs) {
+                playbackStateBuilder.addCustomAction(
+                    PlaybackState.CustomAction.Builder(
+                        spec.action,
+                        spec.label,
+                        spec.icon.toDrawableRes(),
+                    ).build(),
+                )
+            }
             state.engineState.errorMessage?.let { err ->
                 playbackStateBuilder.setErrorMessage(err)
             }
@@ -306,8 +400,46 @@ class PlaybackForegroundService : Service() {
                 positionMs = positionMs,
                 playbackSpeed = playbackSpeed,
                 publishedAtElapsedMs = nowElapsedMs,
+                isFavorite = isFavorite,
+                shuffleEnabled = shuffleEnabled,
             )
         }
+    }
+
+    private fun isActiveTrackFavorite(state: PlaybackControllerState): Boolean {
+        val track = state.activeTrack ?: return false
+        val effectiveTrack = if (track.contentFingerprint.isNullOrBlank() && !state.activeFingerprint.isNullOrBlank()) {
+            track.copy(contentFingerprint = state.activeFingerprint)
+        } else {
+            track
+        }
+        return FavoriteStateReducer.isFavorited(
+            track = effectiveTrack,
+            favoriteUris = favoriteUris,
+            favoriteFingerprints = favoriteFingerprints,
+        )
+    }
+
+    private fun resolveNotificationSubtitle(state: PlaybackControllerState): String {
+        val track = state.activeTrack
+        val diagnosticsMatchTrack = TrackTransitionStatePolicy.isEngineSyncedToActiveTrack(
+            activeTrack = track,
+            engineTrackUri = state.engineState.activeTrackUri?.toString(),
+            engineStatus = state.engineState.status,
+        )
+        val diag = state.engineState.diagnostics
+        return NotificationSubtitleFormatter.format(
+            track = track,
+            runtimeSampleRateHz = if (diagnosticsMatchTrack) diag.sourceSampleRateHz else 0,
+            runtimeBitDepth = if (diagnosticsMatchTrack) diag.sourceBitDepth else null,
+        )
+    }
+
+    private fun MediaCustomActionIcon.toDrawableRes(): Int = when (this) {
+        MediaCustomActionIcon.FAVORITE_FILLED -> R.drawable.ic_notif_favorite_filled
+        MediaCustomActionIcon.FAVORITE_OUTLINE -> R.drawable.ic_notif_favorite_outline
+        MediaCustomActionIcon.SHUFFLE_ON -> R.drawable.ic_notif_shuffle_on
+        MediaCustomActionIcon.SHUFFLE_OFF -> R.drawable.ic_notif_shuffle_off
     }
 
     private fun resolveActiveArtworkBitmap(track: PlaybackTrack?): Bitmap? {
@@ -325,6 +457,9 @@ class PlaybackForegroundService : Service() {
         isPlaying = state.isPlaying,
         isBitPerfectMixerActive = state.engineState.diagnostics.isBitPerfectMixerActive,
         artworkToken = artworkToken,
+        subtitle = resolveNotificationSubtitle(state),
+        isFavorite = isActiveTrackFavorite(state),
+        shuffleEnabled = state.queue.shuffleEnabled,
     )
 
     private fun ensurePromotedToForeground(): Boolean {
@@ -394,15 +529,9 @@ class PlaybackForegroundService : Service() {
     private fun buildNotification(state: PlaybackControllerState): Notification {
         val track = state.activeTrack
         val title = track?.title ?: getString(R.string.app_name)
-        val subtitle = buildString {
-            append(track?.artist ?: "Ready")
-            val modeLabel = if (state.engineState.diagnostics.isBitPerfectMixerActive) {
-                " • Bit-Perfect USB"
-            } else {
-                " • Safe/Clean Native"
-            }
-            append(modeLabel)
-        }
+        val subtitle = resolveNotificationSubtitle(state)
+        val isFavorite = isActiveTrackFavorite(state)
+        val shuffleEnabled = state.queue.shuffleEnabled
 
         val launchIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -435,25 +564,49 @@ class PlaybackForegroundService : Service() {
             createServicePendingIntent(ACTION_NEXT, REQ_NEXT),
         ).build()
 
-        val style = Notification.MediaStyle()
-            .setMediaSession(mediaSession.sessionToken)
-            .setShowActionsInCompactView(0, 1, 2)
+        val shuffleIconRes = if (shuffleEnabled) R.drawable.ic_notif_shuffle_on else R.drawable.ic_notif_shuffle_off
+        val shuffleAction = Notification.Action.Builder(
+            Icon.createWithResource(this, shuffleIconRes),
+            if (shuffleEnabled) "Shuffle On" else "Shuffle Off",
+            createServicePendingIntent(MediaSessionCustomActions.ACTION_TOGGLE_SHUFFLE, REQ_SHUFFLE),
+        ).build()
 
         val builder = Notification.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_notif_music)
+            .setSmallIcon(R.drawable.ic_stat_bitperfect)
             .setContentTitle(title)
             .setContentText(subtitle)
             .setContentIntent(contentPendingIntent)
             .setDeleteIntent(createServicePendingIntent(ACTION_STOP, REQ_STOP))
             .setOngoing(state.isPlaying)
             .setVisibility(Notification.VISIBILITY_PUBLIC)
-            .addAction(prevAction)
-            .addAction(playPauseAction)
-            .addAction(nextAction)
-            .setStyle(style)
 
-        val currentArtwork = if (track != null && track.uriString == artworkTrackUri) artworkBitmap else null
-        if (currentArtwork != null && !currentArtwork.isRecycled) {
+        val style = Notification.MediaStyle().setMediaSession(mediaSession.sessionToken)
+        if (track != null) {
+            val favIconRes = if (isFavorite) R.drawable.ic_notif_favorite_filled else R.drawable.ic_notif_favorite_outline
+            val favoriteAction = Notification.Action.Builder(
+                Icon.createWithResource(this, favIconRes),
+                if (isFavorite) "Remove from Favorites" else "Add to Favorites",
+                createServicePendingIntent(MediaSessionCustomActions.ACTION_TOGGLE_FAVORITE, REQ_FAVORITE),
+            ).build()
+            builder
+                .addAction(favoriteAction)
+                .addAction(prevAction)
+                .addAction(playPauseAction)
+                .addAction(nextAction)
+                .addAction(shuffleAction)
+            style.setShowActionsInCompactView(1, 2, 3)
+        } else {
+            builder
+                .addAction(prevAction)
+                .addAction(playPauseAction)
+                .addAction(nextAction)
+                .addAction(shuffleAction)
+            style.setShowActionsInCompactView(0, 1, 2)
+        }
+        builder.setStyle(style)
+
+        val currentArtwork = resolveActiveArtworkBitmap(track)
+        if (currentArtwork != null) {
             builder.setLargeIcon(currentArtwork)
         }
 
@@ -500,6 +653,8 @@ class PlaybackForegroundService : Service() {
         private const val REQ_PLAY_PAUSE = 12
         private const val REQ_NEXT = 13
         private const val REQ_STOP = 14
+        private const val REQ_FAVORITE = 15
+        private const val REQ_SHUFFLE = 16
 
         fun startService(context: Context, foregroundPlaybackGate: ForegroundPlaybackGate? = null): Boolean {
             val appContext = context.applicationContext

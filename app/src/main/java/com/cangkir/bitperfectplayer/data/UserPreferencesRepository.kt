@@ -7,6 +7,7 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.floatPreferencesKey
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
@@ -46,6 +47,7 @@ class UserPreferencesRepository(private val dataStore: DataStore<Preferences>) {
         val SPECTRUM_COLOR_STYLE = stringPreferencesKey("spectrum_color_style")
         val SPECTRUM_SPARKS_ENABLED = booleanPreferencesKey("spectrum_sparks_enabled")
         val DEFAULT_HOMEPAGE = stringPreferencesKey("default_homepage")
+        val DYNAMIC_COVER_THEME_ENABLED = booleanPreferencesKey("dynamic_cover_theme_enabled")
         val DIAGNOSTIC_LOGGING_ENABLED = booleanPreferencesKey("diagnostic_logging_enabled")
         val PERSISTED_SAF_TREE_URIS = stringSetPreferencesKey("persisted_saf_tree_uris")
         val PERSISTED_SAF_FILE_URIS = stringSetPreferencesKey("persisted_saf_file_uris")
@@ -55,6 +57,7 @@ class UserPreferencesRepository(private val dataStore: DataStore<Preferences>) {
         val LAST_QUEUE_SOURCE_TYPE = stringPreferencesKey("last_queue_source_type")
         val LAST_QUEUE_SOURCE_KEY = stringPreferencesKey("last_queue_source_key")
         val LAST_QUEUE_SOURCE_LABEL = stringPreferencesKey("last_queue_source_label")
+        val RELEASE_YEAR_BACKFILL_MASK = intPreferencesKey("release_year_backfill_mask")
 
         fun trackSortKey(scope: TrackSortScope) = stringPreferencesKey(scope.preferenceKey)
         fun groupSortKey(scope: GroupSortScope) = stringPreferencesKey(scope.preferenceKey)
@@ -71,6 +74,20 @@ class UserPreferencesRepository(private val dataStore: DataStore<Preferences>) {
         .map { prefs -> mapPreferences(prefs) }
 
     suspend fun getSnapshot(): UserPreferences = preferencesFlow.first()
+
+    suspend fun getYearBackfillMask(): Int = dataStore.data
+        .catch { exception ->
+            if (exception is IOException) emit(emptyPreferences()) else throw exception
+        }
+        .map { prefs -> prefs[Keys.RELEASE_YEAR_BACKFILL_MASK] ?: 0 }
+        .first()
+
+    suspend fun markYearBackfillBit(bit: Int) {
+        dataStore.edit { prefs ->
+            val current = prefs[Keys.RELEASE_YEAR_BACKFILL_MASK] ?: 0
+            prefs[Keys.RELEASE_YEAR_BACKFILL_MASK] = current or bit
+        }
+    }
 
     suspend fun setAudioSafetyMode(mode: AudioSafetyModePreference) {
         dataStore.edit { prefs ->
@@ -141,6 +158,12 @@ class UserPreferencesRepository(private val dataStore: DataStore<Preferences>) {
     suspend fun setDefaultHomepage(homepage: DefaultHomepage) {
         dataStore.edit { prefs ->
             prefs[Keys.DEFAULT_HOMEPAGE] = homepage.name
+        }
+    }
+
+    suspend fun setDynamicCoverThemeEnabled(enabled: Boolean) {
+        dataStore.edit { prefs ->
+            prefs[Keys.DYNAMIC_COVER_THEME_ENABLED] = enabled
         }
     }
 
@@ -283,6 +306,7 @@ class UserPreferencesRepository(private val dataStore: DataStore<Preferences>) {
             spectrumColorStyle = SpectrumColorStyle.fromStoredName(prefs[Keys.SPECTRUM_COLOR_STYLE]),
             spectrumSparksEnabled = prefs[Keys.SPECTRUM_SPARKS_ENABLED] ?: true,
             defaultHomepage = DefaultHomepage.fromStoredName(prefs[Keys.DEFAULT_HOMEPAGE]),
+            dynamicCoverThemeEnabled = prefs[Keys.DYNAMIC_COVER_THEME_ENABLED] ?: false,
             diagnosticLoggingEnabled = prefs[Keys.DIAGNOSTIC_LOGGING_ENABLED] ?: false,
             persistedSafTreeUris = PersistenceSanitizer.sanitizeUriSet(
                 prefs[Keys.PERSISTED_SAF_TREE_URIS].orEmpty(),

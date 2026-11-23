@@ -111,7 +111,7 @@ object LibraryProjector {
         val folders = LibrarySortPolicy.sortGroups(foldersRaw, sortPreferences.foldersList)
 
         val artistsRaw = allTracks
-            .groupBy { it.artist.ifBlank { "Unknown Artist" } }
+            .groupBy { it.artist.trim().ifBlank { "Unknown Artist" } }
             .entries
             .map { (name, items) ->
                 val ordered = LibrarySortPolicy.sortTracks(
@@ -119,7 +119,7 @@ object LibraryProjector {
                     spec = sortPreferences.artistDetail,
                     playCountsByKey = playCountsByKey,
                 )
-                val albumCount = ordered.map { it.album }.distinct().size
+                val albumCount = ordered.map { it.album.trim().ifBlank { "Unknown Album" }.lowercase() }.distinct().size
                 val songWord = if (ordered.size == 1) "song" else "songs"
                 val albumWord = if (albumCount == 1) "album" else "albums"
                 LibraryGroup(
@@ -131,7 +131,7 @@ object LibraryProjector {
         val artists = LibrarySortPolicy.sortGroups(artistsRaw, sortPreferences.artistsList)
 
         val albumsRaw = allTracks
-            .groupBy { it.album.ifBlank { "Unknown Album" } }
+            .groupBy { it.album.trim().ifBlank { "Unknown Album" } }
             .entries
             .map { (name, items) ->
                 val ordered = LibrarySortPolicy.sortTracks(
@@ -139,7 +139,11 @@ object LibraryProjector {
                     spec = sortPreferences.albumDetail,
                     playCountsByKey = playCountsByKey,
                 )
-                val primaryArtist = ordered.firstOrNull()?.artist ?: "Unknown Artist"
+                val primaryArtist = ordered
+                    .asSequence()
+                    .map { it.artist.trim() }
+                    .firstOrNull { it.isNotEmpty() && !it.equals("Unknown Artist", ignoreCase = true) }
+                    ?: "Unknown Artist"
                 LibraryGroup(
                     name = name,
                     subtitle = "$primaryArtist · ${ordered.size} ${if (ordered.size == 1) "track" else "tracks"}",
@@ -152,7 +156,9 @@ object LibraryProjector {
         val trackByFp = sortedSongs
             .filter { !it.contentFingerprint.isNullOrBlank() }
             .associateBy { it.contentFingerprint!!.lowercase() }
-        val trackByFileName = sortedSongs.associateBy { it.fileName.lowercase() }
+        val trackByFileName = sortedSongs
+            .filter { it.fileName.isNotBlank() }
+            .associateBy { it.fileName.lowercase() }
 
         // Resolve Recently Played entries against currently accessible library tracks.
         val chronologicalRecent = historyRecords
@@ -207,5 +213,6 @@ object LibraryProjector {
         contentFingerprint = incoming.contentFingerprint ?: base.contentFingerprint,
         discNumber = incoming.discNumber.takeIf { it > 0 } ?: base.discNumber,
         trackNumber = incoming.trackNumber.takeIf { it > 0 } ?: base.trackNumber,
+        year = incoming.year.takeIf { it > 0 } ?: base.year,
     )
 }

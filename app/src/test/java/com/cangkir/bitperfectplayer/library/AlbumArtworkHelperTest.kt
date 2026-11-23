@@ -262,4 +262,124 @@ class AlbumArtworkHelperTest {
             AlbumArtworkHelper.computeProportionalTargetDimensions(0, 500, maxDimensionPx = 512),
         )
     }
+
+    @Test
+    fun slotTargetSizeResolution_boundsDiscAndLargeSlotsCleanly() {
+        assertEquals(
+            AlbumArtworkHelper.DISC_BUCKET_PX,
+            AlbumArtworkHelper.resolveSlotTargetSizePx(EmbeddedArtworkSlot.DISC, 600),
+        )
+        assertEquals(
+            AlbumArtworkHelper.DISC_BUCKET_PX,
+            AlbumArtworkHelper.resolveSlotTargetSizePx(EmbeddedArtworkSlot.DISC, 1400),
+        )
+        assertEquals(
+            AlbumArtworkHelper.THUMBNAIL_BUCKET_PX,
+            AlbumArtworkHelper.resolveSlotTargetSizePx(EmbeddedArtworkSlot.DISC, 160),
+        )
+        assertEquals(
+            AlbumArtworkHelper.HERO_BUCKET_PX,
+            AlbumArtworkHelper.resolveSlotTargetSizePx(EmbeddedArtworkSlot.BACK_COVER, 600),
+        )
+        assertEquals(
+            AlbumArtworkHelper.SLOT_LARGE_BUCKET_PX,
+            AlbumArtworkHelper.resolveSlotTargetSizePx(EmbeddedArtworkSlot.ARTIST, 1400),
+        )
+    }
+
+    @Test
+    fun discSlotCacheKey_sharesKeyWithinAlbumDiscAndDistinctSafFolder() {
+        val disc1Track1 = AlbumArtworkHelper.buildSlotCacheKey(
+            slot = EmbeddedArtworkSlot.DISC,
+            trackUri = "content://saf/doc/01.flac",
+            artist = "Green Day",
+            album = "21st Century Breakdown",
+            discNumber = 1,
+            parentTreeUriString = "content://tree/abc",
+            folderName = "21CB",
+            dateModifiedSeconds = 100L,
+            fileSizeBytes = 10_000L,
+            targetSizePx = 600,
+        )
+        val disc1Track2 = AlbumArtworkHelper.buildSlotCacheKey(
+            slot = EmbeddedArtworkSlot.DISC,
+            trackUri = "content://saf/doc/02.flac",
+            artist = "Green Day",
+            album = "21st Century Breakdown",
+            discNumber = 1,
+            parentTreeUriString = "content://tree/abc",
+            folderName = "21CB",
+            dateModifiedSeconds = 200L,
+            fileSizeBytes = 20_000L,
+            targetSizePx = 512,
+        )
+        val disc2Track1 = AlbumArtworkHelper.buildSlotCacheKey(
+            slot = EmbeddedArtworkSlot.DISC,
+            trackUri = "content://saf/doc/03.flac",
+            artist = "Green Day",
+            album = "21st Century Breakdown",
+            discNumber = 2,
+            parentTreeUriString = "content://tree/abc",
+            folderName = "21CB",
+            dateModifiedSeconds = 200L,
+            fileSizeBytes = 20_000L,
+            targetSizePx = 512,
+        )
+        assertEquals(disc1Track1, disc1Track2)
+        assertFalse(disc1Track1 == disc2Track1)
+
+        // Distinct SAF folder fallback without album tag shares DISC slot across sibling tracks.
+        val unknownAlbumFolder1 = AlbumArtworkHelper.buildSlotCacheKey(
+            slot = EmbeddedArtworkSlot.DISC,
+            trackUri = "content://saf/doc/a.flac",
+            artist = "Artist",
+            album = "Unknown Album",
+            discNumber = null,
+            parentTreeUriString = "content://tree/xyz",
+            folderName = "Bootleg 2009",
+            dateModifiedSeconds = 1L,
+            fileSizeBytes = 100L,
+            targetSizePx = 512,
+        )
+        val unknownAlbumFolder2 = AlbumArtworkHelper.buildSlotCacheKey(
+            slot = EmbeddedArtworkSlot.DISC,
+            trackUri = "content://saf/doc/b.flac",
+            artist = "Artist",
+            album = "",
+            discNumber = null,
+            parentTreeUriString = "content://tree/xyz",
+            folderName = "Bootleg 2009",
+            dateModifiedSeconds = 2L,
+            fileSizeBytes = 200L,
+            targetSizePx = 512,
+        )
+        assertEquals(unknownAlbumFolder1, unknownAlbumFolder2)
+
+        // Generic folder without album keeps track isolation; BACK_COVER also stays track-scoped.
+        val generic1 = AlbumArtworkHelper.buildSlotCacheKey(
+            slot = EmbeddedArtworkSlot.DISC,
+            trackUri = "content://saf/doc/g1.flac",
+            artist = "Artist",
+            album = "Unknown Album",
+            discNumber = null,
+            parentTreeUriString = "content://tree/xyz",
+            folderName = "Downloads",
+            dateModifiedSeconds = 1L,
+            fileSizeBytes = 100L,
+            targetSizePx = 512,
+        )
+        val generic2 = AlbumArtworkHelper.buildSlotCacheKey(
+            slot = EmbeddedArtworkSlot.DISC,
+            trackUri = "content://saf/doc/g2.flac",
+            artist = "Artist",
+            album = "Unknown Album",
+            discNumber = null,
+            parentTreeUriString = "content://tree/xyz",
+            folderName = "Downloads",
+            dateModifiedSeconds = 2L,
+            fileSizeBytes = 200L,
+            targetSizePx = 512,
+        )
+        assertFalse(generic1 == generic2)
+    }
 }

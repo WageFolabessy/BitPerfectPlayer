@@ -11,17 +11,25 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.ScaffoldDefaults
@@ -53,9 +61,10 @@ import com.cangkir.bitperfectplayer.diagnostics.DiagnosticLogStats
 import com.cangkir.bitperfectplayer.library.LibrarySnapshot
 import com.cangkir.bitperfectplayer.ui.SleepTimerBottomSheet
 import com.cangkir.bitperfectplayer.ui.WindowLayoutMetrics
+import com.cangkir.bitperfectplayer.ui.nowplaying.LocalSwipeExclusionBounds
+import com.cangkir.bitperfectplayer.ui.nowplaying.NowPlayingSwipeExclusionBounds
 import com.cangkir.bitperfectplayer.ui.theme.AmberIndicated
 import com.cangkir.bitperfectplayer.ui.theme.EmeraldSafe
-import com.cangkir.bitperfectplayer.ui.theme.IcePrimary
 import kotlinx.coroutines.flow.StateFlow
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -74,6 +83,8 @@ fun SettingsScreen(
     onSetSpectrumColorStyle: (SpectrumColorStyle) -> Unit = {},
     spectrumSparksEnabled: Boolean = true,
     onSetSpectrumSparksEnabled: (Boolean) -> Unit = {},
+    dynamicCoverThemeEnabled: Boolean = false,
+    onSetDynamicCoverThemeEnabled: (Boolean) -> Unit = {},
     diagnosticLoggingEnabled: Boolean = false,
     diagnosticLogStats: DiagnosticLogStats = DiagnosticLogStats(),
     onSetDiagnosticLoggingEnabled: (Boolean) -> Unit = {},
@@ -92,6 +103,7 @@ fun SettingsScreen(
     onExportLocalBackup: (Uri) -> Unit,
     onImportLocalBackup: (Uri) -> Unit,
     onOpenDiagnostics: () -> Unit,
+    onBack: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     var showSleepTimerSheet by remember { mutableStateOf(false) }
@@ -149,8 +161,8 @@ fun SettingsScreen(
                 @Suppress("DEPRECATION")
                 context.packageManager.getPackageInfo(context.packageName, 0)
             }
-            pkgInfo.versionName ?: "1.2"
-        }.getOrDefault("1.2")
+            pkgInfo.versionName ?: "1.3"
+        }.getOrDefault("1.3")
     }
 
     val safetyState = playbackState.engineState.safetyState
@@ -164,7 +176,7 @@ fun SettingsScreen(
         else -> "Safe Mode (Volume Active)"
     }
     val modeDotColor = when {
-        diagnostics.isBitPerfectMixerActive -> IcePrimary
+        diagnostics.isBitPerfectMixerActive -> MaterialTheme.colorScheme.primary
         isBitPerfectOptIn -> AmberIndicated
         else -> EmeraldSafe
     }
@@ -202,6 +214,19 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.titleLarge,
                     )
                 },
+                navigationIcon = {
+                    if (onBack != null) {
+                        IconButton(
+                            onClick = onBack,
+                            modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Back",
+                            )
+                        }
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.background,
                     titleContentColor = MaterialTheme.colorScheme.onSurface,
@@ -209,6 +234,12 @@ fun SettingsScreen(
             )
         },
     ) { innerPadding ->
+        val swipeExclusionBounds = LocalSwipeExclusionBounds.current ?: remember { NowPlayingSwipeExclusionBounds() }
+        val navBarBottomPadding = if (onBack != null) {
+            WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+        } else {
+            0.dp
+        }
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -219,7 +250,12 @@ fun SettingsScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .widthIn(max = WindowLayoutMetrics.EXPANDED_CONTENT_MAX_WIDTH_DP.dp),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                contentPadding = PaddingValues(
+                    start = 16.dp,
+                    top = 8.dp,
+                    end = 16.dp,
+                    bottom = 8.dp + navBarBottomPadding,
+                ),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
                 item(key = "section_audio_engine", contentType = "settings_group") {
@@ -238,6 +274,7 @@ fun SettingsScreen(
                         onSetReplayGainPreampDb,
                         onSetReplayGainPreventClipping,
                         onOpenDiagnostics,
+                        swipeExclusionBounds,
                     ) {
                         SettingsAudioEngineCallbacks(
                             onSetGaplessEnabled = onSetGaplessEnabled,
@@ -246,6 +283,9 @@ fun SettingsScreen(
                             onSetReplayGainPreventClipping = onSetReplayGainPreventClipping,
                             onOpenSleepTimer = { showSleepTimerSheet = true },
                             onOpenDiagnostics = onOpenDiagnostics,
+                            onPreampSliderBoundsInRootChanged = { rect ->
+                                swipeExclusionBounds.seekSliderRectInRoot = rect
+                            },
                         )
                     }
                     SettingsAudioEngineSection(
@@ -267,6 +307,8 @@ fun SettingsScreen(
                         onSetSpectrumColorStyle = onSetSpectrumColorStyle,
                         spectrumSparksEnabled = spectrumSparksEnabled,
                         onSetSpectrumSparksEnabled = onSetSpectrumSparksEnabled,
+                        dynamicCoverThemeEnabled = dynamicCoverThemeEnabled,
+                        onSetDynamicCoverThemeEnabled = onSetDynamicCoverThemeEnabled,
                     )
                 }
 

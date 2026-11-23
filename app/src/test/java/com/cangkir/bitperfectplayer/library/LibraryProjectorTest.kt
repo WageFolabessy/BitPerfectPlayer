@@ -116,4 +116,46 @@ class LibraryProjectorTest {
         assertEquals(listOf("Alpha"), snap.favorites.map { it.title })
         assertTrue(fp1 in snap.favoriteFingerprints)
     }
+
+    @Test
+    fun buildSnapshot_handlesMessyBlankTagsWithoutCrashingAndSkipsUnknownPrimaryArtist() {
+        val untagged1 = PlaybackTrack(
+            uriString = "content://messy/1.wav",
+            title = "01_raw_rip",
+            artist = "   ",
+            album = "   ",
+            folderName = " ",
+            fileName = "",
+            durationMs = 0L,
+        )
+        val albumMixed = PlaybackTrack(
+            uriString = "content://messy/2.flac",
+            title = "Track Two",
+            artist = "Unknown Artist",
+            album = "Compilation",
+            folderName = "Downloads",
+            fileName = "02.flac",
+        )
+        val albumWithRealArtist = PlaybackTrack(
+            uriString = "content://messy/3.flac",
+            title = "Track Three",
+            artist = "Real Featured Artist",
+            album = "Compilation",
+            folderName = "Downloads",
+            fileName = "03.flac",
+        )
+
+        val snap = LibraryProjector.buildSnapshot(
+            allTracks = listOf(untagged1, albumMixed, albumWithRealArtist),
+            historyRecords = emptyList(),
+            favoriteRecords = emptyList(),
+        )
+
+        assertEquals(3, snap.allSongs.size)
+        assertTrue(snap.folders.any { it.name == "Internal Storage" })
+        assertTrue(snap.artists.any { it.name == "Unknown Artist" })
+        val compilation = snap.albums.first { it.name == "Compilation" }
+        assertTrue(compilation.subtitle.startsWith("Real Featured Artist"))
+        assertEquals("Unknown Artist · Unknown Album", untagged1.artistAlbumLine)
+    }
 }

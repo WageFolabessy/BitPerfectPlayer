@@ -7,13 +7,16 @@ import kotlin.math.abs
  * [PlaybackForegroundService] `MediaSession` and `Notification` updates so 20 Hz engine position
  * ticks never spam Binder IPC or repeatedly serialize album-art bitmaps.
  */
-data class MediaMetadataKey(val trackUri: String?, val durationMs: Long, val artworkToken: Int)
+data class MediaMetadataKey(val trackUri: String?, val durationMs: Long, val artworkToken: Int, val subtitle: String = "")
 
 data class NotificationContentKey(
     val trackUri: String?,
     val isPlaying: Boolean,
     val isBitPerfectMixerActive: Boolean,
     val artworkToken: Int,
+    val subtitle: String = "",
+    val isFavorite: Boolean = false,
+    val shuffleEnabled: Boolean = false,
 )
 
 data class PublishedPlaybackState(
@@ -23,6 +26,8 @@ data class PublishedPlaybackState(
     val positionMs: Long,
     val playbackSpeed: Float,
     val publishedAtElapsedMs: Long,
+    val isFavorite: Boolean = false,
+    val shuffleEnabled: Boolean = false,
 )
 
 enum class NotificationDispatchAction {
@@ -37,7 +42,7 @@ object MediaSessionUpdatePolicy {
 
     /**
      * Metadata (including heavy album artwork bitmaps) is pushed over Binder ONLY when track URI,
-     * duration, or resolved artwork identity genuinely changes.
+     * duration, formatted audiophile subtitle, or resolved artwork identity genuinely changes.
      */
     fun shouldUpdateMetadata(last: MediaMetadataKey?, current: MediaMetadataKey): Boolean = last != current
 
@@ -66,8 +71,8 @@ object MediaSessionUpdatePolicy {
 
     /**
      * Publishes `MediaSession.setPlaybackState(...)` ONLY when playback status, active track,
-     * error message, playback speed, or seek/drift position delta exceeds [seekJumpThresholdMs]
-     * from the expected elapsed position based on the last published timestamp and speed.
+     * error message, playback speed, custom action state (`isFavorite` / `shuffleEnabled`), or
+     * seek/drift position delta exceeds [seekJumpThresholdMs] from the expected elapsed position.
      */
     fun shouldUpdatePlaybackState(
         last: PublishedPlaybackState?,
@@ -77,12 +82,15 @@ object MediaSessionUpdatePolicy {
         positionMs: Long,
         playbackSpeed: Float,
         nowElapsedMs: Long,
+        isFavorite: Boolean = false,
+        shuffleEnabled: Boolean = false,
         seekJumpThresholdMs: Long = DEFAULT_SEEK_JUMP_THRESHOLD_MS,
     ): Boolean {
         if (last == null) return true
         val statusOrTrackChanged = last.status != status || last.trackUri != trackUri
         val errorOrSpeedChanged = last.errorMessage != errorMessage || last.playbackSpeed != playbackSpeed
-        if (statusOrTrackChanged || errorOrSpeedChanged) {
+        val customActionChanged = last.isFavorite != isFavorite || last.shuffleEnabled != shuffleEnabled
+        if (statusOrTrackChanged || errorOrSpeedChanged || customActionChanged) {
             return true
         }
         val elapsedSinceLastMs = (nowElapsedMs - last.publishedAtElapsedMs).coerceAtLeast(0L)

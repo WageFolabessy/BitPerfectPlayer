@@ -31,6 +31,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.cangkir.bitperfectplayer.diagnostics.DiagnosticLogStats
 import com.cangkir.bitperfectplayer.ui.theme.CoralWarning
+import com.cangkir.bitperfectplayer.ui.theme.studioSwitchColors
 
 @Composable
 internal fun SettingsDiagnosticLoggingSection(
@@ -71,6 +72,7 @@ internal fun SettingsDiagnosticLoggingSection(
                 Switch(
                     checked = enabled,
                     onCheckedChange = onSetEnabled,
+                    colors = studioSwitchColors(),
                     modifier = Modifier.semantics {
                         contentDescription = "Toggle local diagnostic logging"
                     },

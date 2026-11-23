@@ -49,7 +49,6 @@ object DiagnosticLogFormatter {
         "track_uri",
         "treeuri",
         "tree_uri",
-        "path",
         "filepath",
         "file_path",
     )

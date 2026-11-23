@@ -2,12 +2,12 @@ package com.cangkir.bitperfectplayer.ui.nowplaying
 
 import android.graphics.Bitmap
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Flip
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Lyrics
 import androidx.compose.material.icons.filled.Pause
@@ -29,6 +30,7 @@ import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -38,8 +40,9 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -49,22 +52,34 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.cangkir.bitperfectplayer.audio.AlbumPaletteExtractor
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
 import com.cangkir.bitperfectplayer.audio.RepeatMode
+import com.cangkir.bitperfectplayer.audio.TrackTransitionStatePolicy
 import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
+import com.cangkir.bitperfectplayer.library.EmbeddedArtworkSlot
 import com.cangkir.bitperfectplayer.ui.TrackArtworkThumbnail
 import com.cangkir.bitperfectplayer.ui.formatDurationMs
-import com.cangkir.bitperfectplayer.ui.theme.IcePrimary
+import com.cangkir.bitperfectplayer.ui.rememberDelayedPreparingIndicator
 import com.cangkir.bitperfectplayer.ui.theme.TextMuted
 import kotlinx.coroutines.flow.StateFlow
+
+internal const val NOW_PLAYING_SQUARE_ARTWORK_TEST_TAG = "now_playing_square_artwork"
 
 internal fun extractAlbumPaletteFromBitmap(bitmap: Bitmap?): IntArray {
     val validBitmap = bitmap?.takeIf { !it.isRecycled && it.width > 0 && it.height > 0 }
@@ -94,12 +109,45 @@ internal fun SwipeableSquareArtwork(
     onPrevious: () -> Unit,
     onNext: () -> Unit,
     artworkSize: androidx.compose.ui.unit.Dp = 272.dp,
+    onBoundsInRootChanged: (Rect) -> Unit = {},
 ) {
+    DisposableEffect(Unit) {
+        onDispose { onBoundsInRootChanged(Rect.Zero) }
+    }
     val swipeThresholdPx = with(LocalDensity.current) { 76.dp.toPx() }
     var artworkDragOffsetPx by remember(track.uriString) { mutableFloatStateOf(0f) }
+    var showBackCover by remember(track.uriString) { mutableStateOf(false) }
+    var backCoverBitmap by remember(track.uriString, track.dateModifiedSeconds) {
+        mutableStateOf<Bitmap?>(
+            albumArtworkLoader.getCachedTrackSlotBitmap(
+                track = track,
+                slot = EmbeddedArtworkSlot.BACK_COVER,
+                targetSizePx = AlbumArtworkLoader.HERO_SIZE_PX,
+            ),
+        )
+    }
+
+    LaunchedEffect(track.uriString, track.dateModifiedSeconds) {
+        showBackCover = false
+        if (backCoverBitmap == null) {
+            backCoverBitmap = albumArtworkLoader.loadTrackSlotBitmap(
+                track = track,
+                slot = EmbeddedArtworkSlot.BACK_COVER,
+                targetSizePx = AlbumArtworkLoader.HERO_SIZE_PX,
+            )
+        }
+    }
+
+    val currentBackBitmap = backCoverBitmap
+    val backImageBitmap = remember(currentBackBitmap) {
+        if (currentBackBitmap != null && !currentBackBitmap.isRecycled) currentBackBitmap.asImageBitmap() else null
+    }
 
     Box(
         modifier = Modifier
+            .size(artworkSize)
+            .testTag(NOW_PLAYING_SQUARE_ARTWORK_TEST_TAG)
+            .onGloballyPositioned { coords -> onBoundsInRootChanged(coords.boundsInRoot()) }
             .pointerInput(track.uriString, swipeThresholdPx) {
                 detectHorizontalDragGestures(
                     onDragEnd = {
@@ -123,13 +171,49 @@ internal fun SwipeableSquareArtwork(
                 translationX = artworkDragOffsetPx * 0.32f
             },
     ) {
-        TrackArtworkThumbnail(
-            track = track,
-            artworkLoader = albumArtworkLoader,
-            size = artworkSize,
-            cornerRadius = 16.dp,
-            targetSizePx = AlbumArtworkLoader.HERO_SIZE_PX,
-        )
+        if (showBackCover && backImageBitmap != null) {
+            Box(
+                modifier = Modifier
+                    .size(artworkSize)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(MaterialTheme.colorScheme.background),
+                contentAlignment = Alignment.Center,
+            ) {
+                Image(
+                    bitmap = backImageBitmap,
+                    contentDescription = "Back cover artwork for ${track.title}",
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.size(artworkSize),
+                )
+            }
+        } else {
+            TrackArtworkThumbnail(
+                track = track,
+                artworkLoader = albumArtworkLoader,
+                size = artworkSize,
+                cornerRadius = 16.dp,
+                targetSizePx = AlbumArtworkLoader.HERO_SIZE_PX,
+            )
+        }
+
+        if (backImageBitmap != null) {
+            IconButton(
+                onClick = { showBackCover = !showBackCover },
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(6.dp)
+                    .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = 0.58f)),
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Flip,
+                    contentDescription = if (showBackCover) "Show front cover" else "Show back cover",
+                    tint = Color.White,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+        }
     }
 }
 
@@ -140,18 +224,30 @@ internal fun SwipeableSquareArtwork(
  */
 @Composable
 internal fun NowPlayingSeekSection(
+    activeTrack: PlaybackTrack,
+    engineTrackUri: String?,
     durationMs: Long,
     playbackPositionMsFlow: StateFlow<Long>,
     externalScrubPreviewMsState: State<Long?>,
     onSeekTo: (Long) -> Unit,
+    onSliderBoundsInRootChanged: (Rect) -> Unit = {},
 ) {
+    DisposableEffect(Unit) {
+        onDispose { onSliderBoundsInRootChanged(Rect.Zero) }
+    }
     val livePositionMs by playbackPositionMsFlow.collectAsStateWithLifecycle()
     val maxPos = durationMs.coerceAtLeast(1L)
-    val currentPosMs = livePositionMs.coerceIn(0L, maxPos)
+    val syncedPosMs = TrackTransitionStatePolicy.resolveDisplayPositionMs(
+        activeTrack = activeTrack,
+        engineTrackUri = engineTrackUri,
+        livePositionMs = livePositionMs,
+    )
+    val currentPosMs = syncedPosMs.coerceIn(0L, maxPos)
     val externalPreviewMs = externalScrubPreviewMsState.value
-    var isScrubbing by remember { mutableStateOf(false) }
-    var scrubPositionMs by remember { mutableFloatStateOf(0f) }
+    var isScrubbing by remember(activeTrack.uriString) { mutableStateOf(false) }
+    var scrubPositionMs by remember(activeTrack.uriString) { mutableFloatStateOf(0f) }
 
+    val canSeek = durationMs > 0L
     val displayedPosMs = when {
         isScrubbing -> scrubPositionMs.toLong().coerceIn(0L, maxPos)
         externalPreviewMs != null -> externalPreviewMs.coerceIn(0L, maxPos)
@@ -162,6 +258,7 @@ internal fun NowPlayingSeekSection(
 
     Slider(
         value = displayedPosMs.toFloat().coerceIn(0f, sliderMax),
+        enabled = canSeek,
         onValueChange = { newVal ->
             isScrubbing = true
             scrubPositionMs = newVal
@@ -169,15 +266,19 @@ internal fun NowPlayingSeekSection(
         onValueChangeFinished = {
             val target = scrubPositionMs.toLong()
             isScrubbing = false
-            onSeekTo(target)
+            if (canSeek) {
+                onSeekTo(target)
+            }
         },
         valueRange = 0f..sliderMax,
         colors = SliderDefaults.colors(
-            thumbColor = MaterialTheme.colorScheme.onSurface,
+            thumbColor = MaterialTheme.colorScheme.primary,
             activeTrackColor = MaterialTheme.colorScheme.primary,
             inactiveTrackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
         ),
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .onGloballyPositioned { coords -> onSliderBoundsInRootChanged(coords.boundsInRoot()) },
     )
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -186,14 +287,18 @@ internal fun NowPlayingSeekSection(
         Text(
             text = formatDurationMs(displayedPosMs),
             style = MaterialTheme.typography.labelSmall,
-            color = if (externalPreviewMs != null) IcePrimary else TextMuted,
+            color = if (isScrubbing || externalPreviewMs != null) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
             maxLines = 1,
             softWrap = false,
         )
         Text(
             text = durationLabel,
             style = MaterialTheme.typography.labelSmall,
-            color = TextMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
             softWrap = false,
         )
@@ -210,7 +315,9 @@ internal fun NowPlayingTransportRow(
     onTogglePlayPause: () -> Unit,
     onNext: () -> Unit,
     onCycleRepeatMode: () -> Unit,
+    isPreparingPlayback: Boolean = false,
 ) {
+    val showPreparingHalo = rememberDelayedPreparingIndicator(isPreparingPlayback)
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -239,20 +346,34 @@ internal fun NowPlayingTransportRow(
             )
         }
 
-        FilledIconButton(
-            onClick = onTogglePlayPause,
-            modifier = Modifier.size(64.dp),
-            shape = CircleShape,
-            colors = IconButtonDefaults.filledIconButtonColors(
-                containerColor = MaterialTheme.colorScheme.onSurface,
-                contentColor = MaterialTheme.colorScheme.background,
-            ),
+        Box(
+            modifier = Modifier.size(68.dp),
+            contentAlignment = Alignment.Center,
         ) {
-            Icon(
-                imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                contentDescription = if (isPlaying) "Pause playback" else "Play audio",
-                modifier = Modifier.size(32.dp),
-            )
+            if (showPreparingHalo) {
+                CircularProgressIndicator(
+                    strokeWidth = 2.5.dp,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier
+                        .size(68.dp)
+                        .semantics { contentDescription = "Preparing playback" },
+                )
+            }
+            FilledIconButton(
+                onClick = onTogglePlayPause,
+                modifier = Modifier.size(62.dp),
+                shape = CircleShape,
+                colors = IconButtonDefaults.filledIconButtonColors(
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                ),
+            ) {
+                Icon(
+                    imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                    contentDescription = if (isPlaying) "Pause playback" else "Play audio",
+                    modifier = Modifier.size(32.dp),
+                )
+            }
         }
 
         IconButton(
@@ -329,78 +450,48 @@ internal fun NowPlayingAudioModeStrip(modeDotColor: Color, modeShortLabel: Strin
 }
 
 @Composable
-internal fun NowPlayingUtilityStrip(queueSize: Int, onOpenQueue: () -> Unit, onOpenLyrics: () -> Unit, onOpenDiagnostics: () -> Unit) {
+internal fun NowPlayingUtilityStrip(
+    onOpenQueue: () -> Unit,
+    onOpenLyrics: () -> Unit,
+    onOpenDiagnostics: () -> Unit,
+    isLyricsActive: Boolean = false,
+    isBitPerfectActive: Boolean = false,
+) {
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.SpaceEvenly,
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        TextButton(
+        IconButton(
             onClick = onOpenQueue,
-            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
-            modifier = Modifier
-                .weight(1.1f)
-                .sizeIn(minHeight = 48.dp),
+            modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
         ) {
             Icon(
                 imageVector = Icons.AutoMirrored.Filled.QueueMusic,
-                contentDescription = null,
+                contentDescription = "Open playback queue",
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(18.dp),
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-            Text(
-                text = "Queue ($queueSize)",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                softWrap = false,
-                overflow = TextOverflow.Ellipsis,
             )
         }
 
-        TextButton(
+        IconButton(
             onClick = onOpenLyrics,
-            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
-            modifier = Modifier
-                .weight(0.95f)
-                .sizeIn(minHeight = 48.dp),
+            modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
         ) {
             Icon(
                 imageVector = Icons.Filled.Lyrics,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(18.dp),
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-            Text(
-                text = "Lyrics",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                softWrap = false,
+                contentDescription = "Lyrics",
+                tint = if (isLyricsActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
 
-        TextButton(
+        IconButton(
             onClick = onOpenDiagnostics,
-            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
-            modifier = Modifier
-                .weight(1f)
-                .sizeIn(minHeight = 48.dp),
+            modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
         ) {
             Icon(
                 imageVector = Icons.Filled.GraphicEq,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(18.dp),
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-            Text(
-                text = "Audio Path",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                softWrap = false,
+                contentDescription = "Audio Path",
+                tint = if (isBitPerfectActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }
