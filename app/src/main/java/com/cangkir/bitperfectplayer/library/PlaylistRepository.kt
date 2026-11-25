@@ -65,11 +65,11 @@ class PlaylistRepository(
     private val libraryRepository: LocalLibraryRepository,
     private val preferencesRepository: UserPreferencesRepository,
     private val fingerprintProvider: AndroidContentFingerprintProvider,
-) {
+) : PlaylistStore {
     private val appContext = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    val playlistsSnapshot: StateFlow<PlaylistsUiSnapshot> = combine(
+    override val playlistsSnapshot: StateFlow<PlaylistsUiSnapshot> = combine(
         playlistDao.observeAllPlaylists(),
         playlistDao.observeAllPlaylistTracks(),
         trackStatsDao.observeAllStats(),
@@ -174,7 +174,7 @@ class PlaylistRepository(
             initialValue = PlaylistsUiSnapshot(),
         )
 
-    suspend fun createPlaylist(rawName: String): Result<Long> = withContext(Dispatchers.IO) {
+    override suspend fun createPlaylist(rawName: String): Result<Long> = withContext(Dispatchers.IO) {
         val cleanName = rawName.trim()
         if (cleanName.isEmpty()) {
             return@withContext Result.failure(IllegalArgumentException("Playlist name cannot be empty"))
@@ -191,7 +191,7 @@ class PlaylistRepository(
         }
     }
 
-    suspend fun renamePlaylist(playlistId: Long, newRawName: String): Result<Unit> = withContext(Dispatchers.IO) {
+    override suspend fun renamePlaylist(playlistId: Long, newRawName: String): Result<Unit> = withContext(Dispatchers.IO) {
         val cleanName = newRawName.trim()
         if (cleanName.isEmpty()) {
             return@withContext Result.failure(IllegalArgumentException("Playlist name cannot be empty"))
@@ -206,14 +206,14 @@ class PlaylistRepository(
         }
     }
 
-    suspend fun deletePlaylist(playlistId: Long): Result<Unit> = withContext(Dispatchers.IO) {
+    override suspend fun deletePlaylist(playlistId: Long): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             playlistDao.deletePlaylistById(playlistId)
             Unit
         }
     }
 
-    suspend fun addTracksToPlaylist(playlistId: Long, tracks: List<PlaybackTrack>): Result<Int> = withContext(Dispatchers.IO) {
+    override suspend fun addTracksToPlaylist(playlistId: Long, tracks: List<PlaybackTrack>): Result<Int> = withContext(Dispatchers.IO) {
         if (tracks.isEmpty()) return@withContext Result.success(0)
         runCatching {
             val now = System.currentTimeMillis()
@@ -236,7 +236,7 @@ class PlaylistRepository(
         }
     }
 
-    suspend fun addTrackToPlaylistUnique(playlistId: Long, track: PlaybackTrack): Result<AddTrackToPlaylistOutcome> =
+    override suspend fun addTrackToPlaylistUnique(playlistId: Long, track: PlaybackTrack): Result<AddTrackToPlaylistOutcome> =
         withContext(Dispatchers.IO) {
             runCatching {
                 val now = System.currentTimeMillis()
@@ -270,19 +270,20 @@ class PlaylistRepository(
             }
         }
 
-    suspend fun removeEntryFromPlaylist(playlistId: Long, entryId: Long): Result<PlaylistTrackEntity?> = withContext(Dispatchers.IO) {
-        runCatching {
-            val snapshot = playlistDao.getPlaylistTrackById(entryId)
-            playlistDao.removeEntryAndCompact(
-                playlistId = playlistId,
-                entryId = entryId,
-                updatedAtEpochMs = System.currentTimeMillis(),
-            )
-            snapshot
+    override suspend fun removeEntryFromPlaylist(playlistId: Long, entryId: Long): Result<PlaylistTrackEntity?> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val snapshot = playlistDao.getPlaylistTrackById(entryId)
+                playlistDao.removeEntryAndCompact(
+                    playlistId = playlistId,
+                    entryId = entryId,
+                    updatedAtEpochMs = System.currentTimeMillis(),
+                )
+                snapshot
+            }
         }
-    }
 
-    suspend fun restoreRemovedEntry(entity: PlaylistTrackEntity): Result<Unit> = withContext(Dispatchers.IO) {
+    override suspend fun restoreRemovedEntry(entity: PlaylistTrackEntity): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             playlistDao.restoreEntryAtPosition(
                 playlistId = entity.playlistId,
@@ -292,27 +293,28 @@ class PlaylistRepository(
         }
     }
 
-    suspend fun commitPlaylistOrder(playlistId: Long, orderedVisibleEntryIds: List<Long>): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
-            val currentIds = playlistDao.getTracksForPlaylist(playlistId).map { it.id }
-            val visibleQueue = ArrayDeque(orderedVisibleEntryIds.distinct())
-            val visibleSet = orderedVisibleEntryIds.toHashSet()
-            val reconciledIds = currentIds.map { id ->
-                if (id in visibleSet && visibleQueue.isNotEmpty()) {
-                    visibleQueue.removeFirst()
-                } else {
-                    id
+    override suspend fun commitPlaylistOrder(playlistId: Long, orderedVisibleEntryIds: List<Long>): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val currentIds = playlistDao.getTracksForPlaylist(playlistId).map { it.id }
+                val visibleQueue = ArrayDeque(orderedVisibleEntryIds.distinct())
+                val visibleSet = orderedVisibleEntryIds.toHashSet()
+                val reconciledIds = currentIds.map { id ->
+                    if (id in visibleSet && visibleQueue.isNotEmpty()) {
+                        visibleQueue.removeFirst()
+                    } else {
+                        id
+                    }
+                }
+                if (reconciledIds != currentIds) {
+                    playlistDao.replacePlaylistTrackOrder(
+                        playlistId = playlistId,
+                        orderedEntryIds = reconciledIds,
+                        updatedAtEpochMs = System.currentTimeMillis(),
+                    )
                 }
             }
-            if (reconciledIds != currentIds) {
-                playlistDao.replacePlaylistTrackOrder(
-                    playlistId = playlistId,
-                    orderedEntryIds = reconciledIds,
-                    updatedAtEpochMs = System.currentTimeMillis(),
-                )
-            }
         }
-    }
 
     suspend fun moveEntryInPlaylist(playlistId: Long, fromIndex: Int, toIndex: Int): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
@@ -353,25 +355,29 @@ class PlaylistRepository(
         }
     }
 
-    suspend fun exportPlaylistToM3u8(playlist: ResolvedPlaylist, destinationUri: Uri): Result<Int> = withContext(Dispatchers.IO) {
-        runCatching {
-            val content = M3u8PlaylistCodec.exportToM3u8(
-                playlistName = playlist.name,
-                tracks = playlist.tracks,
-            )
-            val stream = appContext.contentResolver.openOutputStream(destinationUri, "wt")
-                ?: throw IllegalStateException("Unable to open destination file for writing")
-            stream.use { out ->
-                OutputStreamWriter(out, Charsets.UTF_8).use { writer ->
-                    writer.write(content)
-                    writer.flush()
+    override suspend fun exportPlaylistToM3u8(playlist: ResolvedPlaylist, destinationUri: Uri): Result<Int> {
+        val playlistName = playlist.name
+        val tracks = playlist.tracks
+        return withContext(Dispatchers.IO) {
+            runCatching {
+                val content = M3u8PlaylistCodec.exportToM3u8(
+                    playlistName = playlistName,
+                    tracks = tracks,
+                )
+                val stream = appContext.contentResolver.openOutputStream(destinationUri, "wt")
+                    ?: throw IllegalStateException("Unable to open destination file for writing")
+                stream.use { out ->
+                    OutputStreamWriter(out, Charsets.UTF_8).use { writer ->
+                        writer.write(content)
+                        writer.flush()
+                    }
                 }
+                tracks.size
             }
-            playlist.tracks.size
         }
     }
 
-    suspend fun importPlaylistFromM3u8(sourceUri: Uri, libraryTracks: List<PlaybackTrack>): Result<M3u8ImportSummary> =
+    override suspend fun importPlaylistFromM3u8(sourceUri: Uri, libraryTracks: List<PlaybackTrack>): Result<M3u8ImportSummary> =
         withContext(Dispatchers.IO) {
             runCatching {
                 val rawText = appContext.contentResolver.openInputStream(sourceUri)?.use { input ->

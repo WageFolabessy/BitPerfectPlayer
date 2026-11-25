@@ -20,10 +20,10 @@ class LocalBackupRepository(
     context: Context,
     private val persistenceRepository: LocalPersistenceRepository,
     private val preferencesRepository: UserPreferencesRepository? = null,
-) {
+) : LocalBackupStore {
     private val appContext = context.applicationContext
 
-    suspend fun exportBackupToUri(destinationUri: Uri): Result<LocalBackupExportSummary> = withContext(Dispatchers.IO) {
+    override suspend fun exportBackupToUri(destinationUri: Uri): Result<LocalBackupExportSummary> = withContext(Dispatchers.IO) {
         runCatching {
             val prefsSnapshot = preferencesRepository?.getSnapshot()
             val payload = persistenceRepository.exportLocalBackupPayload(
@@ -48,7 +48,7 @@ class LocalBackupRepository(
         }
     }
 
-    suspend fun importBackupFromUri(sourceUri: Uri): Result<LocalBackupRestoreSummary> = withContext(Dispatchers.IO) {
+    override suspend fun importBackupFromUri(sourceUri: Uri): Result<LocalBackupRestoreSummary> = withContext(Dispatchers.IO) {
         runCatching {
             val rawJson = appContext.contentResolver.openInputStream(sourceUri)?.use { input ->
                 val buffer = ByteArray(8192)

@@ -31,7 +31,7 @@ import kotlinx.coroutines.withContext
  * [photoRevision] ticks so both the `Artists` tab and `ArtistDetailView` refresh immediately upon
  * set or reset.
  */
-class ArtistPhotoStore(context: Context) {
+class ArtistPhotoStore(context: Context) : ArtistPhotoStorage {
     private val appContext = context.applicationContext
     private val photosDir = File(appContext.filesDir, ARTIST_PHOTOS_DIR)
 
@@ -42,7 +42,7 @@ class ArtistPhotoStore(context: Context) {
     private val missingPhotoHashes = ConcurrentHashMap.newKeySet<String>()
 
     private val _photoRevision = MutableStateFlow(0)
-    val photoRevision: StateFlow<Int> = _photoRevision.asStateFlow()
+    override val photoRevision: StateFlow<Int> = _photoRevision.asStateFlow()
 
     fun normalizedArtistHash(artistName: String): String {
         val normalized = artistName.trim().lowercase(Locale.ROOT)
@@ -154,7 +154,10 @@ class ArtistPhotoStore(context: Context) {
         }
     }
 
-    suspend fun clearArtistPhoto(artistName: String): Boolean = withContext(Dispatchers.IO) {
+    override suspend fun saveArtistPhotoResult(artistName: String, sourceUri: Uri): Result<Unit> =
+        saveArtistPhoto(artistName, sourceUri).map { }
+
+    override suspend fun clearArtistPhoto(artistName: String): Boolean = withContext(Dispatchers.IO) {
         val hash = normalizedArtistHash(artistName)
         memoryCache.remove(hash)
         missingPhotoHashes.add(hash)

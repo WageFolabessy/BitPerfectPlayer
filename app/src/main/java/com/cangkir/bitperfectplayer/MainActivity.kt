@@ -27,7 +27,7 @@ class MainActivity : ComponentActivity() {
         val container = app.container
         setContent {
             val mainViewModel: MainViewModel = viewModel(
-                factory = MainViewModel.factory(container),
+                factory = container.createMainViewModelFactory(),
             )
             val globalDynamicTokens by mainViewModel.globalDynamicThemeTokens.collectAsStateWithLifecycle()
             BitPerfectPlayerTheme(
@@ -35,7 +35,10 @@ class MainActivity : ComponentActivity() {
                 dynamicColor = false,
                 dynamicTokens = globalDynamicTokens,
             ) {
-                BitPerfectAppRoot(viewModel = mainViewModel)
+                BitPerfectAppRoot(
+                    viewModel = mainViewModel,
+                    visualAssets = container.mainUiVisualAssets,
+                )
             }
         }
         if (coldStartLogged.compareAndSet(false, true)) {

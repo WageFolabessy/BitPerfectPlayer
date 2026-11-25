@@ -156,7 +156,7 @@ private fun topLevelPageForRoute(route: String): Int = when (route) {
 }
 
 @Composable
-fun BitPerfectAppRoot(viewModel: MainViewModel) {
+fun BitPerfectAppRoot(viewModel: MainViewModel, visualAssets: MainUiVisualAssets) {
     val initialStartupHomepage by viewModel.initialStartupHomepage.collectAsStateWithLifecycle()
     val resolvedStartupHomepage = initialStartupHomepage
     if (resolvedStartupHomepage == null) {
@@ -169,15 +169,17 @@ fun BitPerfectAppRoot(viewModel: MainViewModel) {
     }
     BitPerfectAppRootContent(
         viewModel = viewModel,
+        visualAssets = visualAssets,
         startupHomepage = resolvedStartupHomepage,
     )
 }
 
 @Composable
-private fun BitPerfectAppRootContent(viewModel: MainViewModel, startupHomepage: DefaultHomepage) {
+private fun BitPerfectAppRootContent(viewModel: MainViewModel, visualAssets: MainUiVisualAssets, startupHomepage: DefaultHomepage) {
     val navController = rememberNavController()
     val rootPagerNavigator = rememberRootPagerNavigator()
     val libraryState by viewModel.libraryState.collectAsStateWithLifecycle()
+    val librarySearchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
     val playlistsState by viewModel.playlistsState.collectAsStateWithLifecycle()
     val favoriteTrackUris by viewModel.favoriteTrackUris.collectAsStateWithLifecycle()
     val playbackState by viewModel.playbackState.collectAsStateWithLifecycle()
@@ -231,7 +233,7 @@ private fun BitPerfectAppRootContent(viewModel: MainViewModel, startupHomepage: 
             playlists = playlistsState.playlists,
             onSelectPlaylist = { playlist ->
                 trackPendingAddToPlaylist = null
-                viewModel.addTrackToPlaylist(
+                viewModel.playlists.addTrackToPlaylist(
                     playlistId = playlist.id,
                     playlistName = playlist.name,
                     track = targetTrack,
@@ -239,7 +241,7 @@ private fun BitPerfectAppRootContent(viewModel: MainViewModel, startupHomepage: 
             },
             onCreateAndAdd = { newName ->
                 trackPendingAddToPlaylist = null
-                viewModel.createPlaylistAndAddTrack(newName, targetTrack)
+                viewModel.playlists.createPlaylistAndAddTrack(newName, targetTrack)
             },
             onDismiss = { trackPendingAddToPlaylist = null },
         )
@@ -249,7 +251,7 @@ private fun BitPerfectAppRootContent(viewModel: MainViewModel, startupHomepage: 
         TrackInfoBottomSheet(
             info = info,
             onCopiedMessage = viewModel::showUiMessage,
-            onDismiss = viewModel::dismissTrackInfo,
+            onDismiss = viewModel.library::dismissTrackInfo,
         )
     }
 
@@ -261,7 +263,7 @@ private fun BitPerfectAppRootContent(viewModel: MainViewModel, startupHomepage: 
             MiniPlayerBar(
                 playbackState = playbackState,
                 playbackPositionMsFlow = viewModel.playbackPositionMs,
-                artworkLoader = viewModel.albumArtworkLoader,
+                artworkLoader = visualAssets.albumArtworkLoader,
                 onOpenNowPlaying = openNowPlaying,
                 onTogglePlayPause = viewModel::togglePlayPause,
                 onNext = viewModel::next,
@@ -275,9 +277,9 @@ private fun BitPerfectAppRootContent(viewModel: MainViewModel, startupHomepage: 
                 libraryState = libraryState,
                 favoriteTrackUris = favoriteTrackUris,
                 playbackState = playbackState,
-                albumArtworkLoader = viewModel.albumArtworkLoader,
-                onRefreshLibrary = viewModel::refreshLibrary,
-                onImportFolder = viewModel::importSafFolder,
+                albumArtworkLoader = visualAssets.albumArtworkLoader,
+                onRefreshLibrary = viewModel.library::refreshLibrary,
+                onImportFolder = viewModel.library::importSafFolder,
                 onPlayTracks = { tracks, index, context ->
                     viewModel.playTracks(tracks, index, context)
                 },
@@ -285,29 +287,31 @@ private fun BitPerfectAppRootContent(viewModel: MainViewModel, startupHomepage: 
                 onEnqueueNext = viewModel::enqueueTrackNext,
                 onEnqueueTracks = viewModel::enqueueTracks,
                 onEnqueueTracksNext = viewModel::enqueueTracksNext,
-                onSetTrackSort = viewModel::setTrackSort,
-                onSetGroupSort = viewModel::setGroupSort,
+                onSetTrackSort = viewModel.library::setTrackSort,
+                onSetGroupSort = viewModel.library::setGroupSort,
                 onAddToPlaylist = openAddToPlaylist,
-                onShowTrackInfo = viewModel::openTrackInfo,
-                onToggleFavorite = { track -> viewModel.toggleFavorite(track) },
+                onShowTrackInfo = viewModel.library::openTrackInfo,
+                onToggleFavorite = { track -> viewModel.library.toggleFavorite(track) },
                 onToggleFavoriteFromFavorites = { track ->
-                    viewModel.toggleFavorite(track, showRemovalUndoSnackbar = true)
+                    viewModel.library.toggleFavorite(track, showRemovalUndoSnackbar = true)
                 },
                 onOpenDiagnostics = openDiagnostics,
                 onOpenQueue = openQueue,
                 initialTab = initialLibraryTab,
                 dynamicCoverThemeEnabled = dynamicCoverThemeEnabled,
-                coverThemeColorCache = viewModel.coverThemeColorCache,
-                artistPhotoStore = viewModel.artistPhotoStore,
+                coverThemeColorCache = visualAssets.coverThemeColorCache,
+                artistPhotoStore = visualAssets.artistPhotoStore,
                 artistPhotoRevision = artistPhotoRevision,
                 onShuffleTracks = { tracks, context -> viewModel.playTracks(tracks, context = context, shuffled = true) },
-                onSetCustomArtistPhoto = { artist, uri -> viewModel.updateCustomArtistPhoto(artist, uri) },
-                onResetCustomArtistPhoto = { artist -> viewModel.updateCustomArtistPhoto(artist, null) },
+                onSetCustomArtistPhoto = { artist, uri -> viewModel.library.updateCustomArtistPhoto(artist, uri) },
+                onResetCustomArtistPhoto = { artist -> viewModel.library.updateCustomArtistPhoto(artist, null) },
                 onDetailViewOpenChanged = { isOpen -> rootPagerNavigator.isLibraryDetailOpen = isOpen },
                 onContextualDynamicThemeChanged = { tokens ->
                     viewModel.setContextualDynamicTheme("library", tokens)
                 },
                 isForegroundPage = rootPagerNavigator.isLibraryPageForeground,
+                externalSearchQuery = librarySearchQuery,
+                onExternalSearchQueryChange = viewModel.library::updateSearchQuery,
             )
         },
         playlistsContent = {
@@ -315,36 +319,36 @@ private fun BitPerfectAppRootContent(viewModel: MainViewModel, startupHomepage: 
             PlaylistsScreen(
                 playlistsState = playlistsState,
                 activeTrackUri = playbackState.activeTrack?.uriString,
-                albumArtworkLoader = viewModel.albumArtworkLoader,
+                albumArtworkLoader = visualAssets.albumArtworkLoader,
                 onPlayTracks = { tracks, index, context ->
                     viewModel.playTracks(tracks, index, context)
                 },
                 onEnqueueTracks = viewModel::enqueueTracks,
                 onEnqueueTracksNext = viewModel::enqueueTracksNext,
-                onSetPlaylistSort = viewModel::setTrackSort,
-                onCreatePlaylist = viewModel::createPlaylist,
-                onRenamePlaylist = viewModel::renamePlaylist,
-                onDeletePlaylist = viewModel::deletePlaylist,
+                onSetPlaylistSort = viewModel.library::setTrackSort,
+                onCreatePlaylist = viewModel.playlists::createPlaylist,
+                onRenamePlaylist = viewModel.playlists::renamePlaylist,
+                onDeletePlaylist = viewModel.playlists::deletePlaylist,
                 onRemovePlaylistEntry = { playlistId, entryId ->
-                    viewModel.removePlaylistEntry(playlistId, entryId)
+                    viewModel.playlists.removePlaylistEntry(playlistId, entryId)
                 },
-                onExportPlaylist = viewModel::exportPlaylistToM3u8,
+                onExportPlaylist = viewModel.playlists::exportPlaylistToM3u8,
                 onImportPlaylist = viewModel::importPlaylistFromM3u8,
                 onOpenQueue = openQueue,
                 favoriteTrackUris = favoriteTrackUris,
                 favoriteFingerprints = libraryState.favoriteFingerprints,
                 onShuffleTracks = { tracks, context -> viewModel.playTracks(tracks, context = context, shuffled = true) },
-                onToggleFavorite = { track -> viewModel.toggleFavorite(track) },
+                onToggleFavorite = { track -> viewModel.library.toggleFavorite(track) },
                 onEnqueueTrack = viewModel::enqueueTrack,
                 onEnqueueNext = viewModel::enqueueTrackNext,
                 onAddToPlaylist = openAddToPlaylist,
-                onShowTrackInfo = viewModel::openTrackInfo,
+                onShowTrackInfo = viewModel.library::openTrackInfo,
                 onRemovePlaylistEntryWithTitle = { playlistId, entryId, playlistName, trackTitle ->
-                    viewModel.removePlaylistEntry(playlistId, entryId, playlistName, trackTitle)
+                    viewModel.playlists.removePlaylistEntry(playlistId, entryId, playlistName, trackTitle)
                 },
-                onCommitPlaylistOrder = viewModel::commitPlaylistOrder,
+                onCommitPlaylistOrder = viewModel.playlists::commitPlaylistOrder,
                 dynamicCoverThemeEnabled = dynamicCoverThemeEnabled,
-                coverThemeColorCache = viewModel.coverThemeColorCache,
+                coverThemeColorCache = visualAssets.coverThemeColorCache,
                 isForegroundPage = rootPagerNavigator.isPlaylistsPageForeground,
                 onDetailViewOpenChanged = { isOpen -> rootPagerNavigator.isPlaylistsDetailOpen = isOpen },
                 onContextualDynamicThemeChanged = { tokens ->
@@ -365,6 +369,7 @@ private fun BitPerfectAppRootContent(viewModel: MainViewModel, startupHomepage: 
         nowPlayingContent = { isPageActive, onBack, _ ->
             BitPerfectNowPlayingDestination(
                 viewModel = viewModel,
+                visualAssets = visualAssets,
                 libraryState = libraryState,
                 favoriteTrackUris = favoriteTrackUris,
                 playbackState = playbackState,
@@ -395,6 +400,7 @@ private fun BitPerfectAppRootContent(viewModel: MainViewModel, startupHomepage: 
         ) {
             BitPerfectQueueDestination(
                 viewModel = viewModel,
+                visualAssets = visualAssets,
                 libraryState = libraryState,
                 playlistsState = playlistsState,
                 playbackState = playbackState,
@@ -420,10 +426,10 @@ private fun BitPerfectAppRootContent(viewModel: MainViewModel, startupHomepage: 
             DiagnosticsScreen(
                 playbackState = playbackState,
                 onBack = popBack,
-                onSwitchToSafeMode = viewModel::switchToSafeMode,
-                onRequestBitPerfectMode = viewModel::requestBitPerfectMode,
-                onConfirmBitPerfectWarning = viewModel::confirmBitPerfectWarning,
-                onDismissSafetyWarning = viewModel::dismissSafetyWarning,
+                onSwitchToSafeMode = viewModel.settings::switchToSafeMode,
+                onRequestBitPerfectMode = viewModel.settings::requestBitPerfectMode,
+                onConfirmBitPerfectWarning = viewModel.settings::confirmBitPerfectWarning,
+                onDismissSafetyWarning = viewModel.settings::dismissSafetyWarning,
             )
         }
     }
@@ -432,6 +438,7 @@ private fun BitPerfectAppRootContent(viewModel: MainViewModel, startupHomepage: 
 @Composable
 private fun BitPerfectNowPlayingDestination(
     viewModel: MainViewModel,
+    visualAssets: MainUiVisualAssets,
     libraryState: LibrarySnapshot,
     favoriteTrackUris: Set<String>,
     playbackState: PlaybackControllerState,
@@ -456,23 +463,23 @@ private fun BitPerfectNowPlayingDestination(
         playbackState = playbackState,
         playbackPositionMsFlow = viewModel.playbackPositionMs,
         sleepTimerStateFlow = viewModel.sleepTimerState,
-        albumArtworkLoader = viewModel.albumArtworkLoader,
+        albumArtworkLoader = visualAssets.albumArtworkLoader,
         isFavorite = isFav,
         artworkStyle = nowPlayingArtworkStyle,
-        onSetArtworkStyle = viewModel::setNowPlayingArtworkStyle,
+        onSetArtworkStyle = viewModel.settings::setNowPlayingArtworkStyle,
         spectrumVisualizerEnabled = spectrumVisualizerEnabled,
-        onSetSpectrumVisualizerEnabled = viewModel::setSpectrumVisualizerEnabled,
+        onSetSpectrumVisualizerEnabled = viewModel.settings::setSpectrumVisualizerEnabled,
         spectrumColorStyle = spectrumColorStyle,
-        onCycleSpectrumColorStyle = { viewModel.setSpectrumColorStyle(spectrumColorStyle.next()) },
+        onCycleSpectrumColorStyle = { viewModel.settings.setSpectrumColorStyle(spectrumColorStyle.next()) },
         spectrumSparksEnabled = spectrumSparksEnabled,
-        onSetSpectrumSparksEnabled = viewModel::setSpectrumSparksEnabled,
+        onSetSpectrumSparksEnabled = viewModel.settings::setSpectrumSparksEnabled,
         onSetSpectrumVisualizerActive = viewModel::setSpectrumVisualizerActive,
         onSampleSpectrumWindow = viewModel::sampleCurrentSpectrumWindow,
         onBack = onBack,
-        onToggleFavorite = viewModel::toggleFavorite,
+        onToggleFavorite = viewModel.library::toggleFavorite,
         onAddToPlaylist = onAddToPlaylist,
-        onShowTrackInfo = viewModel::openTrackInfo,
-        onSelectSleepTimerPreset = viewModel::setSleepTimerPreset,
+        onShowTrackInfo = viewModel.library::openTrackInfo,
+        onSelectSleepTimerPreset = viewModel.settings::setSleepTimerPreset,
         onTogglePlayPause = viewModel::togglePlayPause,
         onPrevious = viewModel::previous,
         onNext = viewModel::next,
@@ -482,11 +489,11 @@ private fun BitPerfectNowPlayingDestination(
         onEndTurntableScratch = viewModel::endTurntableScratch,
         onToggleShuffle = viewModel::toggleShuffle,
         onCycleRepeatMode = viewModel::cycleRepeatMode,
-        onRequestBitPerfectMode = viewModel::requestBitPerfectMode,
-        onConfirmBitPerfectWarning = viewModel::confirmBitPerfectWarning,
-        onDismissSafetyWarning = viewModel::dismissSafetyWarning,
-        onSwitchToSafeMode = viewModel::switchToSafeMode,
-        onClearAutoPauseNotice = viewModel::clearAutoPauseNotice,
+        onRequestBitPerfectMode = viewModel.settings::requestBitPerfectMode,
+        onConfirmBitPerfectWarning = viewModel.settings::confirmBitPerfectWarning,
+        onDismissSafetyWarning = viewModel.settings::dismissSafetyWarning,
+        onSwitchToSafeMode = viewModel.settings::switchToSafeMode,
+        onClearAutoPauseNotice = viewModel.settings::clearAutoPauseNotice,
         onOpenQueue = onOpenQueue,
         onOpenLyrics = onOpenLyrics,
         onOpenDiagnostics = onOpenDiagnostics,
@@ -497,6 +504,7 @@ private fun BitPerfectNowPlayingDestination(
 @Composable
 private fun BitPerfectQueueDestination(
     viewModel: MainViewModel,
+    visualAssets: MainUiVisualAssets,
     libraryState: LibrarySnapshot,
     playlistsState: com.cangkir.bitperfectplayer.library.PlaylistsUiSnapshot,
     playbackState: PlaybackControllerState,
@@ -533,7 +541,7 @@ private fun BitPerfectQueueDestination(
         playbackState = playbackState,
         libraryTracks = libraryState.allSongs,
         activeContextTracks = activeContextTracks,
-        albumArtworkLoader = viewModel.albumArtworkLoader,
+        albumArtworkLoader = visualAssets.albumArtworkLoader,
         onBack = onBack,
         onSelectQueueIndex = viewModel::playTrackAtQueueIndex,
         onAddTrackToQueue = viewModel::enqueueTrack,
@@ -566,23 +574,23 @@ private fun BitPerfectSettingsDestination(
         playbackState = playbackState,
         sleepTimerStateFlow = viewModel.sleepTimerState,
         defaultHomepage = defaultHomepage,
-        onSetDefaultHomepage = viewModel::setDefaultHomepage,
+        onSetDefaultHomepage = viewModel.settings::setDefaultHomepage,
         artworkStyle = nowPlayingArtworkStyle,
-        onSetArtworkStyle = viewModel::setNowPlayingArtworkStyle,
+        onSetArtworkStyle = viewModel.settings::setNowPlayingArtworkStyle,
         spectrumVisualizerEnabled = spectrumVisualizerEnabled,
-        onSetSpectrumVisualizerEnabled = viewModel::setSpectrumVisualizerEnabled,
+        onSetSpectrumVisualizerEnabled = viewModel.settings::setSpectrumVisualizerEnabled,
         spectrumColorStyle = spectrumColorStyle,
-        onSetSpectrumColorStyle = viewModel::setSpectrumColorStyle,
+        onSetSpectrumColorStyle = viewModel.settings::setSpectrumColorStyle,
         spectrumSparksEnabled = spectrumSparksEnabled,
-        onSetSpectrumSparksEnabled = viewModel::setSpectrumSparksEnabled,
+        onSetSpectrumSparksEnabled = viewModel.settings::setSpectrumSparksEnabled,
         dynamicCoverThemeEnabled = dynamicCoverThemeEnabled,
-        onSetDynamicCoverThemeEnabled = viewModel::setDynamicCoverThemeEnabled,
+        onSetDynamicCoverThemeEnabled = viewModel.settings::setDynamicCoverThemeEnabled,
         diagnosticLoggingEnabled = diagnosticLoggingEnabled,
         diagnosticLogStats = diagnosticLogStats,
-        onSetDiagnosticLoggingEnabled = viewModel::setDiagnosticLoggingEnabled,
-        onExportDiagnosticLogs = viewModel::exportDiagnosticLogs,
+        onSetDiagnosticLoggingEnabled = viewModel.settings::setDiagnosticLoggingEnabled,
+        onExportDiagnosticLogs = viewModel.settings::exportDiagnosticLogs,
         onShareDiagnosticLogs = {
-            viewModel.shareDiagnosticLogs { shareIntent ->
+            viewModel.settings.shareDiagnosticLogs { shareIntent ->
                 runCatching {
                     context.startActivity(shareIntent)
                 }.onFailure {
@@ -590,18 +598,18 @@ private fun BitPerfectSettingsDestination(
                 }
             }
         },
-        onClearDiagnosticLogs = viewModel::clearDiagnosticLogs,
-        onRefreshDiagnosticLogStats = viewModel::refreshDiagnosticLogStats,
-        onImportFolder = viewModel::importSafFolder,
-        onRemoveSafFolder = viewModel::removeSafFolder,
-        onRefreshLibrary = viewModel::refreshLibrary,
+        onClearDiagnosticLogs = viewModel.settings::clearDiagnosticLogs,
+        onRefreshDiagnosticLogStats = viewModel.settings::refreshDiagnosticLogStats,
+        onImportFolder = viewModel.library::importSafFolder,
+        onRemoveSafFolder = viewModel.library::removeSafFolder,
+        onRefreshLibrary = viewModel.library::refreshLibrary,
         onSetGaplessEnabled = viewModel::setGaplessEnabled,
         onSetReplayGainMode = viewModel::setReplayGainMode,
         onSetReplayGainPreampDb = viewModel::setReplayGainPreampDb,
         onSetReplayGainPreventClipping = viewModel::setReplayGainPreventClipping,
-        onSelectSleepTimerPreset = viewModel::setSleepTimerPreset,
-        onExportLocalBackup = viewModel::exportLocalBackup,
-        onImportLocalBackup = viewModel::importLocalBackup,
+        onSelectSleepTimerPreset = viewModel.settings::setSleepTimerPreset,
+        onExportLocalBackup = viewModel.settings::exportLocalBackup,
+        onImportLocalBackup = viewModel.settings::importLocalBackup,
         onOpenDiagnostics = onOpenDiagnostics,
         onBack = onBack,
     )

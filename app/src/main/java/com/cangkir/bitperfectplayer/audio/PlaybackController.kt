@@ -81,7 +81,8 @@ class PlaybackController(
     private val fingerprintProvider: AndroidContentFingerprintProvider,
     private val foregroundPlaybackGate: ForegroundPlaybackGate = ForegroundPlaybackGate(initialAppInForeground = true),
     private val diagnosticLogger: LocalDiagnosticLogger? = null,
-) {
+) : PlaybackTransportControl,
+    PlaybackAudioControl {
     private val appContext = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
@@ -110,9 +111,9 @@ class PlaybackController(
     private val _state = MutableStateFlow(
         PlaybackControllerState(engineState = engine.state.value),
     )
-    val state: StateFlow<PlaybackControllerState> = _state.asStateFlow()
+    override val state: StateFlow<PlaybackControllerState> = _state.asStateFlow()
 
-    val playbackPositionMs: StateFlow<Long> = engine.playbackPositionMs
+    override val playbackPositionMs: StateFlow<Long> = engine.playbackPositionMs
 
     val openingTrackUri: StateFlow<String?> = engine.openingTrackUri
 
@@ -120,7 +121,7 @@ class PlaybackController(
      * Decoupled Sleep Timer state collected ONLY by narrow leaf composables in NowPlayingScreen
      * and SettingsScreen so 1-second countdown ticks never recompose Library, Playlists, or BottomNav.
      */
-    val sleepTimerState: StateFlow<SleepTimerState> = sleepTimerController.state
+    override val sleepTimerState: StateFlow<SleepTimerState> = sleepTimerController.state
 
     private var positionPersistenceJob: Job? = null
     private var fingerprintJob: Job? = null
@@ -186,13 +187,7 @@ class PlaybackController(
         }
     }
 
-    fun playQueue(
-        tracks: List<PlaybackTrack>,
-        startIndex: Int = 0,
-        startPositionMs: Long = 0L,
-        autoPlay: Boolean = true,
-        context: QueueContext = QueueContext.allSongs(),
-    ) {
+    override fun playQueue(tracks: List<PlaybackTrack>, startIndex: Int, startPositionMs: Long, autoPlay: Boolean, context: QueueContext) {
         if (tracks.isEmpty()) return
         val snapshot = queueManager.setQueue(tracks, startIndex)
         val active = snapshot.currentItem ?: return
@@ -206,7 +201,7 @@ class PlaybackController(
         loadActiveTrack(active, startPositionMs = startPositionMs, autoPlay = autoPlay)
     }
 
-    fun playQueueShuffled(tracks: List<PlaybackTrack>, context: QueueContext = QueueContext.allSongs()) {
+    override fun playQueueShuffled(tracks: List<PlaybackTrack>, context: QueueContext) {
         if (tracks.isEmpty()) return
         val randomStartIndex = if (tracks.size > 1) kotlin.random.Random.nextInt(tracks.size) else 0
         queueManager.setQueue(tracks, randomStartIndex)
@@ -225,7 +220,7 @@ class PlaybackController(
         loadActiveTrack(active, startPositionMs = 0L, autoPlay = true)
     }
 
-    fun playTrackAt(queueIndex: Int) {
+    override fun playTrackAt(queueIndex: Int) {
         val selected = queueManager.selectIndex(queueIndex) ?: return
         seedStateForTrackSelection(
             track = selected,
@@ -236,7 +231,7 @@ class PlaybackController(
         loadActiveTrack(selected, startPositionMs = 0L, autoPlay = true)
     }
 
-    fun enqueue(track: PlaybackTrack) {
+    override fun enqueue(track: PlaybackTrack) {
         val wasEmpty = queueManager.isEmpty()
         val snapshot = queueManager.enqueue(track)
         val active = snapshot.currentItem
@@ -261,7 +256,7 @@ class PlaybackController(
         }
     }
 
-    fun enqueueNext(track: PlaybackTrack) {
+    override fun enqueueNext(track: PlaybackTrack) {
         val wasEmpty = queueManager.isEmpty()
         val snapshot = queueManager.enqueueNext(track)
         val active = snapshot.currentItem
@@ -285,7 +280,7 @@ class PlaybackController(
         }
     }
 
-    fun enqueueAll(tracks: List<PlaybackTrack>, fallbackContext: QueueContext? = null) {
+    override fun enqueueAll(tracks: List<PlaybackTrack>, fallbackContext: QueueContext?) {
         if (tracks.isEmpty()) return
         val wasEmpty = queueManager.isEmpty()
         val snapshot = queueManager.enqueueAll(tracks)
@@ -310,7 +305,7 @@ class PlaybackController(
         }
     }
 
-    fun enqueueAllNext(tracks: List<PlaybackTrack>, fallbackContext: QueueContext? = null) {
+    override fun enqueueAllNext(tracks: List<PlaybackTrack>, fallbackContext: QueueContext?) {
         if (tracks.isEmpty()) return
         val wasEmpty = queueManager.isEmpty()
         val snapshot = queueManager.enqueueAllNext(tracks)
@@ -335,7 +330,7 @@ class PlaybackController(
         }
     }
 
-    fun removeQueueItem(activeIndex: Int) {
+    override fun removeQueueItem(activeIndex: Int) {
         val previousActiveIndex = queueManager.snapshot().currentIndex
         queueManager.removeAt(activeIndex) ?: return
         val snapshot = queueManager.snapshot()
@@ -366,7 +361,7 @@ class PlaybackController(
         }
     }
 
-    fun moveQueueItem(fromIndex: Int, toIndex: Int) {
+    override fun moveQueueItem(fromIndex: Int, toIndex: Int) {
         if (queueManager.moveItem(fromIndex, toIndex)) {
             val snapshot = queueManager.snapshot()
             _state.update { it.copy(queue = snapshot, activeTrack = snapshot.currentItem) }
@@ -449,7 +444,7 @@ class PlaybackController(
         persistCurrentPositionAsync()
     }
 
-    fun togglePlayPause() {
+    override fun togglePlayPause() {
         val currentEngineState = _state.value.engineState
         val action = AudioStartPathPolicy.resolveTogglePlayPauseAction(
             isPlaying = currentEngineState.isPlaying,
@@ -463,7 +458,7 @@ class PlaybackController(
         }
     }
 
-    fun next(userInitiated: Boolean = true) {
+    override fun next(userInitiated: Boolean) {
         val nextTrack = queueManager.next(userInitiated = userInitiated)
         val snapshot = queueManager.snapshot()
         if (nextTrack != null) {
@@ -484,7 +479,7 @@ class PlaybackController(
         }
     }
 
-    fun previous() {
+    override fun previous() {
         // Standard UX: if > 3 seconds into track, restart current track; otherwise go to previous track.
         if (playbackPositionMs.value > 3_000L) {
             seekTo(0L)
@@ -505,7 +500,7 @@ class PlaybackController(
         }
     }
 
-    fun seekTo(positionMs: Long) {
+    override fun seekTo(positionMs: Long) {
         playCountTracker.onSeek()
         engine.seekTo(positionMs)
         persistCurrentPositionAsync()
@@ -515,7 +510,7 @@ class PlaybackController(
      * Begins real-time turntable scratch DSP strictly in Safe Mode while playing.
      * Returns `false` (strict no-op) in Bit-Perfect Opt-In mode or while paused/idle.
      */
-    fun beginTurntableScratch(): Boolean {
+    override fun beginTurntableScratch(): Boolean {
         val started = engine.beginTurntableScratch()
         if (started) {
             playCountTracker.onSeek()
@@ -523,11 +518,11 @@ class PlaybackController(
         return started
     }
 
-    fun updateTurntableScratchRate(playbackRate: Float) {
+    override fun updateTurntableScratchRate(playbackRate: Float) {
         engine.updateTurntableScratchRate(playbackRate)
     }
 
-    fun endTurntableScratch(fallbackTargetMs: Long? = null) {
+    override fun endTurntableScratch(fallbackTargetMs: Long?) {
         engine.endTurntableScratch(fallbackTargetMs)
         persistCurrentPositionAsync()
     }
@@ -536,7 +531,7 @@ class PlaybackController(
      * Enables or disables the strictly read-only, head-synced PCM spectrum tap.
      * Safe in both Safe Mode and Bit-Perfect Opt-In mode; zero overhead when inactive.
      */
-    fun setSpectrumTapActive(active: Boolean) {
+    override fun setSpectrumTapActive(active: Boolean) {
         engine.setSpectrumTapActive(active)
     }
 
@@ -544,7 +539,7 @@ class PlaybackController(
      * Reads a head-synced 1024-sample mono window into [outMonoSamples] off the audio thread.
      * Returns effective decimated sample rate in `Hz`, or `0` if paused/inactive.
      */
-    fun sampleCurrentSpectrumWindow(outMonoSamples: FloatArray): Int = engine.sampleCurrentSpectrumWindow(outMonoSamples)
+    override fun sampleCurrentSpectrumWindow(outMonoSamples: FloatArray): Int = engine.sampleCurrentSpectrumWindow(outMonoSamples)
 
     fun stop() {
         foregroundHandshakeJob?.cancel()
@@ -562,7 +557,7 @@ class PlaybackController(
      * foreground media notification, and persisted last-session state so `MiniPlayerBar`
      * disappears immediately and is not re-seeded until the user starts a new track.
      */
-    fun dismissActiveSession(source: String = "MINI_PLAYER_SWIPE") {
+    override fun dismissActiveSession(source: String) {
         foregroundHandshakeJob?.cancel()
         queueReorderSyncJob?.cancel()
         positionPersistenceJob?.cancel()
@@ -601,7 +596,7 @@ class PlaybackController(
         }
     }
 
-    fun toggleShuffle() {
+    override fun toggleShuffle() {
         val nextEnabled = !queueManager.snapshot().shuffleEnabled
         val snapshot = queueManager.setShuffle(nextEnabled)
         _state.update { it.copy(queue = snapshot, activeTrack = snapshot.currentItem) }
@@ -611,7 +606,7 @@ class PlaybackController(
         }
     }
 
-    fun cycleRepeatMode() {
+    override fun cycleRepeatMode() {
         val nextMode = queueManager.cycleRepeatMode()
         val snapshot = queueManager.snapshot()
         _state.update { it.copy(queue = snapshot) }
@@ -621,7 +616,7 @@ class PlaybackController(
         }
     }
 
-    fun setGaplessEnabled(enabled: Boolean) {
+    override fun setGaplessEnabled(enabled: Boolean) {
         engine.setGaplessEnabled(enabled)
         _state.update { it.copy(gaplessEnabled = enabled) }
         syncNextTrackToEngine()
@@ -630,7 +625,7 @@ class PlaybackController(
         }
     }
 
-    fun setReplayGainMode(mode: ReplayGainMode) {
+    override fun setReplayGainMode(mode: ReplayGainMode) {
         val updated = _state.value.replayGainConfig.copy(mode = mode)
         engine.setReplayGainConfig(updated)
         _state.update { it.copy(replayGainConfig = updated) }
@@ -639,7 +634,7 @@ class PlaybackController(
         }
     }
 
-    fun setReplayGainPreampDb(preampDb: Float) {
+    override fun setReplayGainPreampDb(preampDb: Float) {
         val clamped = preampDb.coerceIn(ReplayGainConfig.MIN_PREAMP_DB, ReplayGainConfig.MAX_PREAMP_DB)
         val updated = _state.value.replayGainConfig.copy(preampDb = clamped)
         engine.setReplayGainConfig(updated)
@@ -649,7 +644,7 @@ class PlaybackController(
         }
     }
 
-    fun setReplayGainPreventClipping(preventClipping: Boolean) {
+    override fun setReplayGainPreventClipping(preventClipping: Boolean) {
         val updated = _state.value.replayGainConfig.copy(preventClipping = preventClipping)
         engine.setReplayGainConfig(updated)
         _state.update { it.copy(replayGainConfig = updated) }
@@ -658,7 +653,7 @@ class PlaybackController(
         }
     }
 
-    fun setSleepTimerPreset(preset: SleepTimerPreset) {
+    override fun setSleepTimerPreset(preset: SleepTimerPreset) {
         sleepTimerController.setPreset(preset)
     }
 
@@ -666,9 +661,9 @@ class PlaybackController(
         sleepTimerController.cancel()
     }
 
-    fun requestBitPerfectMode(): SafetyCommand = engine.requestBitPerfectMode()
+    override fun requestBitPerfectMode(): SafetyCommand = engine.requestBitPerfectMode()
 
-    fun confirmBitPerfectWarning(): SafetyCommand {
+    override fun confirmBitPerfectWarning(): SafetyCommand {
         val cmd = engine.confirmBitPerfectWarning()
         if (cmd.type == SafetyEventType.MODE_CHANGED_TO_BIT_PERFECT) {
             scope.launch(Dispatchers.IO) {
@@ -680,9 +675,9 @@ class PlaybackController(
         return cmd
     }
 
-    fun dismissSafetyWarning(): SafetyCommand = engine.dismissSafetyWarning()
+    override fun dismissSafetyWarning(): SafetyCommand = engine.dismissSafetyWarning()
 
-    fun switchToSafeMode(): SafetyCommand {
+    override fun switchToSafeMode(): SafetyCommand {
         val cmd = engine.switchToSafeMode()
         scope.launch(Dispatchers.IO) {
             runCatching {
@@ -692,7 +687,7 @@ class PlaybackController(
         return cmd
     }
 
-    fun clearAutoPauseNotice() {
+    override fun clearAutoPauseNotice() {
         engine.clearAutoPauseNotice()
     }
 
@@ -701,7 +696,7 @@ class PlaybackController(
      * Recent, Favorites, or All Songs in its sorted order), and paused playback position on app
      * relaunch without auto-playing.
      */
-    fun restoreLastSessionIfNeeded(library: LibrarySnapshot, playlists: PlaylistsUiSnapshot) {
+    override fun restoreLastSessionIfNeeded(library: LibrarySnapshot, playlists: PlaylistsUiSnapshot) {
         val restoreAlreadyHandled = hasRestoredInitialSession || isRestoreInFlight
         val cannotRestoreNow = library.allSongs.isEmpty() || !queueManager.isEmpty()
         if (restoreAlreadyHandled || cannotRestoreNow) {

@@ -28,12 +28,12 @@ sealed interface CoverThemeLookup {
  * - Handles `Bitmap.Config.HARDWARE` copies safely without ever recycling bitmaps owned by
  *   [AlbumArtworkLoader].
  */
-class CoverThemeColorCache(private val albumArtworkLoader: AlbumArtworkLoader) {
+class CoverThemeColorCache(private val albumArtworkLoader: AlbumArtworkLoader) : CoverThemeResolver {
     private class CachedEntry(val tokens: DynamicThemeTokens?)
 
     private val cache = LruCache<String, CachedEntry>(MAX_CACHE_ENTRIES)
 
-    fun cacheKeyFor(track: PlaybackTrack): String = albumArtworkLoader.memoryKeyFor(track, AlbumArtworkLoader.THUMBNAIL_SIZE_PX)
+    override fun cacheKeyFor(track: PlaybackTrack): String = albumArtworkLoader.memoryKeyFor(track, AlbumArtworkLoader.THUMBNAIL_SIZE_PX)
 
     fun peekCached(track: PlaybackTrack): CoverThemeLookup = peekCachedByKey(cacheKeyFor(track))
 
@@ -54,11 +54,11 @@ class CoverThemeColorCache(private val albumArtworkLoader: AlbumArtworkLoader) {
         cache.put(key, CachedEntry(tokens))
     }
 
-    fun clear() {
+    override fun clear() {
         cache.evictAll()
     }
 
-    suspend fun resolveTokens(track: PlaybackTrack?): DynamicThemeTokens? {
+    override suspend fun resolveTokens(track: PlaybackTrack?): DynamicThemeTokens? {
         if (track == null) return null
         val key = cacheKeyFor(track)
         cache.get(key)?.let { return it.tokens }

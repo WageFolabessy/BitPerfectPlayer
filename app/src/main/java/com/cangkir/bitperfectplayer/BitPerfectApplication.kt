@@ -23,6 +23,12 @@ import com.cangkir.bitperfectplayer.library.PlaylistRepository
 import com.cangkir.bitperfectplayer.library.TrackInfoLoader
 import com.cangkir.bitperfectplayer.lyrics.AndroidContentFingerprintProvider
 import com.cangkir.bitperfectplayer.lyrics.LyricsRepository
+import com.cangkir.bitperfectplayer.ui.DiagnosticCoordinatorControls
+import com.cangkir.bitperfectplayer.ui.DiagnosticServices
+import com.cangkir.bitperfectplayer.ui.MainUiVisualAssets
+import com.cangkir.bitperfectplayer.ui.MainViewModel
+import com.cangkir.bitperfectplayer.ui.MainViewModelMediaServices
+import com.cangkir.bitperfectplayer.ui.PlaybackArtworkPreloader
 import com.cangkir.bitperfectplayer.ui.theme.CoverThemeColorCache
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -103,6 +109,60 @@ class AppContainer(context: Context) {
     }
     val playbackController: PlaybackController
         get() = playbackControllerLazy.value
+
+    val mainUiVisualAssets: MainUiVisualAssets
+        get() = MainUiVisualAssets(
+            albumArtworkLoader = albumArtworkLoader,
+            artistPhotoStore = artistPhotoStore,
+            coverThemeColorCache = coverThemeColorCache,
+        )
+
+    private val diagnosticCoordinatorControls: DiagnosticCoordinatorControls by lazy {
+        object : DiagnosticCoordinatorControls {
+            override val isEnabled: Boolean
+                get() = diagnosticLogger.isEnabled
+            override val storageStats = diagnosticLogger.storageStats
+
+            override fun setEnabled(enabled: Boolean) {
+                diagnosticLogger.setEnabled(enabled)
+            }
+
+            override fun writeDeviceSummary(prefs: UserPreferences) {
+                diagnosticLogger.writeDeviceSummary(buildDeviceSummaryFields(prefs))
+            }
+
+            override fun buildExportSummaryFieldsIfEnabled(prefs: UserPreferences): Map<String, Any?>? =
+                if (diagnosticLogger.isEnabled) buildDeviceSummaryFields(prefs) else null
+
+            override fun refreshStorageStatsSync() = diagnosticLogger.refreshStorageStatsSync()
+
+            override fun clearAllLogs() = diagnosticLogger.clearAllLogs()
+        }
+    }
+
+    fun createMainViewModelFactory(): MainViewModel.Factory = MainViewModel.Factory(
+        playbackTransport = playbackController,
+        playbackAudio = playbackController,
+        libraryRepository = libraryRepository,
+        playlistStore = playlistRepository,
+        artistPhotoStorage = artistPhotoStore,
+        trackDetailsLoader = trackInfoLoader,
+        lyricsStore = lyricsRepository,
+        preferencesStore = preferencesRepository,
+        backupStore = backupRepository,
+        diagnosticServices = DiagnosticServices(
+            controls = diagnosticCoordinatorControls,
+            exporter = diagnosticLogExporter,
+        ),
+        mediaServices = MainViewModelMediaServices(
+            coverThemeResolver = coverThemeColorCache,
+            artworkPreloader = PlaybackArtworkPreloader { track -> albumArtworkLoader.preloadDiscArtwork(track) },
+            onClearArtworkCaches = {
+                albumArtworkLoader.clearNegativeCache()
+                coverThemeColorCache.clear()
+            },
+        ),
+    )
 
     fun buildDeviceSummaryFields(prefs: UserPreferences): Map<String, Any?> {
         val currentAudioMode = if (playbackControllerLazy.isInitialized()) {

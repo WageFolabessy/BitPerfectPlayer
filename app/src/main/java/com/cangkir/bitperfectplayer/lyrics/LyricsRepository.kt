@@ -203,7 +203,7 @@ class LyricsRepository(
     private val persistenceRepository: LocalPersistenceRepository,
     private val preferencesRepository: UserPreferencesRepository,
     private val fingerprintProvider: AndroidContentFingerprintProvider,
-) {
+) : LyricsStore {
     private val appContext = context.applicationContext
 
     private val coordinator = LyricsCoordinator(
@@ -225,11 +225,11 @@ class LyricsRepository(
         findAutoDetectLrcBytes = { track -> findMatchingSidecarLrcBytes(track) },
     )
 
-    suspend fun loadLyricsForTrack(track: PlaybackTrack): TrackLyricsState? = withContext(Dispatchers.IO) {
+    override suspend fun loadLyricsForTrack(track: PlaybackTrack): TrackLyricsState? = withContext(Dispatchers.IO) {
         coordinator.loadLyricsForTrack(track)
     }
 
-    suspend fun importLrcFromSaf(track: PlaybackTrack, lrcUri: Uri): Result<TrackLyricsState> = withContext(Dispatchers.IO) {
+    override suspend fun importLrcFromSaf(track: PlaybackTrack, lrcUri: Uri): Result<TrackLyricsState> = withContext(Dispatchers.IO) {
         runCatching {
             val bytes = readUriBytesCapped(lrcUri)
                 ?: throw IOException("Unable to read selected .lrc file")
@@ -237,11 +237,11 @@ class LyricsRepository(
         }
     }
 
-    suspend fun saveManualLyrics(track: PlaybackTrack, rawText: String): Result<TrackLyricsState> = withContext(Dispatchers.IO) {
+    override suspend fun saveManualLyrics(track: PlaybackTrack, rawText: String): Result<TrackLyricsState> = withContext(Dispatchers.IO) {
         coordinator.saveManualLyrics(track, rawText)
     }
 
-    suspend fun deleteLyrics(track: PlaybackTrack): Result<TrackLyricsState> = withContext(Dispatchers.IO) {
+    override suspend fun deleteLyrics(track: PlaybackTrack): Result<TrackLyricsState> = withContext(Dispatchers.IO) {
         coordinator.deleteLyrics(track)
     }
 

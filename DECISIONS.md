@@ -746,6 +746,20 @@ This file records autonomous architectural, dependency, and environment decision
   - Matches `ArtistDetailView`'s `Albums` carousel 1:1 out of the box and ensures `Play All` plays albums chronologically from Track `1..N` even when browsing newest-first (`Year ↓`), without disturbing explicit `"Album"` alphabetical sorting.
 - **Rejected Alternatives:** Silently redefining `"Album"` sort to ignore alphabetical album names (breaks user expectation when explicitly picking `"Album"`); reversing intra-album track order (`10..1`) under `Year ↓` (unusable for sequential album listening).
 
+---
+
+## `D13.3` — Decouple `MainViewModel` From `AppContainer` Into Interface-Backed Coordinators (2026-11-25)
+- **Context:**
+  - `MainViewModel` previously accepted `internal val container: AppContainer` directly, bypassed `detekt`'s `TooManyFunctions` class limit via top-level `MainViewModel.*` extension functions (`dismissActiveSession`, `createPlaylistAndAddTrack`, `addTrackToPlaylist`, `removePlaylistEntry`), used `@Suppress("UNCHECKED_CAST")` in `MainViewModel.factory`, and had zero isolated unit tests.
+- **Decision:**
+  1. **Narrow Domain Interfaces:** Introduced explicit interfaces across playback (`PlaybackTransportControl`, `PlaybackAudioControl`), library/playlists/metadata (`LibraryRepository`, `PlaylistStore`, `ArtistPhotoStorage`, `TrackDetailsLoader`), preferences/backups (`UserPreferencesStore`, `LocalBackupStore`), lyrics (`LyricsStore`), diagnostics (`DiagnosticLogControl`, `DiagnosticLogExporterContract`), and dynamic themes (`CoverThemeResolver`), implemented directly by the existing production classes.
+  2. **Cohesive Coordinators & UI Asset Split:** Extracted [`UiSnackbarController.kt`](app/src/main/java/com/cangkir/bitperfectplayer/ui/UiSnackbarController.kt), [`PlaylistUiCoordinator.kt`](app/src/main/java/com/cangkir/bitperfectplayer/ui/PlaylistUiCoordinator.kt), [`SettingsAndBackupCoordinator.kt`](app/src/main/java/com/cangkir/bitperfectplayer/ui/SettingsAndBackupCoordinator.kt), and [`LibraryAndLyricsCoordinator.kt`](app/src/main/java/com/cangkir/bitperfectplayer/ui/LibraryAndLyricsCoordinator.kt) (owning track search filtering used by `LibraryScreen`), and moved Compose visual assets (`AlbumArtworkLoader`, `ArtistPhotoStore`, `CoverThemeColorCache`) into [`MainUiVisualAssets.kt`](app/src/main/java/com/cangkir/bitperfectplayer/ui/MainUiVisualAssets.kt).
+  3. **Manual-DI `MainViewModel.Factory` & Pure-JVM Tests:** Removed `AppContainer` and extension workarounds from [`MainViewModel.kt`](app/src/main/java/com/cangkir/bitperfectplayer/ui/MainViewModel.kt), folded `dismissActiveSession()` back onto `MainViewModel`, used `modelClass.cast(instance)!!` in `MainViewModel.Factory` (zero `@Suppress`), wired concrete instances in `AppContainer.createMainViewModelFactory()`, and proved ViewModel + coordinator behavior without Robolectric in [`MainViewModelAndCoordinatorsTest.kt`](app/src/test/java/com/cangkir/bitperfectplayer/ui/MainViewModelAndCoordinatorsTest.kt).
+- **Rationale:**
+  - Keeps manual dependency injection zero-overhead (`0` external DI frameworks/KSP codegen), satisfies `detekt` structural limits genuinely through clean ownership boundaries, decouples Compose rendering assets from presentation state, and enables fast pure-JVM tests.
+- **Rejected Alternatives:** Adding Hilt or Koin DI frameworks (unnecessary dependency/build overhead for a small local manual-DI app); widening `detekt` thresholds or suppression rules to leave monolith functions intact.
+
+
 
 
 

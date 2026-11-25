@@ -27,10 +27,10 @@ data class DiagnosticShareResult(val shareIntent: Intent, val fileCount: Int, va
  * 1. Direct SAF export via `ActivityResultContracts.CreateDocument("application/zip")`.
  * 2. Scoped `FileProvider` sharing via `cacheDir/diagnostic_exports/` and `Intent.ACTION_SEND`.
  */
-class DiagnosticLogExporter(context: Context, private val logger: LocalDiagnosticLogger) {
+class DiagnosticLogExporter(context: Context, private val logger: LocalDiagnosticLogger) : DiagnosticLogExporterContract {
     private val appContext = context.applicationContext
 
-    suspend fun exportToUri(destinationUri: Uri, summaryFields: Map<String, Any?>? = null): Result<DiagnosticExportResult> =
+    override suspend fun exportToUri(destinationUri: Uri, summaryFields: Map<String, Any?>?): Result<DiagnosticExportResult> =
         withContext(Dispatchers.IO) {
             runCatching {
                 val files = prepareFlushAndCollectFiles(summaryFields)
@@ -49,46 +49,47 @@ class DiagnosticLogExporter(context: Context, private val logger: LocalDiagnosti
             }
         }
 
-    suspend fun prepareShareIntent(summaryFields: Map<String, Any?>? = null): Result<DiagnosticShareResult> = withContext(Dispatchers.IO) {
-        runCatching {
-            val files = prepareFlushAndCollectFiles(summaryFields)
-            if (files.isEmpty()) {
-                throw IllegalStateException(EMPTY_LOGS_MESSAGE)
-            }
-            val cacheDir = logger.exportCacheDir
-            if (!cacheDir.exists()) {
-                cacheDir.mkdirs()
-            }
-            // Remove older cached export archives before writing the fresh zip.
-            cacheDir.listFiles()?.forEach { existing ->
-                if (existing.isFile && existing.name.endsWith(".zip")) {
-                    existing.delete()
+    override suspend fun prepareShareIntent(summaryFields: Map<String, Any?>?): Result<DiagnosticShareResult> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val files = prepareFlushAndCollectFiles(summaryFields)
+                if (files.isEmpty()) {
+                    throw IllegalStateException(EMPTY_LOGS_MESSAGE)
                 }
-            }
-            val zipName = suggestZipFileName(logger.appVersion.versionName)
-            val zipFile = File(cacheDir, zipName)
-            FileOutputStream(zipFile, false).use { out ->
-                writeZipArchive(out, files)
-            }
-            val authority = resolveFileProviderAuthority(appContext.packageName)
-            val contentUri = FileProvider.getUriForFile(appContext, authority, zipFile)
-            val sendIntent = Intent(Intent.ACTION_SEND).apply {
-                type = "application/zip"
-                putExtra(Intent.EXTRA_STREAM, contentUri)
-                putExtra(
-                    Intent.EXTRA_SUBJECT,
-                    "BitPerfectPlayer v${logger.appVersion.versionName} Diagnostic Logs",
+                val cacheDir = logger.exportCacheDir
+                if (!cacheDir.exists()) {
+                    cacheDir.mkdirs()
+                }
+                // Remove older cached export archives before writing the fresh zip.
+                cacheDir.listFiles()?.forEach { existing ->
+                    if (existing.isFile && existing.name.endsWith(".zip")) {
+                        existing.delete()
+                    }
+                }
+                val zipName = suggestZipFileName(logger.appVersion.versionName)
+                val zipFile = File(cacheDir, zipName)
+                FileOutputStream(zipFile, false).use { out ->
+                    writeZipArchive(out, files)
+                }
+                val authority = resolveFileProviderAuthority(appContext.packageName)
+                val contentUri = FileProvider.getUriForFile(appContext, authority, zipFile)
+                val sendIntent = Intent(Intent.ACTION_SEND).apply {
+                    type = "application/zip"
+                    putExtra(Intent.EXTRA_STREAM, contentUri)
+                    putExtra(
+                        Intent.EXTRA_SUBJECT,
+                        "BitPerfectPlayer v${logger.appVersion.versionName} Diagnostic Logs",
+                    )
+                    clipData = ClipData.newRawUri(zipName, contentUri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                DiagnosticShareResult(
+                    shareIntent = Intent.createChooser(sendIntent, "Share Diagnostic Logs"),
+                    fileCount = files.size,
+                    zipBytes = zipFile.length(),
                 )
-                clipData = ClipData.newRawUri(zipName, contentUri)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
-            DiagnosticShareResult(
-                shareIntent = Intent.createChooser(sendIntent, "Share Diagnostic Logs"),
-                fileCount = files.size,
-                zipBytes = zipFile.length(),
-            )
         }
-    }
 
     private fun prepareFlushAndCollectFiles(summaryFields: Map<String, Any?>?): List<File> {
         if (logger.isEnabled && summaryFields != null) {

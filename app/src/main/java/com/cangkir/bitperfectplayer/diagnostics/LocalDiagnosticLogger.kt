@@ -29,7 +29,7 @@ data class AppVersionSnapshot(val versionName: String, val versionCode: Long, va
  * - A single low-priority background thread (`BitPerfectDiagWriter`) is lazily spawned only once
  *   logging is enabled, flushing every ~3 seconds or on explicit flush/pause/export.
  */
-class LocalDiagnosticLogger(context: Context) {
+class LocalDiagnosticLogger(context: Context) : DiagnosticLogControl {
     private val appContext = context.applicationContext
 
     val logDir: File = File(appContext.filesDir, LOG_DIR_NAME)
@@ -38,7 +38,7 @@ class LocalDiagnosticLogger(context: Context) {
     val appVersion: AppVersionSnapshot = resolveAppVersionSnapshot(appContext)
 
     @Volatile
-    var isEnabled: Boolean = false
+    override var isEnabled: Boolean = false
         private set
 
     private val buffer = DiagnosticLogBuffer(DiagnosticLogBuffer.DEFAULT_CAPACITY)
@@ -52,9 +52,9 @@ class LocalDiagnosticLogger(context: Context) {
     private var flushRequested: Boolean = false
 
     private val _storageStats = MutableStateFlow(DiagnosticLogStats())
-    val storageStats: StateFlow<DiagnosticLogStats> = _storageStats.asStateFlow()
+    override val storageStats: StateFlow<DiagnosticLogStats> = _storageStats.asStateFlow()
 
-    fun setEnabled(enabled: Boolean) {
+    override fun setEnabled(enabled: Boolean) {
         val previous = isEnabled
         isEnabled = enabled
         if (enabled) {
@@ -130,7 +130,7 @@ class LocalDiagnosticLogger(context: Context) {
         }
     }
 
-    fun writeDeviceSummary(fields: Map<String, Any?>) {
+    override fun writeDeviceSummary(fields: Map<String, Any?>) {
         if (!isEnabled) return
         val payload = DiagnosticLogFormatter.formatDeviceSummary(
             epochMs = System.currentTimeMillis(),
@@ -215,7 +215,7 @@ class LocalDiagnosticLogger(context: Context) {
         }
     }
 
-    fun refreshStorageStatsSync(): DiagnosticLogStats = fileWriteLock.withLock {
+    override fun refreshStorageStatsSync(): DiagnosticLogStats = fileWriteLock.withLock {
         val stats = DiagnosticLogRotationPolicy.computeStorageStats(logDir)
         _storageStats.value = stats
         stats
@@ -223,7 +223,7 @@ class LocalDiagnosticLogger(context: Context) {
 
     fun getStorageStats(): DiagnosticLogStats = refreshStorageStatsSync()
 
-    fun clearAllLogs(): DiagnosticLogStats {
+    override fun clearAllLogs(): DiagnosticLogStats {
         buffer.clear()
         return fileWriteLock.withLock {
             runCatching {

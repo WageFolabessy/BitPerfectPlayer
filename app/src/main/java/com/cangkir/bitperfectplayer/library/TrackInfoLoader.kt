@@ -33,10 +33,10 @@ class TrackInfoLoader(
     context: Context,
     private val persistenceRepository: LocalPersistenceRepository,
     private val fingerprintProvider: AndroidContentFingerprintProvider,
-) {
+) : TrackDetailsLoader {
     private val appContext = context.applicationContext
 
-    suspend fun loadFullDetails(track: PlaybackTrack): TrackTechnicalInfo = withContext(Dispatchers.IO) {
+    override suspend fun loadFullDetails(track: PlaybackTrack): TrackTechnicalInfo = withContext(Dispatchers.IO) {
         val uri = track.uriString.toUri()
 
         val resolvedSize = if (track.fileSizeBytes > 0L) {

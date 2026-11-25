@@ -61,7 +61,7 @@ class LocalLibraryRepository(
     private val preferencesRepository: UserPreferencesRepository,
     private val persistenceRepository: LocalPersistenceRepository,
     private val fingerprintProvider: AndroidContentFingerprintProvider,
-) {
+) : LibraryRepository {
     private val appContext = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val syncMutex = Mutex()
@@ -106,7 +106,7 @@ class LocalLibraryRepository(
             }
         }
 
-    val librarySnapshot: StateFlow<LibrarySnapshot> = combine(
+    override val librarySnapshot: StateFlow<LibrarySnapshot> = combine(
         combinedTracksFlow,
         persistenceRepository.observeRecentlyPlayed(limit = 50),
         persistenceRepository.observeAllFavorites(),
@@ -156,7 +156,7 @@ class LocalLibraryRepository(
      * `v1.2` Room v4 -> v5) across both MediaStore and SAF tracks via cursor tags, fast FLAC/ID3v2
      * header reads, and `MediaMetadataRetriever` fallback.
      */
-    suspend fun refreshLibrary(forceYearBackfill: Boolean = false) = withContext(Dispatchers.IO) {
+    override suspend fun refreshLibrary(forceYearBackfill: Boolean) = withContext(Dispatchers.IO) {
         syncMutex.withLock {
             isScanning.value = true
             scanWarning.value = null
@@ -433,7 +433,7 @@ class LocalLibraryRepository(
         }
     }
 
-    suspend fun importSafFolder(treeUri: Uri): Int = withContext(Dispatchers.IO) {
+    override suspend fun importSafFolder(treeUri: Uri): Int = withContext(Dispatchers.IO) {
         takePersistableReadPermissionDefensively(treeUri)
         preferencesRepository.addPersistedSafTreeUri(treeUri.toString())
         val discovered = discoverSafTreeCandidates(treeUri)
@@ -452,7 +452,7 @@ class LocalLibraryRepository(
         parsed
     }
 
-    suspend fun removeSafFolder(treeUriString: String) = withContext(Dispatchers.IO) {
+    override suspend fun removeSafFolder(treeUriString: String) = withContext(Dispatchers.IO) {
         preferencesRepository.removePersistedSafTreeUri(treeUriString)
         refreshLibrary()
     }
@@ -462,7 +462,7 @@ class LocalLibraryRepository(
      * Now Playing, and Favorites tab) and persists to Room asynchronously on `Dispatchers.IO`,
      * rolling back only if fingerprint/DB persistence fails.
      */
-    suspend fun toggleFavorite(track: PlaybackTrack): Result<Boolean> {
+    override suspend fun toggleFavorite(track: PlaybackTrack): Result<Boolean> {
         val currentSnapshot = librarySnapshot.value
         val currentlyFavorite = FavoriteStateReducer.isFavorited(
             track = track,

@@ -54,6 +54,7 @@ import com.cangkir.bitperfectplayer.library.LibrarySnapshot
 import com.cangkir.bitperfectplayer.library.TrackSortScope
 import com.cangkir.bitperfectplayer.library.TrackSortSpec
 import com.cangkir.bitperfectplayer.ui.GroupSortBottomSheet
+import com.cangkir.bitperfectplayer.ui.LibraryAndLyricsCoordinator
 import com.cangkir.bitperfectplayer.ui.LibraryTab
 import com.cangkir.bitperfectplayer.ui.TrackSortBottomSheet
 import com.cangkir.bitperfectplayer.ui.theme.AmberIndicated
@@ -100,6 +101,8 @@ fun LibraryScreen(
     onDetailViewOpenChanged: (Boolean) -> Unit = {},
     onContextualDynamicThemeChanged: ((DynamicThemeTokens?) -> Unit)? = null,
     isForegroundPage: Boolean = true,
+    externalSearchQuery: String? = null,
+    onExternalSearchQueryChange: ((String) -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val pagerState = rememberPagerState(
@@ -118,7 +121,15 @@ fun LibraryScreen(
     val recentListState = rememberLazyListState()
     val favoritesListState = rememberLazyListState()
 
-    var searchQuery by rememberSaveable { mutableStateOf("") }
+    var localSearchQuery by rememberSaveable { mutableStateOf("") }
+    val searchQuery = externalSearchQuery ?: localSearchQuery
+    val onSearchQueryChange: (String) -> Unit = { updated ->
+        if (onExternalSearchQueryChange != null) {
+            onExternalSearchQueryChange(updated)
+        } else {
+            localSearchQuery = updated
+        }
+    }
     var openedGroupName by rememberSaveable { mutableStateOf<String?>(null) }
     var openedArtistAlbumName by rememberSaveable { mutableStateOf<String?>(null) }
 
@@ -460,7 +471,7 @@ fun LibraryScreen(
                             tab = LibraryTab.fromPageIndex(page),
                             libraryState = libraryState,
                             searchQuery = searchQuery,
-                            onSearchQueryChange = { searchQuery = it },
+                            onSearchQueryChange = onSearchQueryChange,
                             favoriteTrackUris = favoriteTrackUris,
                             activeTrackUri = playbackState.activeTrack?.uriString,
                             albumArtworkLoader = albumArtworkLoader,
@@ -526,17 +537,7 @@ private fun LibraryPagerPageContent(
     when (tab) {
         LibraryTab.ALL_SONGS -> {
             val filtered = remember(libraryState.allSongs, searchQuery) {
-                val q = searchQuery.trim()
-                if (q.isEmpty()) {
-                    libraryState.allSongs
-                } else {
-                    libraryState.allSongs.filter {
-                        it.title.contains(q, ignoreCase = true) ||
-                            it.artist.contains(q, ignoreCase = true) ||
-                            it.album.contains(q, ignoreCase = true) ||
-                            it.fileName.contains(q, ignoreCase = true)
-                    }
-                }
+                LibraryAndLyricsCoordinator.filterTracks(libraryState.allSongs, searchQuery)
             }
             Column(modifier = Modifier.fillMaxSize()) {
                 CompactSearchBarRow(

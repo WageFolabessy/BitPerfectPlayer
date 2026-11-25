@@ -33,7 +33,7 @@ val Context.bitPerfectUserPreferencesDataStore: DataStore<Preferences> by prefer
  * playback controls (shuffle/repeat/gapless), Safe-Mode-only ReplayGain settings, persisted SAF
  * URIs, context-aware last playback restoration state, and independent per-scope sort preferences.
  */
-class UserPreferencesRepository(private val dataStore: DataStore<Preferences>) {
+class UserPreferencesRepository(private val dataStore: DataStore<Preferences>) : UserPreferencesStore {
     private object Keys {
         val AUDIO_SAFETY_MODE = stringPreferencesKey("audio_safety_mode")
         val SHUFFLE_ENABLED = booleanPreferencesKey("shuffle_enabled")
@@ -63,7 +63,7 @@ class UserPreferencesRepository(private val dataStore: DataStore<Preferences>) {
         fun groupSortKey(scope: GroupSortScope) = stringPreferencesKey(scope.preferenceKey)
     }
 
-    val preferencesFlow: Flow<UserPreferences> = dataStore.data
+    override val preferencesFlow: Flow<UserPreferences> = dataStore.data
         .catch { exception ->
             if (exception is IOException) {
                 emit(emptyPreferences())
@@ -73,7 +73,7 @@ class UserPreferencesRepository(private val dataStore: DataStore<Preferences>) {
         }
         .map { prefs -> mapPreferences(prefs) }
 
-    suspend fun getSnapshot(): UserPreferences = preferencesFlow.first()
+    override suspend fun getSnapshot(): UserPreferences = preferencesFlow.first()
 
     suspend fun getYearBackfillMask(): Int = dataStore.data
         .catch { exception ->
@@ -131,56 +131,56 @@ class UserPreferencesRepository(private val dataStore: DataStore<Preferences>) {
         }
     }
 
-    suspend fun setNowPlayingArtworkStyle(style: NowPlayingArtworkStyle) {
+    override suspend fun setNowPlayingArtworkStyle(style: NowPlayingArtworkStyle) {
         dataStore.edit { prefs ->
             prefs[Keys.NOW_PLAYING_ARTWORK_STYLE] = style.name
         }
     }
 
-    suspend fun setSpectrumVisualizerEnabled(enabled: Boolean) {
+    override suspend fun setSpectrumVisualizerEnabled(enabled: Boolean) {
         dataStore.edit { prefs ->
             prefs[Keys.SPECTRUM_VISUALIZER_ENABLED] = enabled
         }
     }
 
-    suspend fun setSpectrumColorStyle(style: SpectrumColorStyle) {
+    override suspend fun setSpectrumColorStyle(style: SpectrumColorStyle) {
         dataStore.edit { prefs ->
             prefs[Keys.SPECTRUM_COLOR_STYLE] = style.name
         }
     }
 
-    suspend fun setSpectrumSparksEnabled(enabled: Boolean) {
+    override suspend fun setSpectrumSparksEnabled(enabled: Boolean) {
         dataStore.edit { prefs ->
             prefs[Keys.SPECTRUM_SPARKS_ENABLED] = enabled
         }
     }
 
-    suspend fun setDefaultHomepage(homepage: DefaultHomepage) {
+    override suspend fun setDefaultHomepage(homepage: DefaultHomepage) {
         dataStore.edit { prefs ->
             prefs[Keys.DEFAULT_HOMEPAGE] = homepage.name
         }
     }
 
-    suspend fun setDynamicCoverThemeEnabled(enabled: Boolean) {
+    override suspend fun setDynamicCoverThemeEnabled(enabled: Boolean) {
         dataStore.edit { prefs ->
             prefs[Keys.DYNAMIC_COVER_THEME_ENABLED] = enabled
         }
     }
 
-    suspend fun setDiagnosticLoggingEnabled(enabled: Boolean) {
+    override suspend fun setDiagnosticLoggingEnabled(enabled: Boolean) {
         dataStore.edit { prefs ->
             prefs[Keys.DIAGNOSTIC_LOGGING_ENABLED] = enabled
         }
     }
 
-    suspend fun setTrackSort(scope: TrackSortScope, spec: TrackSortSpec) {
+    override suspend fun setTrackSort(scope: TrackSortScope, spec: TrackSortSpec) {
         val validSpec = if (spec.option in scope.availableOptions) spec else scope.defaultSpec
         dataStore.edit { prefs ->
             prefs[Keys.trackSortKey(scope)] = validSpec.serialize()
         }
     }
 
-    suspend fun setGroupSort(scope: GroupSortScope, spec: GroupSortSpec) {
+    override suspend fun setGroupSort(scope: GroupSortScope, spec: GroupSortSpec) {
         dataStore.edit { prefs ->
             prefs[Keys.groupSortKey(scope)] = spec.serialize()
         }

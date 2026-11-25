@@ -1,49 +1,42 @@
 package com.cangkir.bitperfectplayer.ui
 
-import android.content.Intent
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
-import com.cangkir.bitperfectplayer.AppContainer
+import com.cangkir.bitperfectplayer.audio.PlaybackAudioControl
 import com.cangkir.bitperfectplayer.audio.PlaybackControllerState
 import com.cangkir.bitperfectplayer.audio.PlaybackStatus
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
+import com.cangkir.bitperfectplayer.audio.PlaybackTransportControl
 import com.cangkir.bitperfectplayer.audio.QueueContext
 import com.cangkir.bitperfectplayer.audio.RepeatMode
 import com.cangkir.bitperfectplayer.audio.ReplayGainMode
-import com.cangkir.bitperfectplayer.audio.SleepTimerPreset
 import com.cangkir.bitperfectplayer.audio.SleepTimerState
 import com.cangkir.bitperfectplayer.data.DefaultHomepage
+import com.cangkir.bitperfectplayer.data.LocalBackupStore
 import com.cangkir.bitperfectplayer.data.NowPlayingArtworkStyle
-import com.cangkir.bitperfectplayer.data.PlaylistTrackEntity
 import com.cangkir.bitperfectplayer.data.SpectrumColorStyle
+import com.cangkir.bitperfectplayer.data.UserPreferencesStore
+import com.cangkir.bitperfectplayer.diagnostics.DiagnosticLogExporterContract
 import com.cangkir.bitperfectplayer.diagnostics.DiagnosticLogStats
-import com.cangkir.bitperfectplayer.library.AddTrackToPlaylistOutcome
-import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
-import com.cangkir.bitperfectplayer.library.ArtistPhotoStore
-import com.cangkir.bitperfectplayer.library.FavoriteStateReducer
-import com.cangkir.bitperfectplayer.library.GroupSortScope
-import com.cangkir.bitperfectplayer.library.GroupSortSpec
+import com.cangkir.bitperfectplayer.library.ArtistPhotoStorage
+import com.cangkir.bitperfectplayer.library.LibraryRepository
 import com.cangkir.bitperfectplayer.library.LibrarySnapshot
+import com.cangkir.bitperfectplayer.library.PlaylistStore
 import com.cangkir.bitperfectplayer.library.PlaylistsUiSnapshot
-import com.cangkir.bitperfectplayer.library.ResolvedPlaylist
-import com.cangkir.bitperfectplayer.library.TrackSortScope
-import com.cangkir.bitperfectplayer.library.TrackSortSpec
+import com.cangkir.bitperfectplayer.library.TrackDetailsLoader
 import com.cangkir.bitperfectplayer.library.TrackTechnicalInfo
-import com.cangkir.bitperfectplayer.lyrics.TrackLyricsState
-import com.cangkir.bitperfectplayer.ui.theme.CoverThemeColorCache
+import com.cangkir.bitperfectplayer.lyrics.LyricsStore
+import com.cangkir.bitperfectplayer.ui.theme.CoverThemeResolver
 import com.cangkir.bitperfectplayer.ui.theme.DynamicThemeTokens
-import java.util.concurrent.atomic.AtomicLong
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -51,128 +44,91 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-data class LyricsUiState(
-    val trackUri: String? = null,
-    val isLoading: Boolean = false,
-    val lyricsState: TrackLyricsState? = null,
-    val errorMessage: String? = null,
+fun interface PlaybackArtworkPreloader {
+    suspend fun preloadDiscArtwork(track: PlaybackTrack)
+}
+
+data class DiagnosticServices(val controls: DiagnosticCoordinatorControls, val exporter: DiagnosticLogExporterContract)
+
+data class MainViewModelMediaServices(
+    val coverThemeResolver: CoverThemeResolver,
+    val artworkPreloader: PlaybackArtworkPreloader = PlaybackArtworkPreloader { },
+    val onClearArtworkCaches: () -> Unit = {},
+    val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 )
 
-data class UiSnackbarMessage(val id: Long, val message: String, val actionLabel: String? = null, val onAction: (() -> Unit)? = null)
-
 /**
- * Shared presentation ViewModel connecting Compose UI screens to [AppContainer] repositories and
- * [com.cangkir.bitperfectplayer.audio.PlaybackController].
+ * Shared presentation ViewModel composing playback transport/DSP controls with cohesive domain
+ * coordinators ([library], [playlists], [settings]). Depends strictly on narrow interfaces so all
+ * state transitions and coordinator behaviors run under pure JVM unit tests without an application container.
  */
-class MainViewModel(internal val container: AppContainer) : ViewModel() {
+class MainViewModel(
+    private val playbackTransport: PlaybackTransportControl,
+    private val playbackAudio: PlaybackAudioControl,
+    libraryRepository: LibraryRepository,
+    playlistStore: PlaylistStore,
+    artistPhotoStorage: ArtistPhotoStorage,
+    trackDetailsLoader: TrackDetailsLoader,
+    lyricsStore: LyricsStore,
+    preferencesStore: UserPreferencesStore,
+    backupStore: LocalBackupStore,
+    diagnosticServices: DiagnosticServices,
+    private val mediaServices: MainViewModelMediaServices,
+) : ViewModel() {
 
-    val libraryState: StateFlow<LibrarySnapshot> = container.libraryRepository.librarySnapshot
-    val playlistsState: StateFlow<PlaylistsUiSnapshot> = container.playlistRepository.playlistsSnapshot
-    val playbackState: StateFlow<PlaybackControllerState> = container.playbackController.state
-    val playbackPositionMs: StateFlow<Long> = container.playbackController.playbackPositionMs
-    val sleepTimerState: StateFlow<SleepTimerState> = container.playbackController.sleepTimerState
-    val albumArtworkLoader: AlbumArtworkLoader = container.albumArtworkLoader
-    val artistPhotoStore: ArtistPhotoStore = container.artistPhotoStore
-    val artistPhotoRevision: StateFlow<Int> = container.artistPhotoStore.photoRevision
-    val coverThemeColorCache: CoverThemeColorCache = container.coverThemeColorCache
-    val diagnosticLogStats: StateFlow<DiagnosticLogStats> = container.diagnosticLogger.storageStats
+    private val snackbarController = UiSnackbarController()
 
-    /**
-     * Single reactive source of truth for favorited track URIs (Room Flow + instant optimistic
-     * toggle overrides), observed directly by LibraryScreen, NowPlayingScreen, and Favorites tab.
-     */
-    val favoriteTrackUris: StateFlow<Set<String>> = libraryState
-        .map { it.favoriteUris }
-        .stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.Eagerly,
-            initialValue = libraryState.value.favoriteUris,
-        )
+    val settings = SettingsAndBackupCoordinator(
+        scope = viewModelScope,
+        preferencesStore = preferencesStore,
+        backupStore = backupStore,
+        diagnosticControls = diagnosticServices.controls,
+        diagnosticLogExporter = diagnosticServices.exporter,
+        audioControl = playbackAudio,
+        messageEmitter = snackbarController,
+        ioDispatcher = mediaServices.ioDispatcher,
+    )
 
-    /**
-     * Persisted `NowPlayingScreen` artwork presentation mode (`Vinyl Disc` default vs `Square Cover`),
-     * deduplicated with `distinctUntilChanged()` so unrelated preference writes never recompose UI.
-     */
-    val nowPlayingArtworkStyle: StateFlow<NowPlayingArtworkStyle> = container.preferencesRepository.preferencesFlow
-        .map { it.nowPlayingArtworkStyle }
-        .distinctUntilChanged()
-        .stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.Eagerly,
-            initialValue = NowPlayingArtworkStyle.VINYL_DISC,
-        )
+    val library = LibraryAndLyricsCoordinator(
+        scope = viewModelScope,
+        libraryRepository = libraryRepository,
+        artistPhotoStorage = artistPhotoStorage,
+        trackDetailsLoader = trackDetailsLoader,
+        lyricsStore = lyricsStore,
+        preferencesStore = preferencesStore,
+        messageEmitter = snackbarController,
+        onClearArtworkCaches = mediaServices.onClearArtworkCaches,
+    )
 
-    /**
-     * Persisted toggle for the read-only radial FFT spectrum visualizer (`true` by default),
-     * deduplicated with `distinctUntilChanged()` so unrelated preference writes never recompose UI.
-     */
-    val spectrumVisualizerEnabled: StateFlow<Boolean> = container.preferencesRepository.preferencesFlow
-        .map { it.spectrumVisualizerEnabled }
-        .distinctUntilChanged()
-        .stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.Eagerly,
-            initialValue = true,
-        )
+    val playlists = PlaylistUiCoordinator(
+        scope = viewModelScope,
+        playlistStore = playlistStore,
+        messageEmitter = snackbarController,
+    )
 
-    /** Persisted color palette mode (`Studio`, `Prism`, `Album`) for the spectrum visualizer. */
-    val spectrumColorStyle: StateFlow<SpectrumColorStyle> = container.preferencesRepository.preferencesFlow
-        .map { it.spectrumColorStyle }
-        .distinctUntilChanged()
-        .stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.Eagerly,
-            initialValue = SpectrumColorStyle.PRISM,
-        )
+    val libraryState: StateFlow<LibrarySnapshot> = library.libraryState
+    val searchQuery: StateFlow<String> = library.searchQuery
+    val filteredAllSongs: StateFlow<List<PlaybackTrack>> = library.filteredAllSongs
+    val playlistsState: StateFlow<PlaylistsUiSnapshot> = playlists.playlistsState
+    val favoriteTrackUris: StateFlow<Set<String>> = library.favoriteTrackUris
+    val playbackState: StateFlow<PlaybackControllerState> = playbackTransport.state
+    val playbackPositionMs: StateFlow<Long> = playbackTransport.playbackPositionMs
+    val sleepTimerState: StateFlow<SleepTimerState> = playbackTransport.sleepTimerState
+    val artistPhotoRevision: StateFlow<Int> = library.artistPhotoRevision
+    val diagnosticLogStats: StateFlow<DiagnosticLogStats> = settings.diagnosticLogStats
 
-    /** Persisted toggle for transient-driven Kinetic Sparks particles (`true` by default). */
-    val spectrumSparksEnabled: StateFlow<Boolean> = container.preferencesRepository.preferencesFlow
-        .map { it.spectrumSparksEnabled }
-        .distinctUntilChanged()
-        .stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.Eagerly,
-            initialValue = true,
-        )
-
-    /** Persisted startup homepage preference shown and updated in Settings. */
-    val defaultHomepage: StateFlow<DefaultHomepage> = container.preferencesRepository.preferencesFlow
-        .map { it.defaultHomepage }
-        .distinctUntilChanged()
-        .stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.Eagerly,
-            initialValue = DefaultHomepage.ALL_SONGS,
-        )
-
-    /** Persisted opt-in local diagnostic logging flag (`false` by default). */
-    val diagnosticLoggingEnabled: StateFlow<Boolean> = container.preferencesRepository.preferencesFlow
-        .map { it.diagnosticLoggingEnabled }
-        .distinctUntilChanged()
-        .stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.Eagerly,
-            initialValue = false,
-        )
-
-    /** Persisted opt-in Dynamic Cover Theme toggle (`false` by default -> Monochrome Studio). */
-    val dynamicCoverThemeEnabled: StateFlow<Boolean> = container.preferencesRepository.preferencesFlow
-        .map { it.dynamicCoverThemeEnabled }
-        .distinctUntilChanged()
-        .stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.Eagerly,
-            initialValue = false,
-        )
+    val nowPlayingArtworkStyle: StateFlow<NowPlayingArtworkStyle> = settings.nowPlayingArtworkStyle
+    val spectrumVisualizerEnabled: StateFlow<Boolean> = settings.spectrumVisualizerEnabled
+    val spectrumColorStyle: StateFlow<SpectrumColorStyle> = settings.spectrumColorStyle
+    val spectrumSparksEnabled: StateFlow<Boolean> = settings.spectrumSparksEnabled
+    val defaultHomepage: StateFlow<DefaultHomepage> = settings.defaultHomepage
+    val diagnosticLoggingEnabled: StateFlow<Boolean> = settings.diagnosticLoggingEnabled
+    val dynamicCoverThemeEnabled: StateFlow<Boolean> = settings.dynamicCoverThemeEnabled
+    val initialStartupHomepage: StateFlow<DefaultHomepage?> = settings.initialStartupHomepage
 
     private val playbackDynamicThemeTokensState = MutableStateFlow<DynamicThemeTokens?>(null)
     private val contextualDynamicThemeBySourceState = MutableStateFlow<Map<String, DynamicThemeTokens>>(emptyMap())
 
-    /**
-     * Effective root **Dynamic Theme** tokens applied globally (`Album / Artist / Playlist Detail`
-     * contextual theme takes precedence while active, falling back to the playing track's theme,
-     * or `null` for Monochrome Studio).
-     */
     val globalDynamicThemeTokens: StateFlow<DynamicThemeTokens?> = combine(
         dynamicCoverThemeEnabled,
         playbackDynamicThemeTokensState,
@@ -185,72 +141,48 @@ class MainViewModel(internal val container: AppContainer) : ViewModel() {
         initialValue = null,
     )
 
-    /**
-     * Latched strictly ONCE per ViewModel lifetime when DataStore emits its initial snapshot so
-     * cold startup opens the configured homepage cleanly without ever hijacking subsequent user
-     * tab switches or Settings changes.
-     */
-    private val _initialStartupHomepage = MutableStateFlow<DefaultHomepage?>(null)
-    val initialStartupHomepage: StateFlow<DefaultHomepage?> = _initialStartupHomepage.asStateFlow()
-
-    private val _lyricsUiState = MutableStateFlow(LyricsUiState())
-    val lyricsUiState: StateFlow<LyricsUiState> = _lyricsUiState.asStateFlow()
-
-    private val _trackInfoState = MutableStateFlow<TrackTechnicalInfo?>(null)
-    val trackInfoState: StateFlow<TrackTechnicalInfo?> = _trackInfoState.asStateFlow()
-    private var trackInfoJob: Job? = null
-
-    private val nextSnackbarId = AtomicLong(1L)
-    private val _uiSnackbarMessage = MutableStateFlow<UiSnackbarMessage?>(null)
-    val uiSnackbarMessage: StateFlow<UiSnackbarMessage?> = _uiSnackbarMessage.asStateFlow()
+    val lyricsUiState: StateFlow<LyricsUiState> = library.lyricsUiState
+    val trackInfoState: StateFlow<TrackTechnicalInfo?> = library.trackInfoState
+    val uiSnackbarMessage: StateFlow<UiSnackbarMessage?> = snackbarController.messages
 
     init {
-        viewModelScope.launch {
-            val loadedHomepage = container.preferencesRepository.getSnapshot().defaultHomepage
-            _initialStartupHomepage.compareAndSet(null, loadedHomepage)
-        }
+        library.triggerInitialSync()
+        observeSessionRestore()
+        observeActiveTrackLyrics()
+        observeDynamicTheme()
+        observeAdjacentArtworkPreload()
+    }
 
-        // Trigger incremental background sync while cached tracks from Room render immediately.
-        viewModelScope.launch {
-            container.libraryRepository.refreshLibrary(forceYearBackfill = false)
-        }
-
-        // Restore last playback session with its exact saved QueueContext (Album/Artist/Folder/Playlist/etc.)
-        // as soon as cached or synced tracks + playlists are available.
+    private fun observeSessionRestore() {
         viewModelScope.launch {
             combine(libraryState, playlistsState) { lib, pl -> lib to pl }
-                .collect { (library, playlists) ->
-                    if (library.allSongs.isNotEmpty()) {
-                        container.playbackController.restoreLastSessionIfNeeded(
-                            library = library,
-                            playlists = playlists,
+                .collect { (snapshot, resolvedPlaylists) ->
+                    if (snapshot.allSongs.isNotEmpty()) {
+                        playbackTransport.restoreLastSessionIfNeeded(
+                            library = snapshot,
+                            playlists = resolvedPlaylists,
                         )
                     }
                 }
         }
+    }
 
-        // Automatically resolve fingerprint-bound lyrics whenever the active track changes.
+    private fun observeActiveTrackLyrics() {
         viewModelScope.launch {
             playbackState
                 .distinctUntilChangedBy { it.activeTrack?.uriString }
                 .collect { state ->
-                    val track = state.activeTrack
-                    if (track == null) {
-                        _lyricsUiState.value = LyricsUiState()
-                    } else {
-                        loadLyricsForTrack(track)
+                    library.loadLyricsForActiveTrack(state.activeTrack) { targetUri ->
+                        playbackState.value.activeTrack?.uriString == targetUri
                     }
                 }
         }
+    }
 
-        // Global Dynamic Theme layer: resolve active track cover palette off-main when opted in.
+    private fun observeDynamicTheme() {
         val activeTrackForThemeFlow = playbackState
             .map { it.activeTrack }
-            .distinctUntilChanged { old, new ->
-                val oldKey = old?.let { container.coverThemeColorCache.cacheKeyFor(it) }
-                val newKey = new?.let { container.coverThemeColorCache.cacheKeyFor(it) }
-                oldKey == newKey
-            }
+            .distinctUntilChangedBy { track -> track?.let { mediaServices.coverThemeResolver.cacheKeyFor(it) } }
         viewModelScope.launch {
             combine(dynamicCoverThemeEnabled, activeTrackForThemeFlow) { enabled, track ->
                 enabled to track
@@ -258,82 +190,48 @@ class MainViewModel(internal val container: AppContainer) : ViewModel() {
                 playbackDynamicThemeTokensState.value = if (!enabled || track == null) {
                     null
                 } else {
-                    container.coverThemeColorCache.resolveTokens(track)
+                    mediaServices.coverThemeResolver.resolveTokens(track)
                 }
             }
         }
+    }
 
-        // Preload adjacent Next/Previous DISC artwork strictly once playback reaches PLAYING.
+    private fun observeAdjacentArtworkPreload() {
         viewModelScope.launch {
             playbackState
-                .map { state ->
-                    if (state.engineState.status == PlaybackStatus.PLAYING) {
-                        val items = state.queue.items
-                        val idx = state.queue.currentIndex
-                        val repeat = state.queue.repeatMode
-                        if (idx in items.indices && items.size > 1) {
-                            val nextIdx = when {
-                                idx + 1 < items.size -> idx + 1
-                                repeat == RepeatMode.ALL -> 0
-                                else -> -1
-                            }
-                            val prevIdx = when {
-                                idx - 1 >= 0 -> idx - 1
-                                repeat == RepeatMode.ALL -> items.lastIndex
-                                else -> -1
-                            }
-                            Pair(items.getOrNull(nextIdx), items.getOrNull(prevIdx))
-                        } else {
-                            null
-                        }
-                    } else {
-                        null
-                    }
-                }
-                .distinctUntilChanged { old, new ->
-                    old?.first?.uriString == new?.first?.uriString &&
-                        old?.second?.uriString == new?.second?.uriString
-                }
+                .map { state -> resolveAdjacentDiscCandidates(state) }
+                .distinctUntilChangedBy { pair -> pair?.first?.uriString to pair?.second?.uriString }
                 .collectLatest { pair ->
                     val (nextCandidate, prevCandidate) = pair ?: return@collectLatest
-                    withContext(Dispatchers.IO) {
+                    withContext(mediaServices.ioDispatcher) {
                         if (nextCandidate != null) {
-                            container.albumArtworkLoader.preloadDiscArtwork(nextCandidate)
+                            mediaServices.artworkPreloader.preloadDiscArtwork(nextCandidate)
                         }
                         if (prevCandidate != null && prevCandidate.uriString != nextCandidate?.uriString) {
-                            container.albumArtworkLoader.preloadDiscArtwork(prevCandidate)
+                            mediaServices.artworkPreloader.preloadDiscArtwork(prevCandidate)
                         }
                     }
                 }
         }
     }
 
-    fun refreshLibrary() {
-        container.albumArtworkLoader.clearNegativeCache()
-        container.coverThemeColorCache.clear()
-        viewModelScope.launch {
-            container.libraryRepository.refreshLibrary(forceYearBackfill = true)
+    private fun resolveAdjacentDiscCandidates(state: PlaybackControllerState): Pair<PlaybackTrack?, PlaybackTrack?>? {
+        if (state.engineState.status != PlaybackStatus.PLAYING) return null
+        val items = state.queue.items
+        val idx = state.queue.currentIndex
+        if (idx !in items.indices || items.size <= 1) return null
+        val repeat = state.queue.repeatMode
+        val nextIdx = when {
+            idx + 1 < items.size -> idx + 1
+            repeat == RepeatMode.ALL -> 0
+            else -> -1
         }
-    }
-
-    fun importSafFolder(treeUri: Uri) {
-        viewModelScope.launch {
-            val count = container.libraryRepository.importSafFolder(treeUri)
-            emitSnackbar(
-                if (count > 0) {
-                    "Imported folder ($count audio ${if (count == 1) "file" else "files"})"
-                } else {
-                    "Folder linked (no supported FLAC/WAV/MP3/M4A/OGG files found)"
-                },
-            )
+        val prevIdx = when {
+            idx - 1 >= 0 -> idx - 1
+            repeat == RepeatMode.ALL -> items.lastIndex
+            else -> -1
         }
-    }
-
-    fun removeSafFolder(treeUriString: String) {
-        viewModelScope.launch {
-            container.libraryRepository.removeSafFolder(treeUriString)
-            emitSnackbar("Removed linked SAF folder")
-        }
+        return Pair(items.getOrNull(nextIdx), items.getOrNull(prevIdx))
     }
 
     fun playTracks(
@@ -343,9 +241,9 @@ class MainViewModel(internal val container: AppContainer) : ViewModel() {
         shuffled: Boolean = false,
     ) {
         if (shuffled) {
-            container.playbackController.playQueueShuffled(tracks = tracks, context = context)
+            playbackTransport.playQueueShuffled(tracks = tracks, context = context)
         } else {
-            container.playbackController.playQueue(
+            playbackTransport.playQueue(
                 tracks = tracks,
                 startIndex = startIndex,
                 autoPlay = true,
@@ -354,585 +252,140 @@ class MainViewModel(internal val container: AppContainer) : ViewModel() {
         }
     }
 
-    fun updateCustomArtistPhoto(artistName: String, sourceUri: Uri?) {
-        viewModelScope.launch {
-            if (sourceUri == null) {
-                container.artistPhotoStore.clearArtistPhoto(artistName)
-                emitSnackbar("Reset artist photo for \"$artistName\"")
-            } else {
-                val result = container.artistPhotoStore.saveArtistPhoto(artistName, sourceUri)
-                emitSnackbar(
-                    if (result.isSuccess) {
-                        "Updated artist photo for \"$artistName\""
-                    } else {
-                        result.exceptionOrNull()?.message ?: "Could not save artist photo"
-                    },
-                )
-            }
-        }
-    }
-
     fun playTrackAtQueueIndex(index: Int) {
-        container.playbackController.playTrackAt(index)
+        playbackTransport.playTrackAt(index)
     }
 
     fun enqueueTrack(track: PlaybackTrack) {
-        container.playbackController.enqueue(track)
-        emitSnackbar("Added \"${track.title}\" to queue")
+        playbackTransport.enqueue(track)
+        snackbarController.emitSnackbar("Added \"${track.title}\" to queue")
     }
 
     fun enqueueTrackNext(track: PlaybackTrack) {
-        container.playbackController.enqueueNext(track)
-        emitSnackbar("Queued \"${track.title}\" to play next")
+        playbackTransport.enqueueNext(track)
+        snackbarController.emitSnackbar("Queued \"${track.title}\" to play next")
     }
 
     fun enqueueTracks(tracks: List<PlaybackTrack>, context: QueueContext) {
         if (tracks.isEmpty()) return
-        container.playbackController.enqueueAll(tracks, fallbackContext = context)
-        emitSnackbar("Added ${tracks.size} ${if (tracks.size == 1) "track" else "tracks"} from \"${context.sourceLabel}\" to queue")
+        playbackTransport.enqueueAll(tracks, fallbackContext = context)
+        val trackWord = if (tracks.size == 1) "track" else "tracks"
+        snackbarController.emitSnackbar("Added ${tracks.size} $trackWord from \"${context.sourceLabel}\" to queue")
     }
 
     fun enqueueTracksNext(tracks: List<PlaybackTrack>, context: QueueContext) {
         if (tracks.isEmpty()) return
-        container.playbackController.enqueueAllNext(tracks, fallbackContext = context)
-        emitSnackbar(
-            "Queued ${tracks.size} ${if (tracks.size == 1) "track" else "tracks"} from \"${context.sourceLabel}\" to play next",
-        )
-    }
-
-    fun setTrackSort(scope: TrackSortScope, spec: TrackSortSpec) {
-        viewModelScope.launch {
-            container.preferencesRepository.setTrackSort(scope, spec)
-        }
-    }
-
-    fun setGroupSort(scope: GroupSortScope, spec: GroupSortSpec) {
-        viewModelScope.launch {
-            container.preferencesRepository.setGroupSort(scope, spec)
-        }
+        playbackTransport.enqueueAllNext(tracks, fallbackContext = context)
+        val trackWord = if (tracks.size == 1) "track" else "tracks"
+        snackbarController.emitSnackbar("Queued ${tracks.size} $trackWord from \"${context.sourceLabel}\" to play next")
     }
 
     fun removeQueueItem(index: Int) {
-        container.playbackController.removeQueueItem(index)
+        playbackTransport.removeQueueItem(index)
     }
 
     fun moveQueueItem(fromIndex: Int, toIndex: Int) {
-        container.playbackController.moveQueueItem(fromIndex, toIndex)
+        playbackTransport.moveQueueItem(fromIndex, toIndex)
     }
 
-    fun togglePlayPause() = container.playbackController.togglePlayPause()
-    fun next() = container.playbackController.next(userInitiated = true)
-    fun previous() = container.playbackController.previous()
-    fun seekTo(positionMs: Long) = container.playbackController.seekTo(positionMs)
-    fun beginTurntableScratch(): Boolean = container.playbackController.beginTurntableScratch()
-    fun updateTurntableScratchRate(playbackRate: Float) = container.playbackController.updateTurntableScratchRate(playbackRate)
-    fun endTurntableScratch(fallbackTargetMs: Long? = null) = container.playbackController.endTurntableScratch(fallbackTargetMs)
-    fun toggleShuffle() = container.playbackController.toggleShuffle()
-    fun cycleRepeatMode() = container.playbackController.cycleRepeatMode()
-    fun setGaplessEnabled(enabled: Boolean) = container.playbackController.setGaplessEnabled(enabled)
-    fun setReplayGainMode(mode: ReplayGainMode) = container.playbackController.setReplayGainMode(mode)
-    fun setReplayGainPreampDb(preampDb: Float) = container.playbackController.setReplayGainPreampDb(preampDb)
-    fun setReplayGainPreventClipping(preventClipping: Boolean) = container.playbackController.setReplayGainPreventClipping(preventClipping)
+    fun togglePlayPause() = playbackTransport.togglePlayPause()
 
-    fun setNowPlayingArtworkStyle(style: NowPlayingArtworkStyle) {
-        viewModelScope.launch {
-            container.preferencesRepository.setNowPlayingArtworkStyle(style)
-        }
-    }
+    fun next() = playbackTransport.next(userInitiated = true)
 
-    fun setSpectrumVisualizerEnabled(enabled: Boolean) {
-        if (!enabled) {
-            container.playbackController.setSpectrumTapActive(false)
-        }
-        viewModelScope.launch {
-            container.preferencesRepository.setSpectrumVisualizerEnabled(enabled)
-        }
-    }
+    fun previous() = playbackTransport.previous()
 
-    fun setSpectrumColorStyle(style: SpectrumColorStyle) {
-        viewModelScope.launch {
-            container.preferencesRepository.setSpectrumColorStyle(style)
-        }
-    }
+    fun seekTo(positionMs: Long) = playbackTransport.seekTo(positionMs)
 
-    fun setSpectrumSparksEnabled(enabled: Boolean) {
-        viewModelScope.launch {
-            container.preferencesRepository.setSpectrumSparksEnabled(enabled)
-        }
-    }
+    fun dismissActiveSession() = playbackTransport.dismissActiveSession()
 
-    fun setDefaultHomepage(homepage: DefaultHomepage) {
-        viewModelScope.launch {
-            container.preferencesRepository.setDefaultHomepage(homepage)
-        }
-    }
+    fun beginTurntableScratch(): Boolean = playbackAudio.beginTurntableScratch()
 
-    fun setDynamicCoverThemeEnabled(enabled: Boolean) {
-        viewModelScope.launch {
-            container.preferencesRepository.setDynamicCoverThemeEnabled(enabled)
-        }
-    }
+    fun updateTurntableScratchRate(playbackRate: Float) = playbackAudio.updateTurntableScratchRate(playbackRate)
+
+    fun endTurntableScratch(fallbackTargetMs: Long? = null) = playbackAudio.endTurntableScratch(fallbackTargetMs)
+
+    fun toggleShuffle() = playbackTransport.toggleShuffle()
+
+    fun cycleRepeatMode() = playbackTransport.cycleRepeatMode()
+
+    fun setGaplessEnabled(enabled: Boolean) = playbackAudio.setGaplessEnabled(enabled)
+
+    fun setReplayGainMode(mode: ReplayGainMode) = playbackAudio.setReplayGainMode(mode)
+
+    fun setReplayGainPreampDb(preampDb: Float) = playbackAudio.setReplayGainPreampDb(preampDb)
+
+    fun setReplayGainPreventClipping(preventClipping: Boolean) = playbackAudio.setReplayGainPreventClipping(preventClipping)
 
     fun setContextualDynamicTheme(sourceKey: String, tokens: DynamicThemeTokens?) {
         contextualDynamicThemeBySourceState.update { current ->
-            if (tokens == null) {
-                current - sourceKey
-            } else {
-                current + (sourceKey to tokens)
-            }
-        }
-    }
-
-    fun setDiagnosticLoggingEnabled(enabled: Boolean) {
-        container.diagnosticLogger.setEnabled(enabled)
-        viewModelScope.launch {
-            container.preferencesRepository.setDiagnosticLoggingEnabled(enabled)
-            if (enabled) {
-                val prefs = container.preferencesRepository.getSnapshot()
-                container.diagnosticLogger.writeDeviceSummary(container.buildDeviceSummaryFields(prefs))
-            }
-            emitSnackbar(
-                if (enabled) {
-                    "Local diagnostic logging enabled (stored privately on-device)"
-                } else {
-                    "Local diagnostic logging paused"
-                },
-            )
-        }
-    }
-
-    fun refreshDiagnosticLogStats() {
-        viewModelScope.launch(Dispatchers.IO) {
-            container.diagnosticLogger.refreshStorageStatsSync()
-        }
-    }
-
-    fun exportDiagnosticLogs(destinationUri: Uri) {
-        viewModelScope.launch {
-            val summaryFields = if (container.diagnosticLogger.isEnabled) {
-                container.buildDeviceSummaryFields(container.preferencesRepository.getSnapshot())
-            } else {
-                null
-            }
-            container.diagnosticLogExporter.exportToUri(destinationUri, summaryFields)
-                .onSuccess { res ->
-                    val label = if (res.fileCount == 1) "file" else "files"
-                    emitSnackbar("Exported ${res.fileCount} diagnostic log $label (.zip)")
-                }
-                .onFailure { err ->
-                    emitSnackbar(err.message ?: "Unable to export diagnostic logs")
-                }
-        }
-    }
-
-    fun shareDiagnosticLogs(onShareReady: (Intent) -> Unit) {
-        viewModelScope.launch {
-            val summaryFields = if (container.diagnosticLogger.isEnabled) {
-                container.buildDeviceSummaryFields(container.preferencesRepository.getSnapshot())
-            } else {
-                null
-            }
-            container.diagnosticLogExporter.prepareShareIntent(summaryFields)
-                .onSuccess { res ->
-                    onShareReady(res.shareIntent)
-                }
-                .onFailure { err ->
-                    emitSnackbar(err.message ?: "Unable to prepare diagnostic logs for sharing")
-                }
-        }
-    }
-
-    fun clearDiagnosticLogs() {
-        viewModelScope.launch {
-            withContext(Dispatchers.IO) {
-                container.diagnosticLogger.clearAllLogs()
-            }
-            emitSnackbar("Cleared local diagnostic logs")
+            if (tokens == null) current - sourceKey else current + (sourceKey to tokens)
         }
     }
 
     fun setSpectrumVisualizerActive(active: Boolean) {
-        container.playbackController.setSpectrumTapActive(active)
+        playbackAudio.setSpectrumTapActive(active)
     }
 
-    fun sampleCurrentSpectrumWindow(outMonoSamples: FloatArray): Int =
-        container.playbackController.sampleCurrentSpectrumWindow(outMonoSamples)
-
-    fun setSleepTimerPreset(preset: SleepTimerPreset) {
-        container.playbackController.setSleepTimerPreset(preset)
-        emitSnackbar(
-            when (preset) {
-                SleepTimerPreset.OFF -> "Sleep timer off"
-                SleepTimerPreset.END_OF_TRACK -> "Sleep timer: pause after current track"
-                else -> "Sleep timer set for ${preset.label}"
-            },
-        )
-    }
-
-    fun exportLocalBackup(destinationUri: Uri) {
-        viewModelScope.launch {
-            container.backupRepository.exportBackupToUri(destinationUri)
-                .onSuccess { summary ->
-                    emitSnackbar(
-                        "Backup saved (" +
-                            "${summary.playlistsCount} playlists, " +
-                            "${summary.lyricsCount} lyrics, " +
-                            "${summary.favoritesCount} favorites, " +
-                            "${summary.statsCount} stats)",
-                    )
-                }
-                .onFailure { err ->
-                    emitSnackbar(err.message ?: "Unable to export local backup")
-                }
-        }
-    }
-
-    fun importLocalBackup(sourceUri: Uri) {
-        viewModelScope.launch {
-            container.backupRepository.importBackupFromUri(sourceUri)
-                .onSuccess { summary ->
-                    emitSnackbar(
-                        "Backup restored (" +
-                            "${summary.playlistsMerged} playlists, " +
-                            "${summary.lyricsUpserted} lyrics, " +
-                            "${summary.favoritesMerged} favorites, " +
-                            "${summary.statsMerged} stats)",
-                    )
-                }
-                .onFailure { err ->
-                    emitSnackbar(err.message ?: "Invalid or unreadable backup file")
-                }
-        }
-    }
-
-    fun openTrackInfo(track: PlaybackTrack) {
-        trackInfoJob?.cancel()
-        _trackInfoState.value = TrackTechnicalInfo(
-            track = track,
-            isLoadingDetails = true,
-        )
-        trackInfoJob = viewModelScope.launch {
-            val loaded = container.trackInfoLoader.loadFullDetails(track)
-            if (_trackInfoState.value?.track?.uriString == track.uriString) {
-                _trackInfoState.value = loaded
-            }
-        }
-    }
-
-    fun dismissTrackInfo() {
-        trackInfoJob?.cancel()
-        trackInfoJob = null
-        _trackInfoState.value = null
-    }
+    fun sampleCurrentSpectrumWindow(outMonoSamples: FloatArray): Int = playbackAudio.sampleCurrentSpectrumWindow(outMonoSamples)
 
     fun showUiMessage(message: String) {
-        emitSnackbar(message)
+        snackbarController.emitSnackbar(message)
     }
 
-    fun requestBitPerfectMode() {
-        container.playbackController.requestBitPerfectMode()
-    }
-
-    fun confirmBitPerfectWarning() {
-        container.playbackController.confirmBitPerfectWarning()
-        if (container.diagnosticLogger.isEnabled) {
-            viewModelScope.launch {
-                val prefs = container.preferencesRepository.getSnapshot()
-                container.diagnosticLogger.writeDeviceSummary(container.buildDeviceSummaryFields(prefs))
-            }
-        }
-    }
-
-    fun dismissSafetyWarning() {
-        container.playbackController.dismissSafetyWarning()
-    }
-
-    fun switchToSafeMode() {
-        container.playbackController.switchToSafeMode()
-        if (container.diagnosticLogger.isEnabled) {
-            viewModelScope.launch {
-                val prefs = container.preferencesRepository.getSnapshot()
-                container.diagnosticLogger.writeDeviceSummary(container.buildDeviceSummaryFields(prefs))
-            }
-        }
-        emitSnackbar("Switched to Safe Mode (System Volume Active)")
-    }
-
-    fun clearAutoPauseNotice() {
-        container.playbackController.clearAutoPauseNotice()
-    }
-
-    fun toggleFavorite(track: PlaybackTrack, showRemovalUndoSnackbar: Boolean = false) {
-        viewModelScope.launch {
-            val result = container.libraryRepository.toggleFavorite(track)
-            result.onSuccess { isNowFavorite ->
-                if (showRemovalUndoSnackbar && !isNowFavorite) {
-                    emitSnackbar(
-                        message = "Removed \"${track.title}\" from Favorites",
-                        actionLabel = "Undo",
-                        onAction = { restoreFavorite(track) },
-                    )
-                }
-            }.onFailure {
-                emitSnackbar("Unable to update favorite status")
-            }
-        }
-    }
-
-    private fun restoreFavorite(track: PlaybackTrack) {
-        viewModelScope.launch {
-            val snap = libraryState.value
-            val alreadyFav = FavoriteStateReducer.isFavorited(
-                track = track,
-                favoriteUris = snap.favoriteUris,
-                favoriteFingerprints = snap.favoriteFingerprints,
-            )
-            if (!alreadyFav) {
-                container.libraryRepository.toggleFavorite(track)
-            }
-        }
-    }
-
-    fun createPlaylist(name: String) {
-        viewModelScope.launch {
-            val clean = name.trim()
-            container.playlistRepository.createPlaylist(clean)
-                .onSuccess {
-                    emitSnackbar("Created playlist \"$clean\"")
-                }
-                .onFailure { err ->
-                    emitSnackbar(err.message ?: "Unable to create playlist")
-                }
-        }
-    }
-
-    fun renamePlaylist(playlistId: Long, newName: String) {
-        viewModelScope.launch {
-            val clean = newName.trim()
-            container.playlistRepository.renamePlaylist(playlistId, clean)
-                .onSuccess {
-                    emitSnackbar("Renamed playlist to \"$clean\"")
-                }
-                .onFailure { err ->
-                    emitSnackbar(err.message ?: "Unable to rename playlist")
-                }
-        }
-    }
-
-    fun deletePlaylist(playlistId: Long, playlistName: String) {
-        viewModelScope.launch {
-            container.playlistRepository.deletePlaylist(playlistId)
-                .onSuccess {
-                    emitSnackbar("Deleted playlist \"$playlistName\"")
-                }
-                .onFailure { err ->
-                    emitSnackbar(err.message ?: "Unable to delete playlist")
-                }
-        }
-    }
-
-    fun commitPlaylistOrder(playlistId: Long, orderedEntryIds: List<Long>) {
-        viewModelScope.launch {
-            container.playlistRepository.commitPlaylistOrder(playlistId, orderedEntryIds)
-                .onFailure { err ->
-                    emitSnackbar(err.message ?: "Unable to reorder playlist")
-                }
-        }
-    }
-
-    fun exportPlaylistToM3u8(playlist: ResolvedPlaylist, destinationUri: Uri) {
-        viewModelScope.launch {
-            container.playlistRepository.exportPlaylistToM3u8(playlist, destinationUri)
-                .onSuccess { exportedCount ->
-                    emitSnackbar("Exported \"${playlist.name}\" ($exportedCount ${if (exportedCount == 1) "track" else "tracks"})")
-                }
-                .onFailure { err ->
-                    emitSnackbar(err.message ?: "Unable to export .m3u8 playlist")
-                }
-        }
+    fun clearUiMessage(expectedId: Long? = null) {
+        snackbarController.clear(expectedId)
     }
 
     fun importPlaylistFromM3u8(sourceUri: Uri) {
-        viewModelScope.launch {
-            val allTracks = libraryState.value.allSongs
-            container.playlistRepository.importPlaylistFromM3u8(sourceUri, allTracks)
-                .onSuccess { summary ->
-                    emitSnackbar(
-                        if (summary.unmatchedCount > 0) {
-                            "Imported \"${summary.playlistName}\": ${summary.matchedCount} matched, ${summary.unmatchedCount} missing"
-                        } else {
-                            "Imported \"${summary.playlistName}\" (${summary.matchedCount} ${if (summary.matchedCount == 1) "track" else "tracks"})"
-                        },
-                    )
-                }
-                .onFailure { err ->
-                    emitSnackbar(err.message ?: "Unable to import .m3u8 playlist")
-                }
-        }
+        playlists.importPlaylistFromM3u8(sourceUri, libraryState.value.allSongs)
     }
 
     fun importLrcForActiveTrack(lrcUri: Uri) {
         val track = playbackState.value.activeTrack ?: return
-        viewModelScope.launch {
-            _lyricsUiState.update { it.copy(isLoading = true, errorMessage = null) }
-            val result = container.lyricsRepository.importLrcFromSaf(track, lrcUri)
-            result.onSuccess { state ->
-                _lyricsUiState.value = LyricsUiState(
-                    trackUri = track.uriString,
-                    isLoading = false,
-                    lyricsState = state,
-                )
-                emitSnackbar(state.statusMessage ?: "Imported .lrc lyrics")
-            }.onFailure { err ->
-                _lyricsUiState.update {
-                    it.copy(isLoading = false, errorMessage = err.message ?: "Failed to import .lrc")
-                }
-                emitSnackbar(err.message ?: "Failed to import .lrc file")
-            }
-        }
+        library.importLrcForTrack(track, lrcUri)
     }
 
     fun saveManualLyricsForActiveTrack(rawText: String) {
         val track = playbackState.value.activeTrack ?: return
-        viewModelScope.launch {
-            _lyricsUiState.update { it.copy(isLoading = true, errorMessage = null) }
-            val result = container.lyricsRepository.saveManualLyrics(track, rawText)
-            result.onSuccess { state ->
-                _lyricsUiState.value = LyricsUiState(
-                    trackUri = track.uriString,
-                    isLoading = false,
-                    lyricsState = state,
-                )
-                emitSnackbar(state.statusMessage ?: "Lyrics saved locally")
-            }.onFailure { err ->
-                _lyricsUiState.update {
-                    it.copy(isLoading = false, errorMessage = err.message ?: "Failed to save lyrics")
-                }
-                emitSnackbar(err.message ?: "Failed to save lyrics")
-            }
-        }
+        library.saveManualLyricsForTrack(track, rawText)
     }
 
     fun deleteLyricsForActiveTrack() {
         val track = playbackState.value.activeTrack ?: return
-        viewModelScope.launch {
-            _lyricsUiState.update { it.copy(isLoading = true, errorMessage = null) }
-            val result = container.lyricsRepository.deleteLyrics(track)
-            result.onSuccess { state ->
-                _lyricsUiState.value = LyricsUiState(
-                    trackUri = track.uriString,
-                    isLoading = false,
-                    lyricsState = state,
-                )
-                emitSnackbar("Lyrics deleted")
-            }.onFailure { err ->
-                _lyricsUiState.update {
-                    it.copy(isLoading = false, errorMessage = err.message ?: "Failed to delete lyrics")
-                }
+        library.deleteLyricsForTrack(track)
+    }
+
+    class Factory(
+        private val playbackTransport: PlaybackTransportControl,
+        private val playbackAudio: PlaybackAudioControl,
+        private val libraryRepository: LibraryRepository,
+        private val playlistStore: PlaylistStore,
+        private val artistPhotoStorage: ArtistPhotoStorage,
+        private val trackDetailsLoader: TrackDetailsLoader,
+        private val lyricsStore: LyricsStore,
+        private val preferencesStore: UserPreferencesStore,
+        private val backupStore: LocalBackupStore,
+        private val diagnosticServices: DiagnosticServices,
+        private val mediaServices: MainViewModelMediaServices,
+    ) : ViewModelProvider.Factory {
+        override fun <T : ViewModel> create(modelClass: Class<T>): T {
+            require(modelClass.isAssignableFrom(MainViewModel::class.java)) {
+                "Unknown ViewModel class: ${modelClass.name}"
             }
+            val instance = MainViewModel(
+                playbackTransport = playbackTransport,
+                playbackAudio = playbackAudio,
+                libraryRepository = libraryRepository,
+                playlistStore = playlistStore,
+                artistPhotoStorage = artistPhotoStorage,
+                trackDetailsLoader = trackDetailsLoader,
+                lyricsStore = lyricsStore,
+                preferencesStore = preferencesStore,
+                backupStore = backupStore,
+                diagnosticServices = diagnosticServices,
+                mediaServices = mediaServices,
+            )
+            return modelClass.cast(instance)!!
         }
-    }
-
-    internal fun emitSnackbar(message: String, actionLabel: String? = null, onAction: (() -> Unit)? = null) {
-        _uiSnackbarMessage.value = UiSnackbarMessage(
-            id = nextSnackbarId.getAndIncrement(),
-            message = message,
-            actionLabel = actionLabel,
-            onAction = onAction,
-        )
-    }
-
-    fun clearUiMessage(expectedId: Long? = null) {
-        if (expectedId == null || _uiSnackbarMessage.value?.id == expectedId) {
-            _uiSnackbarMessage.value = null
-        }
-    }
-
-    private fun loadLyricsForTrack(track: PlaybackTrack) {
-        viewModelScope.launch {
-            _lyricsUiState.value = LyricsUiState(trackUri = track.uriString, isLoading = true)
-            val state = container.lyricsRepository.loadLyricsForTrack(track)
-            if (playbackState.value.activeTrack?.uriString == track.uriString) {
-                _lyricsUiState.value = LyricsUiState(
-                    trackUri = track.uriString,
-                    isLoading = false,
-                    lyricsState = state,
-                )
-            }
-        }
-    }
-
-    companion object {
-        fun factory(container: AppContainer): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
-            @Suppress("UNCHECKED_CAST")
-            override fun <T : ViewModel> create(modelClass: Class<T>): T = MainViewModel(container) as T
-        }
-    }
-}
-
-fun MainViewModel.dismissActiveSession() = container.playbackController.dismissActiveSession()
-
-fun MainViewModel.createPlaylistAndAddTrack(name: String, track: PlaybackTrack) {
-    viewModelScope.launch {
-        val clean = name.trim()
-        container.playlistRepository.createPlaylist(clean)
-            .onSuccess { newId ->
-                container.playlistRepository.addTracksToPlaylist(newId, listOf(track))
-                    .onSuccess {
-                        emitSnackbar("Added \"${track.title}\" to \"$clean\"")
-                    }
-                    .onFailure { err ->
-                        emitSnackbar(err.message ?: "Created \"$clean\" but failed to add track")
-                    }
-            }
-            .onFailure { err ->
-                emitSnackbar(err.message ?: "Unable to create playlist")
-            }
-    }
-}
-
-fun MainViewModel.addTrackToPlaylist(playlistId: Long, playlistName: String, track: PlaybackTrack) {
-    viewModelScope.launch {
-        container.playlistRepository.addTrackToPlaylistUnique(playlistId, track)
-            .onSuccess { outcome ->
-                when (outcome) {
-                    AddTrackToPlaylistOutcome.ADDED ->
-                        emitSnackbar("Added \"${track.title}\" to \"$playlistName\"")
-                    AddTrackToPlaylistOutcome.ALREADY_EXISTS ->
-                        emitSnackbar("\"${track.title}\" is already in \"$playlistName\"")
-                }
-            }
-            .onFailure { err ->
-                emitSnackbar(err.message ?: "Unable to add track to playlist")
-            }
-    }
-}
-
-fun MainViewModel.removePlaylistEntry(playlistId: Long, entryId: Long, playlistName: String = "", trackTitle: String = "") {
-    viewModelScope.launch {
-        val resolvedPlaylistName = playlistName.ifBlank {
-            playlistsState.value.playlists.firstOrNull { it.id == playlistId }?.name ?: "playlist"
-        }
-        container.playlistRepository.removeEntryFromPlaylist(playlistId, entryId)
-            .onSuccess { removedEntity ->
-                val displayTitle = trackTitle.ifBlank { removedEntity?.fileName ?: "track" }
-                emitSnackbar(
-                    message = "Removed \"$displayTitle\" from \"$resolvedPlaylistName\"",
-                    actionLabel = if (removedEntity != null) "Undo" else null,
-                    onAction = removedEntity?.let { entity -> { restoreRemovedPlaylistEntry(entity) } },
-                )
-            }
-            .onFailure { err ->
-                emitSnackbar(err.message ?: "Unable to remove track from playlist")
-            }
-    }
-}
-
-private fun MainViewModel.restoreRemovedPlaylistEntry(entity: PlaylistTrackEntity) {
-    viewModelScope.launch {
-        container.playlistRepository.restoreRemovedEntry(entity)
-            .onFailure { err ->
-                emitSnackbar(err.message ?: "Unable to restore track to playlist")
-            }
     }
 }
