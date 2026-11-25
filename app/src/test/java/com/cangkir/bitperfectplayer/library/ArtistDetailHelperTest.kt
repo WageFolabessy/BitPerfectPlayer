@@ -142,6 +142,30 @@ class ArtistDetailHelperTest {
         assertEquals("Album 0", candidates.first().album)
     }
 
+    @Test
+    fun defaultProjectorAndArtistDetailTracksMatchOldestFirstCarouselAndPlayAllOrder() {
+        val newerSecondAlbum = sampleTrack("u_2013_1", album = "Zebra Debut?", year = 2013, trackNumber = 1)
+        val newerSecondAlbumT2 = sampleTrack("u_2013_2", album = "Zebra Debut?", year = 2013, trackNumber = 2)
+        val oldestFirstAlbumT2 = sampleTrack("u_2001_2", album = "Middle Alpha", year = 2001, trackNumber = 2)
+        val oldestFirstAlbumT1 = sampleTrack("u_2001_1", album = "Middle Alpha", year = 2001, trackNumber = 1)
+        val undatedAlbum = sampleTrack("u_0000_1", album = "Aardvark Unreleased", year = 0, trackNumber = 1)
+
+        val snapshot = LibraryProjector.buildSnapshot(
+            allTracks = listOf(newerSecondAlbumT2, undatedAlbum, oldestFirstAlbumT2, newerSecondAlbum, oldestFirstAlbumT1),
+            historyRecords = emptyList(),
+            favoriteRecords = emptyList(),
+        )
+        val artistGroup = snapshot.artists.single()
+        val detail = ArtistDetailHelper.buildArtistDetail(artistGroup.name, artistGroup.tracks)
+
+        assertEquals(listOf("Middle Alpha", "Zebra Debut?", "Aardvark Unreleased"), detail.albums.map { it.albumName })
+        assertEquals(detail.albums.flatMap { it.tracks }.map { it.uriString }, detail.allTracks.map { it.uriString })
+        assertEquals(
+            listOf("u_2001_1", "u_2001_2", "u_2013_1", "u_2013_2", "u_0000_1"),
+            detail.allTracks.map { it.uriString },
+        )
+    }
+
     private fun sampleTrack(
         uri: String,
         album: String,

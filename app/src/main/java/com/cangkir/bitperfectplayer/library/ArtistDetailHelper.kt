@@ -82,7 +82,7 @@ object ArtistDetailHelper {
         albumTrackSortSpec: TrackSortSpec = TrackSortSpec(TrackSortOption.TRACK_NUMBER, SortDirection.ASC),
         playCountsByKey: Map<String, Int> = emptyMap(),
     ): List<ArtistAlbumItem> = artistTracks
-        .groupBy { it.album.ifBlank { "Unknown Album" } }
+        .groupBy { it.album.trim().ifBlank { "Unknown Album" } }
         .entries
         .map { (albumName, tracks) ->
             val ordered = LibrarySortPolicy.sortTracks(

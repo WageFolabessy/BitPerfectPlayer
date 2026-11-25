@@ -20,6 +20,7 @@ class LibrarySortPolicyTest {
         bitDepth: Int? = 16,
         dateMod: Long = 1000L,
         fp: String? = null,
+        year: Int = 0,
     ): PlaybackTrack = PlaybackTrack(
         uriString = "content://media/$id",
         title = title,
@@ -34,6 +35,7 @@ class LibrarySortPolicyTest {
         contentFingerprint = fp,
         discNumber = disc,
         trackNumber = trackNum,
+        year = year,
     )
 
     @Test
@@ -64,20 +66,122 @@ class LibrarySortPolicyTest {
     }
 
     @Test
-    fun artistDetailDefault_groupsByAlbumThenDiscAndTrackNumber() {
-        val a2t2 = track(1, "Basket Case", album = "Dookie", disc = 1, trackNum = 7)
-        val a2t1 = track(2, "Burnout", album = "Dookie", disc = 1, trackNum = 1)
-        val a1t2 = track(3, "Jesus of Suburbia", album = "American Idiot", disc = 1, trackNum = 2)
-        val a1t1 = track(4, "American Idiot", album = "American Idiot", disc = 1, trackNum = 1)
+    fun artistDetailDefault_defaultsToReleaseYearAscMatchingAlbumsCarouselWithIntraAlbumTrackOrder() {
+        assertEquals(
+            TrackSortSpec(TrackSortOption.RELEASE_YEAR, SortDirection.ASC),
+            TrackSortScope.ARTIST_DETAIL.defaultSpec,
+        )
+        assertEquals(
+            listOf(TrackSortOption.RELEASE_YEAR, TrackSortOption.ALBUM),
+            TrackSortScope.ARTIST_DETAIL.availableOptions.take(2),
+        )
+        assertEquals("Release Year", TrackSortOption.RELEASE_YEAR.fullLabel)
+        assertEquals("Year ↑", TrackSortScope.ARTIST_DETAIL.defaultSpec.compactLabel)
 
-        val sorted = LibrarySortPolicy.sortTracks(
-            tracks = listOf(a2t2, a1t2, a2t1, a1t1),
+        val shuffledTracks = listOf(
+            track(1, "LP2013 T2", album = "LP 2013", disc = 1, trackNum = 2, year = 2013),
+            track(2, "LP2013 T1", album = "LP 2013", disc = 1, trackNum = 1, year = 2013),
+            track(3, "Undated T2", album = "Bonus EP", disc = 1, trackNum = 2, year = 0),
+            track(4, "Undated T1", album = "Bonus EP", disc = 1, trackNum = 1, year = 0),
+            track(5, "Beta 2005 T1", album = "Beta 2005", disc = 1, trackNum = 1, year = 2005),
+            track(6, "LP2001 D2T1", album = "Debut LP", disc = 2, trackNum = 1, year = 2001),
+            track(7, "LP2001 D1T10", album = "Debut LP", disc = 1, trackNum = 10, year = 0),
+            track(8, "LP2001 D1T2", album = "Debut LP", disc = 1, trackNum = 2, year = 2001),
+            track(9, "LP2001 D1T1", album = "Debut LP", disc = 1, trackNum = 1, year = 2001),
+            track(10, "Alpha 2005 T1", album = "Alpha 2005", disc = 1, trackNum = 1, year = 2005),
+        )
+
+        val carouselTracks = ArtistDetailHelper.buildSortedArtistAlbums(shuffledTracks).flatMap { it.tracks }
+        val sortedAsc = LibrarySortPolicy.sortTracks(
+            tracks = shuffledTracks,
             spec = TrackSortScope.ARTIST_DETAIL.defaultSpec,
         )
 
+        assertEquals(carouselTracks.map { it.uriString }, sortedAsc.map { it.uriString })
         assertEquals(
-            listOf("American Idiot", "Jesus of Suburbia", "Burnout", "Basket Case"),
-            sorted.map { it.title },
+            listOf(
+                "LP2001 D1T1",
+                "LP2001 D1T2",
+                "LP2001 D1T10",
+                "LP2001 D2T1",
+                "Alpha 2005 T1",
+                "Beta 2005 T1",
+                "LP2013 T1",
+                "LP2013 T2",
+                "Undated T1",
+                "Undated T2",
+            ),
+            sortedAsc.map { it.title },
+        )
+    }
+
+    @Test
+    fun releaseYearDescending_ordersNewestAlbumFirstWhileKeepingIntraAlbumAscendingAndUndatedLast() {
+        val tracks = listOf(
+            track(1, "LP2001 T1", album = "Debut 2001", disc = 1, trackNum = 1, year = 2001),
+            track(2, "LP2001 T10", album = "Debut 2001", disc = 1, trackNum = 10, year = 2001),
+            track(3, "LP2001 T2", album = "Debut 2001", disc = 1, trackNum = 2, year = 0),
+            track(4, "LP2013 T2", album = "Late 2013", disc = 1, trackNum = 2, year = 2013),
+            track(5, "LP2013 T1", album = "Late 2013", disc = 1, trackNum = 1, year = 2013),
+            track(6, "Mid B T1", album = "Zeta 2007", disc = 1, trackNum = 1, year = 2007),
+            track(7, "Mid A T1", album = "Alpha 2007", disc = 1, trackNum = 1, year = 2007),
+            track(8, "Undated T2", album = "Session Notes", disc = 1, trackNum = 2, year = 0),
+            track(9, "Undated T1", album = "Session Notes", disc = 1, trackNum = 1, year = 0),
+        )
+
+        val sortedDesc = LibrarySortPolicy.sortTracks(
+            tracks = tracks,
+            spec = TrackSortSpec(TrackSortOption.RELEASE_YEAR, SortDirection.DESC),
+        )
+
+        assertEquals(
+            listOf(
+                "LP2013 T1",
+                "LP2013 T2",
+                "Mid A T1",
+                "Mid B T1",
+                "LP2001 T1",
+                "LP2001 T2",
+                "LP2001 T10",
+                "Undated T1",
+                "Undated T2",
+            ),
+            sortedDesc.map { it.title },
+        )
+    }
+
+    @Test
+    fun albumSortRemainsAlphabetical_andArtistDetailPreservesExplicitUserSelection() {
+        val d2024 = track(1, "Saviors Opening", album = "Saviors", disc = 1, trackNum = 1, year = 2024)
+        val a2004t2 = track(2, "Jesus of Suburbia", album = "American Idiot", disc = 1, trackNum = 2, year = 2004)
+        val a2004t1 = track(3, "American Idiot", album = "American Idiot", disc = 1, trackNum = 1, year = 2004)
+        val d1994t2 = track(4, "Basket Case", album = "Dookie", disc = 1, trackNum = 7, year = 1994)
+        val d1994t1 = track(5, "Burnout", album = "Dookie", disc = 1, trackNum = 1, year = 1994)
+
+        val byAlbumAsc = LibrarySortPolicy.sortTracks(
+            tracks = listOf(d2024, d1994t2, a2004t2, d1994t1, a2004t1),
+            spec = TrackSortSpec(TrackSortOption.ALBUM, SortDirection.ASC),
+        )
+        assertEquals(
+            listOf("American Idiot", "Jesus of Suburbia", "Burnout", "Basket Case", "Saviors Opening"),
+            byAlbumAsc.map { it.title },
+        )
+
+        assertEquals(
+            TrackSortSpec(TrackSortOption.ALBUM, SortDirection.ASC),
+            TrackSortSpec.deserialize(
+                raw = "ALBUM:ASC",
+                allowedOptions = TrackSortScope.ARTIST_DETAIL.availableOptions,
+                fallback = TrackSortScope.ARTIST_DETAIL.defaultSpec,
+            ),
+        )
+        assertEquals(
+            TrackSortScope.ARTIST_DETAIL.defaultSpec,
+            TrackSortSpec.deserialize(
+                raw = null,
+                allowedOptions = TrackSortScope.ARTIST_DETAIL.availableOptions,
+                fallback = TrackSortScope.ARTIST_DETAIL.defaultSpec,
+            ),
         )
     }
 

@@ -1,6 +1,7 @@
 package com.cangkir.bitperfectplayer.library
 
 import com.cangkir.bitperfectplayer.audio.PlaybackTrack
+import java.util.Locale
 
 /**
  * Sort direction for library tracks and groups.
@@ -25,6 +26,7 @@ enum class TrackSortOption(val shortLabel: String, val fullLabel: String, val de
     CUSTOM_ORDER("Custom", "Custom Order", SortDirection.ASC),
     RECENTLY_PLAYED("Recent", "Recently Played", SortDirection.DESC),
     RECENTLY_ADDED("Added", "Recently Added", SortDirection.DESC),
+    RELEASE_YEAR("Year", "Release Year", SortDirection.ASC),
     TRACK_NUMBER("Track #", "Track Number", SortDirection.ASC),
     TITLE("Title", "Title", SortDirection.ASC),
     ARTIST("Artist", "Artist", SortDirection.ASC),
@@ -138,8 +140,9 @@ enum class TrackSortScope(
     ARTIST_DETAIL(
         preferenceKey = "sort_track_artist_detail",
         sheetTitle = "Sort Artist Tracks",
-        defaultSpec = TrackSortSpec(TrackSortOption.ALBUM, SortDirection.ASC),
+        defaultSpec = TrackSortSpec(TrackSortOption.RELEASE_YEAR, SortDirection.ASC),
         availableOptions = listOf(
+            TrackSortOption.RELEASE_YEAR,
             TrackSortOption.ALBUM,
             TrackSortOption.TRACK_NUMBER,
             TrackSortOption.TITLE,
@@ -263,6 +266,11 @@ data class LibrarySortPreferences(
  */
 object LibrarySortPolicy {
 
+    private data class AlbumReleaseBucket(val albumName: String, val consensusYear: Int, val orderedTracks: List<PlaybackTrack>) {
+        val representativeUri: String
+            get() = orderedTracks.firstOrNull()?.uriString.orEmpty()
+    }
+
     /**
      * Sorts [tracks] according to [spec] using optional [playCountsByKey] (keyed by lowercase
      * content fingerprint and/or URI string) for [TrackSortOption.MOST_PLAYED].
@@ -280,6 +288,7 @@ object LibrarySortPolicy {
                 // Incoming lists are already ordered newest-first (DESC).
                 if (spec.direction == SortDirection.DESC) tracks else tracks.asReversed()
             }
+            TrackSortOption.RELEASE_YEAR -> sortTracksByAlbumReleaseYear(tracks, spec.direction)
             else -> {
                 val baseComparator = trackComparator(spec.option, playCountsByKey)
                 val effectiveComparator = if (spec.direction == SortDirection.ASC) {
@@ -290,6 +299,34 @@ object LibrarySortPolicy {
                 tracks.sortedWith(effectiveComparator)
             }
         }
+    }
+
+    private fun sortTracksByAlbumReleaseYear(tracks: List<PlaybackTrack>, direction: SortDirection): List<PlaybackTrack> {
+        val buckets = tracks
+            .groupBy { it.album.trim().ifBlank { "Unknown Album" } }
+            .entries
+            .map { (albumName, albumTracks) ->
+                val orderedTracks = albumTracks.sortedWith(TRACK_NUMBER_COMPARATOR)
+                val consensusYear = ReleaseYearParser.resolveAlbumReleaseYear(orderedTracks.map { it.year })
+                AlbumReleaseBucket(
+                    albumName = albumName,
+                    consensusYear = consensusYear,
+                    orderedTracks = orderedTracks,
+                )
+            }
+        val bucketComparator = compareBy<AlbumReleaseBucket> { ReleaseYearParser.sanitizeYear(it.consensusYear) == 0 }
+            .thenBy { bucket ->
+                val validYear = ReleaseYearParser.sanitizeYear(bucket.consensusYear)
+                when {
+                    validYear == 0 -> Int.MAX_VALUE
+                    direction == SortDirection.ASC -> validYear
+                    else -> -validYear
+                }
+            }
+            .thenBy { it.albumName.lowercase(Locale.ROOT) }
+            .thenBy { it.albumName }
+            .thenBy { it.representativeUri }
+        return buckets.sortedWith(bucketComparator).flatMap { it.orderedTracks }
     }
 
     /**
@@ -367,6 +404,7 @@ object LibrarySortPolicy {
         TrackSortOption.CUSTOM_ORDER,
         TrackSortOption.RECENTLY_PLAYED,
         TrackSortOption.RECENTLY_ADDED,
+        TrackSortOption.RELEASE_YEAR,
         -> Comparator { _, _ -> 0 }
     }
 

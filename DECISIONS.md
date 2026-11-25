@@ -732,6 +732,21 @@ This file records autonomous architectural, dependency, and environment decision
   - Eliminates noisy paused-state `AUTO_PAUSE` spam, prevents blocked HAL `play()` calls from bypassing or delaying immediate pause state, and reduces background scheduling stalls without weakening hearing safety or touching USB/Bit-Perfect timing.
 - **Rejected Alternatives:** Suppressing `AUTO_PAUSE` globally across modes or on single disconnects (unsafe in `BIT_PERFECT_OPT_IN` or during active playback/start); enlarging USB or Bit-Perfect buffers (increases DAC latency and alters verified Bit-Perfect stream sizing); spawning a separate unsynchronized binder executor for `AudioTrack.play()` (introduces unsafe concurrent `AudioTrack` state transitions).
 
+---
+
+## `D13.2` — Chronological `Release Year` Track Sort & Default for `Artist Detail` (`RELEASE_YEAR ↑`) (2026-11-25)
+- **Context:**
+  - `ArtistDetailView` displayed its horizontal `Albums` carousel oldest-first by consensus release year (`ArtistDetailHelper.ARTIST_ALBUM_COMPARATOR`), while `TrackSortScope.ARTIST_DETAIL` defaulted to alphabetical `ALBUM ↑`, creating a visual and `Play All` ordering mismatch between the carousel and `TRACKS` list directly below it.
+- **Decision:**
+  1. **New `TrackSortOption.RELEASE_YEAR` (`"Release Year"`, `"Year ↑"` / `"Year ↓"`) in [`LibrarySortPolicy.kt`](app/src/main/java/com/cangkir/bitperfectplayer/library/LibrarySortPolicy.kt):**
+     - Placed at the top of `TrackSortScope.ARTIST_DETAIL.availableOptions` above `"Album"`, and promoted to `TrackSortScope.ARTIST_DETAIL.defaultSpec` (`SortDirection.ASC`).
+     - Groups artist tracks by trimmed album name, computes consensus release year (`1900..2100`, undated albums always last in both `ASC` and `DESC`, album-name A–Z tie-breaker), orders dated albums oldest-first (`ASC`) or newest-first (`DESC`), and **always** keeps intra-album tracks in natural listening order (`discNumber ASC -> trackNumber ASC -> natural fileName -> title`).
+     - Kept `TrackSortOption.ALBUM` strictly alphabetical (`A–Z` / `Z–A`), kept persisted user sort overrides intact via `UserPreferencesRepository`, and normalized album trimming in [`ArtistDetailHelper.kt`](app/src/main/java/com/cangkir/bitperfectplayer/library/ArtistDetailHelper.kt).
+- **Rationale:**
+  - Matches `ArtistDetailView`'s `Albums` carousel 1:1 out of the box and ensures `Play All` plays albums chronologically from Track `1..N` even when browsing newest-first (`Year ↓`), without disturbing explicit `"Album"` alphabetical sorting.
+- **Rejected Alternatives:** Silently redefining `"Album"` sort to ignore alphabetical album names (breaks user expectation when explicitly picking `"Album"`); reversing intra-album track order (`10..1`) under `Year ↓` (unusable for sequential album listening).
+
+
 
 
 
