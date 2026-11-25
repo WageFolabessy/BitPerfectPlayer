@@ -284,14 +284,35 @@ object PcmStreamRules {
      * Computes a frame-aligned `AudioTrack` stream buffer size in bytes that guarantees at least
      * `2x` the OS minimum buffer (with a `1024`-frame floor) or `~50 ms` (`sampleRateHz / 20`),
      * rounded up to an exact multiple of [bytesPerFrame].
+     *
+     * When [useSafeSpeakerHeadroom] is enabled (strictly Safe-Mode internal-speaker playback),
+     * raises the floor to `max(3x minBuf, 160 ms)` to absorb background scheduler/binder jitter
+     * without affecting seek/pause latency or USB / Bit-Perfect paths.
      */
-    fun computeAudioTrackBufferSizeBytes(reportedMinBufferSize: Int, sampleRateHz: Int, bytesPerFrame: Int): Int {
+    fun computeAudioTrackBufferSizeBytes(
+        reportedMinBufferSize: Int,
+        sampleRateHz: Int,
+        bytesPerFrame: Int,
+        useSafeSpeakerHeadroom: Boolean = false,
+    ): Int {
         val frame = bytesPerFrame.coerceAtLeast(1)
         val safeRate = sampleRateHz.coerceAtLeast(1)
         val minBuf = reportedMinBufferSize.coerceAtLeast(frame * 1024)
-        val rawBufSize = maxOf(minBuf * 2, frame * (safeRate / 20))
+        val rawBufSize = if (useSafeSpeakerHeadroom) {
+            val speakerFrames = (safeRate.toLong() * SAFE_SPEAKER_MIN_BUFFER_MS) / 1000L
+            maxOf(
+                minBuf.toLong() * SAFE_SPEAKER_MIN_BUF_MULTIPLIER,
+                frame.toLong() * speakerFrames,
+            ).coerceAtMost(MAX_AUDIOTRACK_BUFFER_BYTES).toInt()
+        } else {
+            maxOf(minBuf * 2, frame * (safeRate / 20))
+        }
         return computeAlignedBufferSize(rawBufSize, frame)
     }
+
+    const val SAFE_SPEAKER_MIN_BUFFER_MS: Long = 160L
+    const val SAFE_SPEAKER_MIN_BUF_MULTIPLIER: Int = 3
+    private const val MAX_AUDIOTRACK_BUFFER_BYTES: Long = 16L * 1024L * 1024L
 
     /**
      * Extracts an exact slice `[offset, offset + size)` from [source] without reading outside the

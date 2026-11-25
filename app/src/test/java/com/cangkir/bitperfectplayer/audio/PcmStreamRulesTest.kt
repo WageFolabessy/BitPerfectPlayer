@@ -124,6 +124,43 @@ class PcmStreamRulesTest {
     }
 
     @Test
+    fun computeAudioTrackBufferSizeBytes_safeSpeakerHeadroomProvides160MsAnd3xFloorAcrossRates() {
+        val buf44k1 = PcmStreamRules.computeAudioTrackBufferSizeBytes(
+            reportedMinBufferSize = 7_072,
+            sampleRateHz = 44_100,
+            bytesPerFrame = 4,
+            useSafeSpeakerHeadroom = true,
+        )
+        assertEquals(0, buf44k1 % 4)
+        assertEquals(28_224, buf44k1)
+
+        val buf192kFloat = PcmStreamRules.computeAudioTrackBufferSizeBytes(
+            reportedMinBufferSize = 30_720,
+            sampleRateHz = 192_000,
+            bytesPerFrame = 8,
+            useSafeSpeakerHeadroom = true,
+        )
+        assertEquals(0, buf192kFloat % 8)
+        assertEquals(245_760, buf192kFloat)
+
+        val usbDefault = PcmStreamRules.computeAudioTrackBufferSizeBytes(
+            reportedMinBufferSize = 15_362,
+            sampleRateHz = 96_000,
+            bytesPerFrame = 6,
+            useSafeSpeakerHeadroom = false,
+        )
+        val speakerHeadroom = PcmStreamRules.computeAudioTrackBufferSizeBytes(
+            reportedMinBufferSize = 15_362,
+            sampleRateHz = 96_000,
+            bytesPerFrame = 6,
+            useSafeSpeakerHeadroom = true,
+        )
+        assertEquals(30_726, usbDefault)
+        assertEquals(0, speakerHeadroom % 6)
+        assertEquals(92_160, speakerHeadroom)
+    }
+
+    @Test
     fun extractBufferSlice_respectsExactOffsetAndSizeWithoutMutatingSource() {
         val raw = ByteArray(32) { it.toByte() }
         val buffer = ByteBuffer.wrap(raw)

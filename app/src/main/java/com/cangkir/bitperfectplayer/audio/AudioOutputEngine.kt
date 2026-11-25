@@ -7,7 +7,6 @@ import android.media.AudioTrack
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
-import android.os.Process
 import android.os.SystemClock
 import android.util.Log
 import com.cangkir.bitperfectplayer.BuildConfig
@@ -94,6 +93,7 @@ class AudioOutputEngine(
         val preserveAutoPauseNotice: Boolean,
         val forceAudioFocus: Boolean,
         val clearMixerBeforeCreate: Boolean,
+        val resumeAttemptSeq: Long = 0L,
     )
 
     private val engineLock = ReentrantLock()
@@ -101,6 +101,16 @@ class AudioOutputEngine(
         Thread(runnable, "BitPerfectEngineControl").apply { isDaemon = true }
     }
     private val commandCoalescer = PlaybackCommandCoalescer<EngineControlLoadRequest>()
+    private val playResumeAbortGuard = PlayResumeAbortGuard()
+    private val deferredPlayLock = Any()
+    private var deferredPlayRunnable: Runnable? = null
+    private var deferredPlayAttemptSeq: Long = 0L
+    private var deferredPlayFirstRequestMs: Long = 0L
+    private val coalescedDiagnosticsRunnable = Runnable {
+        if (!releasedFlag.get()) {
+            publishDiagnostics()
+        }
+    }
     private val stagedPreloadedTrack = AtomicReference<PreloadedTrack?>(null)
     private val loadGeneration = AtomicLong(0L)
     private val isPausedFlag = AtomicBoolean(true)
@@ -148,6 +158,8 @@ class AudioOutputEngine(
         onSafetyCommand = ::handleSafetyCommand,
         onDiagnosticsChanged = ::publishDiagnostics,
         onFocusLossPause = {
+            cancelDeferredPlay()
+            playResumeAbortGuard.cancelInFlightResumes()
             commandCoalescer.cancelPendingStartOnExternalPause()
             applyImmediatePauseState(notice = null)
             enqueueControlTask {
@@ -167,6 +179,8 @@ class AudioOutputEngine(
         isReleased = { releasedFlag.get() },
         diagnosticLogger = diagnosticLogger,
         currentEngineStatusName = { _state.value.status.name },
+        isPlaybackActiveOrStarting = ::isPlaybackActiveOrStarting,
+        onPausedSafeModeRouteRefreshed = ::handlePausedSafeModeRouteRefresh,
     )
     private val trackWriter = AudioTrackWriter(
         playbackAudioAttributes,
@@ -263,7 +277,14 @@ class AudioOutputEngine(
 
     fun loadTrack(request: EngineTrackRequest) {
         if (releasedFlag.get()) return
+        cancelDeferredPlay()
         val generation = loadGeneration.incrementAndGet()
+        val resumeAttemptSeq = if (request.autoPlay) {
+            playResumeAbortGuard.beginResumeAttempt()
+        } else {
+            playResumeAbortGuard.cancelInFlightResumes()
+            0L
+        }
         consecutiveAutoRecoveries = 0
         pendingRouteReconfigureOnPlay.set(false)
         scratchRunner.abortScratch()
@@ -316,6 +337,7 @@ class AudioOutputEngine(
             preserveAutoPauseNotice = false,
             forceAudioFocus = false,
             clearMixerBeforeCreate = false,
+            resumeAttemptSeq = resumeAttemptSeq,
         )
         if (commandCoalescer.submitLoadTrack(payload, startAfterLoad = request.autoPlay)) {
             scheduleControlDrain()
@@ -333,7 +355,8 @@ class AudioOutputEngine(
             playbackThread?.isAlive == true &&
             !isPausedFlag.get() &&
             !pendingRouteReconfigureOnPlay.get() &&
-            !commandCoalescer.hasPendingLoad()
+            !commandCoalescer.hasPendingLoad() &&
+            !hasDeferredPlayPending()
         if (alreadyStreaming) {
             _state.update {
                 it.copy(
@@ -345,18 +368,59 @@ class AudioOutputEngine(
             }
             return
         }
-        // Immediately dismiss any Auto-paused banner or transient error on the very first Play tap.
-        _state.update { it.copy(errorMessage = null, lastAutoPauseNotice = null, isPreparingPlayback = true) }
-        if (commandCoalescer.submitPlay()) {
-            scheduleControlDrain()
+        val attemptSeq = playResumeAbortGuard.beginResumeAttempt()
+        val firstRequestMs = activeDeferredFirstRequestMs(nowMs)
+        val routeGuard = routeAndMixerManager.evaluatePlayResume(
+            nowElapsedMs = nowMs,
+            firstPlayRequestElapsedMs = firstRequestMs,
+        )
+        when (routeGuard.decision) {
+            PlayResumeRouteDecision.PROCEED_NOW -> {
+                cancelDeferredPlay()
+                // Immediately dismiss any Auto-paused banner or transient error on the very first Play tap.
+                _state.update { it.copy(errorMessage = null, lastAutoPauseNotice = null, isPreparingPlayback = true) }
+                if (commandCoalescer.submitPlay()) {
+                    scheduleControlDrain()
+                }
+            }
+            PlayResumeRouteDecision.DEFER_FOR_ROUTE_SETTLE -> {
+                _state.update { it.copy(errorMessage = null, lastAutoPauseNotice = null, isPreparingPlayback = true) }
+                diagnosticLogger?.logAudio("PLAY_DEFERRED_ROUTE_FLAP") {
+                    linkedMapOf("delayMs" to routeGuard.deferDelayMs)
+                }
+                scheduleDeferredPlay(
+                    attemptSeq = attemptSeq,
+                    firstRequestMs = firstRequestMs,
+                    delayMs = routeGuard.deferDelayMs,
+                )
+            }
+            PlayResumeRouteDecision.ABORT_ROUTE_UNSTABLE -> {
+                cancelDeferredPlay()
+                playResumeAbortGuard.cancelInFlightResumes()
+                diagnosticLogger?.logAudio("PLAY_ABORTED_ROUTE_FLAP") {
+                    linkedMapOf("waitedMs" to (nowMs - firstRequestMs).coerceAtLeast(0L))
+                }
+                clearPreparingFlagsAfterAbortedPlay()
+            }
         }
     }
 
     private fun playLocked() {
+        val attemptSeq = playResumeAbortGuard.currentResumeAttemptSeq()
         val playLockedEntryMs = SystemClock.elapsedRealtime()
         val requestStartMs = lastPlayRequestElapsedMs.getAndSet(0L).takeIf { it > 0L } ?: playLockedEntryMs
         val queueWaitMs = (playLockedEntryMs - requestStartMs).coerceAtLeast(0L)
         val track = activeAudioTrack
+        if (!isResumeAuthorizedForPlayback(attemptSeq, checkFlapping = true)) {
+            abortSupersededPlayLocked(
+                track = track,
+                pauseTrack = false,
+                abandonFocus = false,
+                trackPlayMs = 0L,
+                stage = "play_entry",
+            )
+            return
+        }
         val shouldReload = RouteChangeReconfigurePolicy.shouldReloadOnPlay(
             hasPendingRouteReconfigure = pendingRouteReconfigureOnPlay.get(),
             hasActiveDecoder = activeDecoder != null,
@@ -366,7 +430,11 @@ class AudioOutputEngine(
             isAudioTrackHealthy = trackWriter.isTrackHealthy(track),
         )
         if (shouldReload) {
-            reloadCurrentTrackForPlayLocked(requestStartMs = requestStartMs, queueWaitMs = queueWaitMs)
+            reloadCurrentTrackForPlayLocked(
+                requestStartMs = requestStartMs,
+                queueWaitMs = queueWaitMs,
+                attemptSeq = attemptSeq,
+            )
             return
         }
         val activeTrack = track ?: run {
@@ -374,7 +442,7 @@ class AudioOutputEngine(
             return
         }
         if (playbackThread?.isAlive != true) {
-            resumeByRestartingWorkerLocked(activeTrack, requestStartMs, queueWaitMs)
+            resumeByRestartingWorkerLocked(activeTrack, requestStartMs, queueWaitMs, attemptSeq)
             return
         }
         if (!isPausedFlag.get() && _state.value.status == PlaybackStatus.PLAYING) {
@@ -388,6 +456,10 @@ class AudioOutputEngine(
             }
             return
         }
+        resumeInPlaceTrackLocked(activeTrack, requestStartMs, queueWaitMs, attemptSeq)
+    }
+
+    private fun resumeInPlaceTrackLocked(activeTrack: AudioTrack, requestStartMs: Long, queueWaitMs: Long, attemptSeq: Long) {
         val startMs = SystemClock.elapsedRealtime()
         val focusStartMs = SystemClock.elapsedRealtime()
         if (!routeAndMixerManager.requestAudioFocusLocked(forceRequest = true)) {
@@ -404,18 +476,43 @@ class AudioOutputEngine(
             return
         }
         val focusMs = (SystemClock.elapsedRealtime() - focusStartMs).coerceAtLeast(0L)
-        routeAndMixerManager.resumeAfterTransientFocusLoss = false
-        stopWorkerFlag.set(false)
-        isPausedFlag.set(false)
+        if (!isResumeAuthorizedForPlayback(attemptSeq, checkFlapping = true)) {
+            abortSupersededPlayLocked(
+                track = activeTrack,
+                pauseTrack = false,
+                abandonFocus = true,
+                trackPlayMs = 0L,
+                stage = "in_place_post_focus",
+            )
+            return
+        }
         if (safetyController.state().mode == AudioOutputMode.SAFE_VOLUME_MODE) {
             runCatching { activeTrack.setVolume(1.0f) }
         }
         val trackPlayStartMs = SystemClock.elapsedRealtime()
-        if (!trackWriter.safePlay(activeTrack)) {
-            reloadCurrentTrackForPlayLocked(requestStartMs = requestStartMs, queueWaitMs = queueWaitMs)
+        val playOk = trackWriter.safePlay(activeTrack)
+        val trackPlayMs = (SystemClock.elapsedRealtime() - trackPlayStartMs).coerceAtLeast(0L)
+        if (!isResumeAuthorizedForPlayback(attemptSeq, checkFlapping = false)) {
+            abortSupersededPlayLocked(
+                track = activeTrack,
+                pauseTrack = playOk,
+                abandonFocus = true,
+                trackPlayMs = trackPlayMs,
+                stage = "in_place_post_safePlay",
+            )
             return
         }
-        val trackPlayMs = (SystemClock.elapsedRealtime() - trackPlayStartMs).coerceAtLeast(0L)
+        if (!playOk) {
+            reloadCurrentTrackForPlayLocked(
+                requestStartMs = requestStartMs,
+                queueWaitMs = queueWaitMs,
+                attemptSeq = attemptSeq,
+            )
+            return
+        }
+        routeAndMixerManager.resumeAfterTransientFocusLoss = false
+        stopWorkerFlag.set(false)
+        isPausedFlag.set(false)
         logSlowAudioTrackBuildAndStart(startMs, activeDecoder?.format?.sampleRateHz ?: 0)
         _state.update {
             it.copy(
@@ -435,7 +532,17 @@ class AudioOutputEngine(
         )
     }
 
-    private fun resumeByRestartingWorkerLocked(activeTrack: AudioTrack, requestStartMs: Long, queueWaitMs: Long) {
+    private fun resumeByRestartingWorkerLocked(activeTrack: AudioTrack, requestStartMs: Long, queueWaitMs: Long, attemptSeq: Long) {
+        if (!isResumeAuthorizedForPlayback(attemptSeq, checkFlapping = true)) {
+            abortSupersededPlayLocked(
+                track = activeTrack,
+                pauseTrack = false,
+                abandonFocus = false,
+                trackPlayMs = 0L,
+                stage = "worker_restart_entry",
+            )
+            return
+        }
         routeAndMixerManager.resumeAfterTransientFocusLoss = false
         if (safetyController.state().mode == AudioOutputMode.SAFE_VOLUME_MODE) {
             runCatching { activeTrack.setVolume(1.0f) }
@@ -447,6 +554,7 @@ class AudioOutputEngine(
                 expectedGeneration = loadGeneration.get(),
                 forceAudioFocus = true,
                 clearPendingSeek = false,
+                resumeAttemptSeq = attemptSeq,
             )
         ) {
             WorkerStartResult.STARTED -> {
@@ -469,14 +577,37 @@ class AudioOutputEngine(
                 )
             }
             WorkerStartResult.AUDIO_TRACK_FAILED ->
-                reloadCurrentTrackForPlayLocked(requestStartMs = requestStartMs, queueWaitMs = queueWaitMs)
+                reloadCurrentTrackForPlayLocked(
+                    requestStartMs = requestStartMs,
+                    queueWaitMs = queueWaitMs,
+                    attemptSeq = attemptSeq,
+                )
             WorkerStartResult.AUDIO_FOCUS_DENIED -> {
                 _state.update { it.copy(isPreparingPlayback = false, preservePlayingUiDuringTransition = false) }
+            }
+            WorkerStartResult.ABORTED_BY_PAUSE -> {
+                isPausedFlag.set(true)
+                clearPreparingFlagsAfterAbortedPlay()
+                publishDiagnostics()
             }
         }
     }
 
-    private fun reloadCurrentTrackForPlayLocked(requestStartMs: Long = SystemClock.elapsedRealtime(), queueWaitMs: Long = 0L) {
+    private fun reloadCurrentTrackForPlayLocked(
+        requestStartMs: Long = SystemClock.elapsedRealtime(),
+        queueWaitMs: Long = 0L,
+        attemptSeq: Long = playResumeAbortGuard.currentResumeAttemptSeq(),
+    ) {
+        if (!isResumeAuthorizedForPlayback(attemptSeq, checkFlapping = true)) {
+            abortSupersededPlayLocked(
+                track = activeAudioTrack,
+                pauseTrack = false,
+                abandonFocus = false,
+                trackPlayMs = 0L,
+                stage = "reload_entry",
+            )
+            return
+        }
         pendingRouteReconfigureOnPlay.set(false)
         val req = currentRequest ?: return
         val resumePos = if (_state.value.status == PlaybackStatus.COMPLETED) {
@@ -490,14 +621,17 @@ class AudioOutputEngine(
             generation = generation,
             preserveAutoPauseNotice = false,
             forceAudioFocus = true,
+            resumeAttemptSeq = attemptSeq,
         )
-        logPlayResumeLatency(
-            path = "RELOAD",
-            queueWaitMs = queueWaitMs,
-            focusMs = lastWorkerStartFocusMs,
-            trackPlayMs = lastWorkerStartTrackPlayMs,
-            totalMs = (SystemClock.elapsedRealtime() - requestStartMs).coerceAtLeast(0L),
-        )
+        if (_state.value.isPlaying) {
+            logPlayResumeLatency(
+                path = "RELOAD",
+                queueWaitMs = queueWaitMs,
+                focusMs = lastWorkerStartFocusMs,
+                trackPlayMs = lastWorkerStartTrackPlayMs,
+                totalMs = (SystemClock.elapsedRealtime() - requestStartMs).coerceAtLeast(0L),
+            )
+        }
     }
 
     private fun logPlayResumeLatency(path: String, queueWaitMs: Long, focusMs: Long, trackPlayMs: Long, totalMs: Long) {
@@ -531,6 +665,8 @@ class AudioOutputEngine(
     }
 
     fun pause() {
+        cancelDeferredPlay()
+        playResumeAbortGuard.cancelInFlightResumes()
         logEngineLifecycle(event = "PAUSE_REQ", source = "ENGINE_PAUSE")
         routeAndMixerManager.resumeAfterTransientFocusLoss = false
         applyImmediatePauseState(notice = null)
@@ -540,6 +676,8 @@ class AudioOutputEngine(
     }
 
     fun notifyBackgroundStartBlocked(notice: String) {
+        cancelDeferredPlay()
+        playResumeAbortGuard.cancelInFlightResumes()
         routeAndMixerManager.resumeAfterTransientFocusLoss = false
         commandCoalescer.cancelPendingStartOnExternalPause()
         applyImmediatePauseState(notice = notice)
@@ -653,6 +791,8 @@ class AudioOutputEngine(
 
     fun stop() {
         if (releasedFlag.get()) return
+        cancelDeferredPlay()
+        playResumeAbortGuard.cancelInFlightResumes()
         logEngineLifecycle(event = "STOP_REQ", source = "ENGINE_STOP")
         scratchRunner.abortScratch()
         if (_state.value.status == PlaybackStatus.IDLE && activeAudioTrack == null && activeDecoder == null) {
@@ -687,6 +827,9 @@ class AudioOutputEngine(
 
     fun release() {
         if (!releasedFlag.compareAndSet(false, true)) return
+        cancelDeferredPlay()
+        cancelCoalescedDiagnosticsPublish()
+        playResumeAbortGuard.cancelInFlightResumes()
         scratchRunner.abortScratch()
         trackWriter.deactivateAndReleaseSpectrumTap()
         loadGeneration.incrementAndGet()
@@ -721,6 +864,7 @@ class AudioOutputEngine(
         STARTED,
         AUDIO_FOCUS_DENIED,
         AUDIO_TRACK_FAILED,
+        ABORTED_BY_PAUSE,
     }
 
     private data class TrackLoadTimings(
@@ -739,6 +883,7 @@ class AudioOutputEngine(
         preserveAutoPauseNotice: Boolean,
         forceAudioFocus: Boolean = false,
         clearMixerBeforeCreate: Boolean = false,
+        resumeAttemptSeq: Long = 0L,
     ) {
         if (isLoadStale(generation)) {
             _openingTrackUri.compareAndSet(request.uri.toString(), null)
@@ -823,8 +968,10 @@ class AudioOutputEngine(
         recomputeReplayGain()
         if (request.startPositionMs > 0L) runCatching { decoder.seekToMs(request.startPositionMs) }
 
-        val effectiveAutoPlay = request.autoPlay && !commandCoalescer.hasPendingPauseOrStop()
-        val effectiveRequest = if (effectiveAutoPlay == request.autoPlay) request else request.copy(autoPlay = effectiveAutoPlay)
+        val canAutoPlay = request.autoPlay &&
+            !commandCoalescer.hasPendingPauseOrStop() &&
+            (resumeAttemptSeq <= 0L || playResumeAbortGuard.isResumeAttemptValid(resumeAttemptSeq))
+        val effectiveRequest = if (canAutoPlay == request.autoPlay) request else request.copy(autoPlay = canAutoPlay)
         val audioTrackStartMs = SystemClock.elapsedRealtime()
         val audioTrack = createAudioTrackForDecoderLocked(decoder, generation) ?: run {
             clearPreparingFlagsIfUnbound(request.uri)
@@ -854,6 +1001,7 @@ class AudioOutputEngine(
                 trackCreateMs = trackCreateMs,
                 wasPreloaded = wasPreloaded,
             ),
+            resumeAttemptSeq = resumeAttemptSeq,
         )
     }
 
@@ -966,6 +1114,7 @@ class AudioOutputEngine(
         preserveAutoPauseNotice: Boolean,
         forceAudioFocus: Boolean,
         timings: TrackLoadTimings,
+        resumeAttemptSeq: Long = 0L,
     ) {
         activeDecoder = decoder
         activeAudioTrack = audioTrack
@@ -980,6 +1129,7 @@ class AudioOutputEngine(
             initialPosMs = initialPosMs,
             generation = generation,
             forceAudioFocus = forceAudioFocus,
+            resumeAttemptSeq = resumeAttemptSeq,
         )
         val startedPlaying = startResult == WorkerStartResult.STARTED
         if (startedPlaying) {
@@ -993,13 +1143,14 @@ class AudioOutputEngine(
             startResult == WorkerStartResult.AUDIO_FOCUS_DENIED -> "Audio focus denied"
             else -> null
         }
+        val preserveNotice = preserveAutoPauseNotice || startResult == WorkerStartResult.ABORTED_BY_PAUSE
         _state.update { current ->
             current.copy(
                 status = if (startedPlaying) PlaybackStatus.PLAYING else PlaybackStatus.PAUSED,
                 activeTrackUri = request.uri,
                 durationMs = decoder.format.durationMs.takeIf { it > 0L } ?: request.expectedDurationMs.coerceAtLeast(0L),
                 errorMessage = errMsg,
-                lastAutoPauseNotice = if (preserveAutoPauseNotice) current.lastAutoPauseNotice else null,
+                lastAutoPauseNotice = if (preserveNotice) current.lastAutoPauseNotice else null,
                 isPreparingPlayback = false,
                 preservePlayingUiDuringTransition = false,
             )
@@ -1033,6 +1184,7 @@ class AudioOutputEngine(
         initialPosMs: Long,
         generation: Long,
         forceAudioFocus: Boolean,
+        resumeAttemptSeq: Long = 0L,
     ): WorkerStartResult {
         if (!request.autoPlay) {
             isPausedFlag.set(true)
@@ -1048,6 +1200,7 @@ class AudioOutputEngine(
             expectedGeneration = generation,
             forceAudioFocus = forceAudioFocus,
             clearPendingSeek = true,
+            resumeAttemptSeq = resumeAttemptSeq,
         )
         if (firstAttempt != WorkerStartResult.AUDIO_TRACK_FAILED || isLoadStale(generation)) {
             return firstAttempt
@@ -1078,6 +1231,7 @@ class AudioOutputEngine(
             expectedGeneration = generation,
             forceAudioFocus = true,
             clearPendingSeek = true,
+            resumeAttemptSeq = resumeAttemptSeq,
         )
     }
 
@@ -1109,6 +1263,9 @@ class AudioOutputEngine(
         )
         when (command.type) {
             SafetyEventType.AUTO_PAUSE -> {
+                cancelDeferredPlay()
+                cancelCoalescedDiagnosticsPublish()
+                playResumeAbortGuard.cancelInFlightResumes()
                 diagnosticLogger?.logAudio("AUTO_PAUSE") {
                     linkedMapOf(
                         "reason" to (command.autoPauseReason?.name ?: "UNKNOWN"),
@@ -1138,6 +1295,8 @@ class AudioOutputEngine(
                 )
             }
             SafetyEventType.MODE_CHANGED_TO_SAFE -> {
+                val shouldResume = statusBeforeCommand == PlaybackStatus.PLAYING
+                val modeResumeSeq = if (shouldResume) playResumeAbortGuard.beginResumeAttempt() else 0L
                 diagnosticLogger?.logAudio("AUDIO_MODE_CHANGED") {
                     linkedMapOf(
                         "mode" to AudioOutputMode.SAFE_VOLUME_MODE.name,
@@ -1148,11 +1307,14 @@ class AudioOutputEngine(
                     action = reconfigureAction,
                     clearPreferredMixer = command.requiresClearPreferredMixerAttributes,
                     releaseRing = false,
-                    autoResume = statusBeforeCommand == PlaybackStatus.PLAYING,
+                    autoResume = shouldResume,
                     preserveAutoPauseNotice = false,
+                    resumeAttemptSeq = modeResumeSeq,
                 )
             }
             SafetyEventType.MODE_CHANGED_TO_BIT_PERFECT -> {
+                val shouldResume = statusBeforeCommand == PlaybackStatus.PLAYING
+                val modeResumeSeq = if (shouldResume) playResumeAbortGuard.beginResumeAttempt() else 0L
                 diagnosticLogger?.logAudio("AUDIO_MODE_CHANGED") {
                     linkedMapOf(
                         "mode" to AudioOutputMode.BIT_PERFECT_OPT_IN.name,
@@ -1164,8 +1326,9 @@ class AudioOutputEngine(
                     action = reconfigureAction,
                     clearPreferredMixer = false,
                     releaseRing = true,
-                    autoResume = statusBeforeCommand == PlaybackStatus.PLAYING,
+                    autoResume = shouldResume,
                     preserveAutoPauseNotice = false,
+                    resumeAttemptSeq = modeResumeSeq,
                 )
             }
             SafetyEventType.REQUIRES_SAFETY_WARNING, SafetyEventType.NONE -> {
@@ -1184,6 +1347,7 @@ class AudioOutputEngine(
         autoPauseReason: AutoPauseReason? = null,
         safetyStartMs: Long = 0L,
         uiUpdateMs: Long = 0L,
+        resumeAttemptSeq: Long = 0L,
     ) {
         enqueueControlTask {
             if (releasedFlag.get()) return@enqueueControlTask
@@ -1199,7 +1363,7 @@ class AudioOutputEngine(
                             routeAndMixerManager.clearPreferredMixerAttributesAsyncOnApi34(null)
                             clearMixerMs = (SystemClock.elapsedRealtime() - clearStart).coerceAtLeast(0L)
                         }
-                        reconfigureTrackIfLoadedLocked(autoResume, preserveAutoPauseNotice)
+                        reconfigureTrackIfLoadedLocked(autoResume, preserveAutoPauseNotice, resumeAttemptSeq)
                     }
                     SafetyReconfigureAction.PAUSE_IN_PLACE_KEEP_TRACK -> {
                         val metrics = pauseInPlaceKeepTrackLocked(clearPreferredMixer)
@@ -1357,7 +1521,7 @@ class AudioOutputEngine(
         return pauseIpcMs
     }
 
-    private fun reconfigureTrackIfLoadedLocked(autoResume: Boolean, preserveAutoPauseNotice: Boolean) {
+    private fun reconfigureTrackIfLoadedLocked(autoResume: Boolean, preserveAutoPauseNotice: Boolean, resumeAttemptSeq: Long = 0L) {
         preloadController.clearPreloadedNextLocked()
         val req = currentRequest
         if (req == null || (activeDecoder == null && !pendingRouteReconfigureOnPlay.get())) {
@@ -1365,12 +1529,14 @@ class AudioOutputEngine(
             publishDiagnostics()
             return
         }
+        val canResume = autoResume && (resumeAttemptSeq <= 0L || playResumeAbortGuard.isResumeAttemptValid(resumeAttemptSeq))
         val generation = loadGeneration.incrementAndGet()
         loadTrackLocked(
-            request = req.copy(startPositionMs = _playbackPositionMs.value, autoPlay = autoResume),
+            request = req.copy(startPositionMs = _playbackPositionMs.value, autoPlay = canResume),
             generation = generation,
-            preserveAutoPauseNotice = preserveAutoPauseNotice,
-            forceAudioFocus = autoResume,
+            preserveAutoPauseNotice = preserveAutoPauseNotice || (autoResume && !canResume),
+            forceAudioFocus = canResume,
+            resumeAttemptSeq = if (canResume) resumeAttemptSeq else 0L,
         )
     }
 
@@ -1438,6 +1604,11 @@ class AudioOutputEngine(
                 } else {
                     payload.request.copy(autoPlay = intent.startAfterLoad)
                 }
+                val effectiveResumeSeq = if (intent.startAfterLoad) {
+                    maxOf(payload.resumeAttemptSeq, playResumeAbortGuard.currentResumeAttemptSeq())
+                } else {
+                    0L
+                }
                 if (!isLoadStale(payload.generation)) {
                     loadTrackLocked(
                         request = effectiveRequest,
@@ -1445,6 +1616,7 @@ class AudioOutputEngine(
                         preserveAutoPauseNotice = payload.preserveAutoPauseNotice,
                         forceAudioFocus = payload.forceAudioFocus,
                         clearMixerBeforeCreate = payload.clearMixerBeforeCreate,
+                        resumeAttemptSeq = effectiveResumeSeq,
                     )
                 }
             }
@@ -1525,12 +1697,42 @@ class AudioOutputEngine(
         expectedGeneration: Long,
         forceAudioFocus: Boolean = false,
         clearPendingSeek: Boolean = true,
+        resumeAttemptSeq: Long = playResumeAbortGuard.currentResumeAttemptSeq(),
     ): WorkerStartResult {
         lastWorkerStartFocusMs = 0L
         lastWorkerStartTrackPlayMs = 0L
         val decoder = activeDecoder ?: return WorkerStartResult.AUDIO_TRACK_FAILED
         val track = activeAudioTrack?.takeIf { trackWriter.isTrackHealthy(it) }
             ?: return WorkerStartResult.AUDIO_TRACK_FAILED
+        val startOutcome = requestFocusAndStartTrackLocked(
+            track = track,
+            forceAudioFocus = forceAudioFocus,
+            resumeAttemptSeq = resumeAttemptSeq,
+        )
+        if (startOutcome != WorkerStartResult.STARTED) {
+            return startOutcome
+        }
+        stopWorkerFlag.set(false)
+        isPausedFlag.set(false)
+        if (clearPendingSeek) seekCoalescer.clear()
+
+        val worker = Thread(
+            {
+                trackWriter.applyPlaybackThreadPriority()
+                runPlaybackLoop(decoder, track, initialSeekMs, expectedGeneration)
+            },
+            "BitPerfectAudioThread",
+        )
+        playbackThread = worker
+        worker.start()
+        return WorkerStartResult.STARTED
+    }
+
+    private fun requestFocusAndStartTrackLocked(track: AudioTrack, forceAudioFocus: Boolean, resumeAttemptSeq: Long): WorkerStartResult {
+        if (!isResumeAuthorizedForPlayback(resumeAttemptSeq, checkFlapping = true)) {
+            abortSupersededPlayLocked(track, pauseTrack = false, abandonFocus = false, trackPlayMs = 0L, stage = "worker_entry")
+            return WorkerStartResult.ABORTED_BY_PAUSE
+        }
         val focusStartMs = SystemClock.elapsedRealtime()
         val focusGranted = routeAndMixerManager.requestAudioFocusLocked(forceRequest = forceAudioFocus)
         lastWorkerStartFocusMs = (SystemClock.elapsedRealtime() - focusStartMs).coerceAtLeast(0L)
@@ -1540,27 +1742,29 @@ class AudioOutputEngine(
             _state.update { it.copy(status = PlaybackStatus.PAUSED, errorMessage = "Audio focus denied") }
             return WorkerStartResult.AUDIO_FOCUS_DENIED
         }
+        if (!isResumeAuthorizedForPlayback(resumeAttemptSeq, checkFlapping = true)) {
+            abortSupersededPlayLocked(track, pauseTrack = false, abandonFocus = true, trackPlayMs = 0L, stage = "worker_post_focus")
+            return WorkerStartResult.ABORTED_BY_PAUSE
+        }
         val playStartMs = SystemClock.elapsedRealtime()
         val playOk = trackWriter.safePlay(track)
         lastWorkerStartTrackPlayMs = (SystemClock.elapsedRealtime() - playStartMs).coerceAtLeast(0L)
-        if (!playOk) {
-            isPausedFlag.set(true)
-            return WorkerStartResult.AUDIO_TRACK_FAILED
+        if (!isResumeAuthorizedForPlayback(resumeAttemptSeq, checkFlapping = false)) {
+            abortSupersededPlayLocked(
+                track = track,
+                pauseTrack = playOk,
+                abandonFocus = true,
+                trackPlayMs = lastWorkerStartTrackPlayMs,
+                stage = "worker_post_safePlay",
+            )
+            return WorkerStartResult.ABORTED_BY_PAUSE
         }
-        stopWorkerFlag.set(false)
-        isPausedFlag.set(false)
-        if (clearPendingSeek) seekCoalescer.clear()
-
-        val worker = Thread(
-            {
-                runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO) }
-                runPlaybackLoop(decoder, track, initialSeekMs, expectedGeneration)
-            },
-            "BitPerfectAudioThread",
-        )
-        playbackThread = worker
-        worker.start()
-        return WorkerStartResult.STARTED
+        return if (playOk) {
+            WorkerStartResult.STARTED
+        } else {
+            isPausedFlag.set(true)
+            WorkerStartResult.AUDIO_TRACK_FAILED
+        }
     }
 
     @Suppress("TooGenericExceptionCaught") // Top-level audio worker thread must surface OEM HAL errors safely instead of crashing
@@ -1603,6 +1807,7 @@ class AudioOutputEngine(
         )
         if (canRecover) {
             consecutiveAutoRecoveries++
+            val recoverySeq = playResumeAbortGuard.currentResumeAttemptSeq()
             val resumePos = seekCoalescer.pollPendingSeek() ?: _playbackPositionMs.value.coerceAtLeast(0L)
             diagnosticLogger?.logAudio("PLAYBACK_AUTO_RECOVER") {
                 linkedMapOf(
@@ -1614,11 +1819,11 @@ class AudioOutputEngine(
                 )
             }
             enqueueControlTask {
-                if (releasedFlag.get() || loadGeneration.get() != expectedGeneration || isPausedFlag.get()) {
+                if (shouldAbortPendingAutoRecovery(expectedGeneration, recoverySeq)) {
                     return@enqueueControlTask
                 }
                 engineLock.withLock {
-                    if (releasedFlag.get() || loadGeneration.get() != expectedGeneration || isPausedFlag.get()) {
+                    if (shouldAbortPendingAutoRecovery(expectedGeneration, recoverySeq)) {
                         return@withLock
                     }
                     val req = currentRequest ?: return@withLock
@@ -1629,6 +1834,7 @@ class AudioOutputEngine(
                         preserveAutoPauseNotice = false,
                         forceAudioFocus = true,
                         clearMixerBeforeCreate = true,
+                        resumeAttemptSeq = recoverySeq,
                     )
                 }
             }
@@ -1643,6 +1849,13 @@ class AudioOutputEngine(
         }
         publishWorkerErrorIfRunning(expectedGeneration, error.message ?: "Playback decoding error")
         return false
+    }
+
+    private fun shouldAbortPendingAutoRecovery(expectedGeneration: Long, recoverySeq: Long): Boolean {
+        val aborted = releasedFlag.get() || isPausedFlag.get()
+        return aborted ||
+            loadGeneration.get() != expectedGeneration ||
+            !playResumeAbortGuard.isResumeAttemptValid(recoverySeq)
     }
 
     private fun reconcileStatusOnWorkerExit(expectedGeneration: Long, recoveryScheduled: Boolean) {
@@ -1857,7 +2070,198 @@ class AudioOutputEngine(
                 recomputeReplayGain(),
             )
         }
-        _state.update { it.copy(safetyState = safety, diagnostics = snapshot) }
+        _state.update { current ->
+            if (current.safetyState == safety && current.diagnostics == snapshot) {
+                current
+            } else {
+                current.copy(safetyState = safety, diagnostics = snapshot)
+            }
+        }
+    }
+
+    private fun isPlaybackActiveOrStarting(): Boolean {
+        val current = _state.value
+        return current.status == PlaybackStatus.PLAYING ||
+            current.status == PlaybackStatus.PREPARING ||
+            current.isPreparingPlayback ||
+            !isPausedFlag.get() ||
+            commandCoalescer.isStartOrLoadInFlight() ||
+            hasDeferredPlayPending()
+    }
+
+    private fun handlePausedSafeModeRouteRefresh(coalesceDiagnostics: Boolean) {
+        preloadController.clearPreloadedNextAsync()
+        if (activeAudioTrack != null) {
+            scratchRunner.markRouteChangedWhilePaused()
+        }
+        val needsReconfigure = currentRequest != null &&
+            (
+                activeTrackUsesBitPerfectOrPreferredRoute ||
+                    routeAndMixerManager.hasActivePreferredMixer ||
+                    !trackWriter.isTrackHealthy(activeAudioTrack)
+                )
+        if (needsReconfigure) {
+            pendingRouteReconfigureOnPlay.set(true)
+        }
+        if (coalesceDiagnostics) {
+            mainHandler.removeCallbacks(coalescedDiagnosticsRunnable)
+            mainHandler.postDelayed(
+                coalescedDiagnosticsRunnable,
+                UsbRouteStabilityTracker.DEFAULT_DIAGNOSTICS_COALESCE_MS,
+            )
+        } else {
+            cancelCoalescedDiagnosticsPublish()
+            publishDiagnostics()
+        }
+    }
+
+    private fun cancelCoalescedDiagnosticsPublish() {
+        mainHandler.removeCallbacks(coalescedDiagnosticsRunnable)
+    }
+
+    private fun activeDeferredFirstRequestMs(fallbackNowMs: Long): Long = synchronized(deferredPlayLock) {
+        if (deferredPlayRunnable != null && deferredPlayFirstRequestMs > 0L) {
+            deferredPlayFirstRequestMs
+        } else {
+            fallbackNowMs
+        }
+    }
+
+    private fun hasDeferredPlayPending(): Boolean = synchronized(deferredPlayLock) {
+        deferredPlayRunnable != null
+    }
+
+    private fun scheduleDeferredPlay(attemptSeq: Long, firstRequestMs: Long, delayMs: Long) {
+        val holder = arrayOfNulls<Runnable>(1)
+        val runnable = Runnable {
+            val self = holder[0] ?: return@Runnable
+            executeDeferredPlayIfStillValid(self, attemptSeq, firstRequestMs)
+        }
+        holder[0] = runnable
+        synchronized(deferredPlayLock) {
+            deferredPlayRunnable?.let { mainHandler.removeCallbacks(it) }
+            deferredPlayRunnable = runnable
+            deferredPlayAttemptSeq = attemptSeq
+            deferredPlayFirstRequestMs = firstRequestMs
+        }
+        mainHandler.postDelayed(runnable, delayMs.coerceAtLeast(1L))
+    }
+
+    private fun cancelDeferredPlay() {
+        val toCancel = synchronized(deferredPlayLock) {
+            val prev = deferredPlayRunnable
+            deferredPlayRunnable = null
+            deferredPlayAttemptSeq = 0L
+            deferredPlayFirstRequestMs = 0L
+            prev
+        }
+        if (toCancel != null) {
+            mainHandler.removeCallbacks(toCancel)
+        }
+    }
+
+    private fun executeDeferredPlayIfStillValid(expectedRunnable: Runnable, attemptSeq: Long, firstRequestMs: Long) {
+        val ownsToken = synchronized(deferredPlayLock) {
+            val matches = deferredPlayRunnable === expectedRunnable && deferredPlayAttemptSeq == attemptSeq
+            if (matches) {
+                deferredPlayRunnable = null
+                deferredPlayAttemptSeq = 0L
+                deferredPlayFirstRequestMs = 0L
+            }
+            matches
+        }
+        if (!ownsToken || releasedFlag.get()) return
+        if (!playResumeAbortGuard.isResumeAttemptValid(attemptSeq)) {
+            clearPreparingFlagsAfterAbortedPlay()
+            return
+        }
+        val nowMs = SystemClock.elapsedRealtime()
+        val routeGuard = routeAndMixerManager.evaluatePlayResume(
+            nowElapsedMs = nowMs,
+            firstPlayRequestElapsedMs = firstRequestMs,
+        )
+        when (routeGuard.decision) {
+            PlayResumeRouteDecision.PROCEED_NOW -> {
+                if (commandCoalescer.submitPlay()) {
+                    scheduleControlDrain()
+                }
+            }
+            PlayResumeRouteDecision.DEFER_FOR_ROUTE_SETTLE -> {
+                diagnosticLogger?.logAudio("PLAY_DEFERRED_ROUTE_FLAP") {
+                    linkedMapOf("delayMs" to routeGuard.deferDelayMs)
+                }
+                scheduleDeferredPlay(
+                    attemptSeq = attemptSeq,
+                    firstRequestMs = firstRequestMs,
+                    delayMs = routeGuard.deferDelayMs,
+                )
+            }
+            PlayResumeRouteDecision.ABORT_ROUTE_UNSTABLE -> {
+                playResumeAbortGuard.cancelInFlightResumes()
+                diagnosticLogger?.logAudio("PLAY_ABORTED_ROUTE_FLAP") {
+                    linkedMapOf("waitedMs" to (nowMs - firstRequestMs).coerceAtLeast(0L))
+                }
+                clearPreparingFlagsAfterAbortedPlay()
+            }
+        }
+    }
+
+    private fun isResumeAuthorizedForPlayback(attemptSeq: Long, checkFlapping: Boolean): Boolean {
+        if (releasedFlag.get() || commandCoalescer.hasPendingPauseOrStop()) return false
+        if (attemptSeq <= 0L || !playResumeAbortGuard.isResumeAttemptValid(attemptSeq)) return false
+        if (checkFlapping && routeAndMixerManager.isUsbRouteActivelyFlapping(SystemClock.elapsedRealtime())) {
+            return false
+        }
+        return true
+    }
+
+    private fun abortSupersededPlayLocked(
+        track: AudioTrack?,
+        pauseTrack: Boolean,
+        abandonFocus: Boolean,
+        trackPlayMs: Long,
+        stage: String,
+    ) {
+        isPausedFlag.set(true)
+        if (pauseTrack && track != null) {
+            trackWriter.safePause(track)
+        }
+        if (abandonFocus) {
+            routeAndMixerManager.abandonAudioFocusLocked()
+        }
+        diagnosticLogger?.logAudio("PLAY_RESUME_ABORTED") {
+            linkedMapOf(
+                "stage" to stage,
+                "pauseTrack" to pauseTrack,
+                "trackPlayMs" to trackPlayMs,
+                "status" to _state.value.status.name,
+                "mode" to safetyController.state().mode.name,
+            )
+        }
+        clearPreparingFlagsAfterAbortedPlay()
+        publishDiagnostics()
+    }
+
+    private fun clearPreparingFlagsAfterAbortedPlay() {
+        _state.update { current ->
+            val nextStatus = if (current.status == PlaybackStatus.PREPARING) {
+                PlaybackStatus.PAUSED
+            } else {
+                current.status
+            }
+            if (nextStatus == current.status &&
+                !current.isPreparingPlayback &&
+                !current.preservePlayingUiDuringTransition
+            ) {
+                current
+            } else {
+                current.copy(
+                    status = nextStatus,
+                    isPreparingPlayback = false,
+                    preservePlayingUiDuringTransition = false,
+                )
+            }
+        }
     }
 
     companion object {

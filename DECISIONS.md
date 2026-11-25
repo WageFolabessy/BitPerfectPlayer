@@ -712,5 +712,26 @@ This file records autonomous architectural, dependency, and environment decision
   - Isolates package ID, app drawer label, Room/DataStore app sandboxes, and every merged `ContentProvider` authority between `release` (`com.cangkir.bitperfectplayer`) and `debug` (`com.cangkir.bitperfectplayer.debug`) with zero impact on production `release` builds.
 - **Rejected Alternatives:** Signing local debug builds with the release keystore in source control (security risk and leaves only one app slot on device); creating a separate product flavor when Gradle's built-in `buildTypes.debug` `applicationIdSuffix` already handles clean side-by-side isolation.
 
+---
+
+## `D13.1` — `feat/v1.4` Architectural Anti-Gaming Guardrails & Real-Device Audio Robustness (USB Flapping Deduplication, Bounded Play Settle/Abort Guard, Urgent Audio Priority & Safe Speaker Headroom) (2026-11-25)
+- **Context:**
+  - Review of 24-hour real-device POCO F4 `v1.3` release diagnostic logs (`audio_pipeline.txt`, `performance.txt`) revealed three runtime issues on loose/churning USB-C connections and background speaker playback:
+    1. Rapid 1–5 ms `USB_ATTACHED_EARLY` / `USB_DETACHED_EARLY` bounce bursts while already `PAUSED` in `SAFE_VOLUME_MODE` repeatedly emitted `AUTO_PAUSE` alerts, `AUTO_PAUSE_LATENCY` entries, and UI diagnostic churn.
+    2. Tapping Play mid-USB-flapping blocked `controlExecutor` inside `AudioTrack.play()` (`513 ms`–`3,101 ms`), starving subsequent safety `AUTO_PAUSE` tasks for `~168 ms`.
+    3. Occasional `409–601 ms` `AUDIOTRACK_WRITE_STALL` events appeared under standard `THREAD_PRIORITY_AUDIO` and minimum internal-speaker buffer margins.
+  - Additionally, `AGENTS.md` lacked explicit rules barring artificial `detekt` limit gaming or blanket rule suppression.
+- **Decision:**
+  1. **Anti-Gaming Guardrails ([`AGENTS.md`](AGENTS.md)):** Added Section 5 forbidding artificial `detekt` workarounds (extension-function dumping, widening visibility), rule disabling/baselines/blanket `@Suppress`, and dumping new state into monoliths.
+  2. **Paused Safe-Mode Route Deduplication & Play-Resume Settle/Abort Guard ([`UsbRouteStabilityPolicy.kt`](app/src/main/java/com/cangkir/bitperfectplayer/audio/UsbRouteStabilityPolicy.kt), [`AudioRouteAndMixerManager.kt`](app/src/main/java/com/cangkir/bitperfectplayer/audio/AudioRouteAndMixerManager.kt), [`AudioOutputEngine.kt`](app/src/main/java/com/cangkir/bitperfectplayer/audio/AudioOutputEngine.kt)):**
+     - Pure-Kotlin `UsbRouteStabilityPolicy` + `UsbRouteStabilityTracker` (`0` `android.*` imports) silently refresh route metadata, clear stale preferred mixer attributes asynchronously, and coalesce (`120 ms`) UI diagnostics whenever `PAUSED`/`IDLE` in `SAFE_VOLUME_MODE` with no pending safety warning, while preserving unconditional `FULL_SAFETY_AUTO_PAUSE` whenever playing, starting playback, holding a safety dialog, or in `BIT_PERFECT_OPT_IN`.
+     - `evaluatePlayResume` defers Play across active attach/detach bounce storms (`450 ms` settle window, `900 ms` bounded budget -> `ABORT_ROUTE_UNSTABLE` fail-fast; single clean plugs/unplugs proceed in `0 ms`), and `PlayResumeAbortGuard` immediately invalidates in-flight `AudioTrack.play()` / track reloads from any thread without waiting behind `controlExecutor`.
+  3. **Audio Scheduling & Speaker Headroom ([`PcmStreamRules.kt`](app/src/main/java/com/cangkir/bitperfectplayer/audio/PcmStreamRules.kt), [`AudioTrackWriter.kt`](app/src/main/java/com/cangkir/bitperfectplayer/audio/AudioTrackWriter.kt)):**
+     - Elevated `BitPerfectAudioThread` to `Process.THREAD_PRIORITY_URGENT_AUDIO` (with safe fallback to `THREAD_PRIORITY_AUDIO`) and added a Safe-Mode internal-speaker-only `max(3x minBuf, 160 ms)` frame-aligned `AudioTrack` headroom floor (leaving USB and Bit-Perfect paths untouched).
+- **Rationale:**
+  - Eliminates noisy paused-state `AUTO_PAUSE` spam, prevents blocked HAL `play()` calls from bypassing or delaying immediate pause state, and reduces background scheduling stalls without weakening hearing safety or touching USB/Bit-Perfect timing.
+- **Rejected Alternatives:** Suppressing `AUTO_PAUSE` globally across modes or on single disconnects (unsafe in `BIT_PERFECT_OPT_IN` or during active playback/start); enlarging USB or Bit-Perfect buffers (increases DAC latency and alters verified Bit-Perfect stream sizing); spawning a separate unsynchronized binder executor for `AudioTrack.play()` (introduces unsafe concurrent `AudioTrack` state transitions).
+
+
 
 

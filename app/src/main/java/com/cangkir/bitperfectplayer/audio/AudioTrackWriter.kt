@@ -4,6 +4,7 @@ import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
 import android.os.Build
+import android.os.Process
 import android.os.SystemClock
 import android.util.Log
 import com.cangkir.bitperfectplayer.diagnostics.LocalDiagnosticLogger
@@ -50,6 +51,22 @@ internal class AudioTrackWriter(
     fun isTrackHealthy(track: AudioTrack?): Boolean = runCatching {
         track != null && track.state == AudioTrack.STATE_INITIALIZED
     }.getOrDefault(false)
+
+    /**
+     * Elevates the PCM decode/write worker thread to `THREAD_PRIORITY_URGENT_AUDIO` (with safe
+     * fallback to `THREAD_PRIORITY_AUDIO` if denied by platform/test runtime). Must NOT be
+     * followed by `Thread.setPriority(...)`, which can lower the Linux nice priority.
+     */
+    fun applyPlaybackThreadPriority() {
+        val urgentApplied = runCatching {
+            Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
+        }.isSuccess
+        if (!urgentApplied) {
+            runCatching {
+                Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO)
+            }
+        }
+    }
 
     fun setSpectrumTapActive(active: Boolean) {
         val changed = spectrumTapActive.getAndSet(active) != active
@@ -162,10 +179,15 @@ internal class AudioTrackWriter(
 
         val bytesPerFrame = pcmFormat.bytesPerFrame.coerceAtLeast(1)
         val reportedMinBuf = AudioTrack.getMinBufferSize(pcmFormat.sampleRateHz, channelMask, androidEncoding)
+        val isSafeInternalSpeaker = safetyModeProvider() == AudioOutputMode.SAFE_VOLUME_MODE &&
+            usbDevice == null &&
+            routeAndMixerManager.mapConnectionType(routeAndMixerManager.activeOutputDevice) ==
+            OutputConnectionType.INTERNAL_SPEAKER
         val alignedBufSize = PcmStreamRules.computeAudioTrackBufferSizeBytes(
             reportedMinBufferSize = reportedMinBuf,
             sampleRateHz = pcmFormat.sampleRateHz,
             bytesPerFrame = bytesPerFrame,
+            useSafeSpeakerHeadroom = isSafeInternalSpeaker,
         )
 
         val audioFormat = AudioFormat.Builder()
