@@ -47,6 +47,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.cangkir.bitperfectplayer.BuildConfig
 import com.cangkir.bitperfectplayer.audio.AudioOutputMode
 import com.cangkir.bitperfectplayer.audio.PlaybackControllerState
 import com.cangkir.bitperfectplayer.audio.ReplayGainMode
@@ -164,8 +165,8 @@ fun SettingsScreen(
                 @Suppress("DEPRECATION")
                 context.packageManager.getPackageInfo(context.packageName, 0)
             }
-            pkgInfo.versionName ?: "1.3"
-        }.getOrDefault("1.3")
+            pkgInfo.versionName ?: BuildConfig.VERSION_NAME
+        }.getOrDefault(BuildConfig.VERSION_NAME)
     }
 
     val safetyState = playbackState.engineState.safetyState

@@ -1728,3 +1728,51 @@ Addressed the 3 minor findings observed in real-device POCO F4 video testing and
 
 ### Unverified Physical Hardware Checks (Not Executed in Software-Only Environment)
 - [ ] **Real 120 Hz AMOLED Visual & Frame-Pacing Audit (POCO F4):** Inspect `Subtle` vs `Vibrant` ambient glow appearance behind `Vinyl Disc`, `Square Cover` (including live Front <-> Back flip), and `ArtistDetailView` hero banner; confirm zero frame drops during simultaneous 120 Hz vinyl rotation + `Album` radial spectrum + multi-color Kinetic Sparks; verify crisp legibility of `FLAC · 24-bit · 96,000 Hz` and `Safe Mode` / `Indicated` / `Unverifiable` indicators over vibrant covers.
+
+---
+
+## 51. `feat/v1.4` UI Navigation/Library Modularization, `README.md` Drift Cleanup, Version Bump to `v1.4` (`versionCode = 5`), & Full Pre-Release Gate (`D13.7`)
+
+### Summary of Changes
+1. **Modularized Oversized Navigation & Library UI Files (Zero Visual, Semantic, or Behavioral Regressions):**
+   - **`BitPerfectAppNav.kt` (`1,133` on `main` / `1,153` pre-split -> `451` lines):**
+     - Extracted [`RootPagerNavigator.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/RootPagerNavigator.kt) (`22` lines, preserving `com.cangkir.bitperfectplayer.ui` package visibility for existing UI tests).
+     - Created `app/src/main/java/com/cangkir/bitperfectplayer/ui/navigation/` containing [`NavigationChrome.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/navigation/NavigationChrome.kt) (`316` lines — `AppNavRoutes`, `TopLevelTab`, `RootGlobalOverlays`, `AdaptiveTopLevelNavigationFrame`, `BitPerfectBottomNavBar`, `BitPerfectNavigationRail`), [`AppDestinations.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/navigation/AppDestinations.kt) (`331` lines — `RootNavigationActions`, `RootShellUiState`, and destination wiring), and [`RootMainShellPager.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/navigation/RootMainShellPager.kt) (`151` lines — nested 3-page outer & inner `HorizontalPager` container).
+   - **`ArtistDetailView.kt` (`964` on `main` / `1,008` pre-split -> `356` lines):**
+     - Extracted [`ArtistHeroBanner.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/library/ArtistHeroBanner.kt) (`365` lines), [`ArtistOverflowMenu.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/library/ArtistOverflowMenu.kt) (`179` lines), and [`ArtistAlbumsCarousel.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/library/ArtistAlbumsCarousel.kt) (`238` lines).
+   - **`LibraryGroupViews.kt` (`908` on `main` / `909` pre-split -> `135` lines):**
+     - Extracted [`ArtistsTabList.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/library/ArtistsTabList.kt) (`327` lines), [`AlbumsTabList.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/library/AlbumsTabList.kt) (`304` lines), and [`FoldersTabList.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/library/FoldersTabList.kt) (`244` lines), leaving `LibraryGroupViews.kt` focused on shared `GroupDetailTrackList` and `GroupEmptyState`.
+2. **Streamlined `README.md`, Updated `SPEC.md` & `DECISIONS.md`, and Bumped Version to `v1.4` (`versionCode = 5`):**
+   - Preserved `README.md`'s opening summary and 2x4 `## Screenshots` HTML showcase table (`docs/screenshots/*.png`) intact while removing brittle internal decision IDs, exact millisecond tuning constants, raw class-name dumps, and hardcoded test counts; added concise `v1.4` highlights, updated the package tree (`ui/navigation/`, `androidTest/`), and bumped displayed metadata to `1.4` / `5`.
+   - Updated [`app/build.gradle.kts`](../app/build.gradle.kts) to `versionCode = 5`, `versionName = "1.4"` (preserving `debug` `.debug` / `-dev` side-by-side configuration, `compileSdk = 37`, `targetSdk = 37`, `minSdk = 26`, and R8 `release { optimization { ... } }`), replaced the `"1.3"` fallback literal in [`SettingsScreen.kt`](../app/src/main/java/com/cangkir/bitperfectplayer/ui/settings/SettingsScreen.kt) with `BuildConfig.VERSION_NAME`, updated [`LocalDiagnosticLoggerTest.kt`](../app/src/test/java/com/cangkir/bitperfectplayer/diagnostics/LocalDiagnosticLoggerTest.kt) for `1.4-dev` / `versionCode = 5`, and updated [`SPEC.md`](../SPEC.md) (Section 10) and [`DECISIONS.md`](../DECISIONS.md) (`D13.7`).
+
+### `main` -> `feat/v1.4` Architecture Line-Count Reductions
+
+| File | `main` (`v1.3`) | `feat/v1.4` | Delta |
+| :--- | ---: | ---: | ---: |
+| `AudioOutputEngine.kt` | `1,868` | `1,515` | `-353` |
+| `MainViewModel.kt` | `938` | `374` | `-564` |
+| `BitPerfectAppNav.kt` | `1,133` | `451` | `-682` |
+| `ArtistDetailView.kt` | `964` | `356` | `-608` |
+| `LibraryGroupViews.kt` | `908` | `135` | `-773` |
+
+### Full Pre-Release Software Verification Gate (`./gradlew ktlintCheck detekt testDebugUnitTest lintDebug assembleDebug assembleDebugAndroidTest assembleRelease --max-workers=2 --no-daemon` — Executed Without `clean`)
+- **Kotlin Formatting (`ktlintCheck` across `main`, `test`, `androidTest`, and Kotlin scripts):** **PASS — 0 violations**.
+- **Static Analysis (`detekt` with `LargeClass` active at `allowedLines: 1550`):** **PASS — 0 issues** (`0` baselines, `0` rule suppressions).
+- **JVM Unit & Robolectric Compose UI Tests (`testDebugUnitTest`):** **462 / 462 passed** across **71 test suites** (`0` failed, `0` errors, `0` skipped, `0` `@Ignore`).
+- **Compiler, KSP, & R8 Warnings (`compileDebugKotlin`, `compileReleaseKotlin`, `compileDebugUnitTestKotlin`, `compileDebugAndroidTestKotlin`, `ksp*`, `minifyReleaseWithR8`):** **0** warnings, **0** errors.
+- **Android Lint (`lintDebug` + `lintVitalRelease`):** **0 errors**, **0 warnings across all `app/src/` files** (`14` SARIF entries are solely upstream dependency version notices outside `app/src/`).
+- **Strict Offline Privacy Audit (XML `<uses-permission>` inspection across source + 10 intermediate/merged manifests — 11 manifests total, including both `debug` and `release` merged manifests):** **PASS — 0 `INTERNET`, 0 `RECORD_AUDIO`, 0 `MANAGE_EXTERNAL_STORAGE`, 0 `WRITE_EXTERNAL_STORAGE`, 0 `READ_MEDIA_IMAGES`**.
+- **Merged Manifest Versioning:**
+  - Debug: `versionCode = 5`, `versionName = "1.4-dev"` (`com.cangkir.bitperfectplayer.debug`)
+  - Release: `versionCode = 5`, `versionName = "1.4"` (`com.cangkir.bitperfectplayer`)
+- **Build Artifacts Verified:**
+  - `app/build/outputs/apk/debug/app-debug.apk`: `21,950,845` bytes (`20.93 MB`)
+  - `app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk`: `1,157,323` bytes (`1.10 MB`)
+  - `app/build/outputs/apk/release/app-release-unsigned.apk`: `3,275,752` bytes (`3.12 MB`)
+  - `app/build/outputs/mapping/release/mapping.txt`: `38,734,616` bytes (`36.94 MB`)
+
+### Unverified Physical Hardware Checks (Pending Real POCO F4 + KZ EDX Pro 2 USB-C Testing Before Tagging `v1.4`)
+- [ ] Run on-device `androidTest` instrumentation smoke suite (`AppLaunchAndPrivacyManifestTest`, `AudioPipelineSmokeInstrumentedTest`, `RoomDatabaseDeviceMigrationTest`) on POCO F4.
+- [ ] Verify real USB-C DAC attach/detach `AUTO_PAUSE`, `SAFE_VOLUME_MODE` default, explicit `BIT_PERFECT_OPT_IN` warning dialog, and Android 14+ HyperOS `MIXER_BEHAVIOR_BIT_PERFECT` / `MIXER_BEHAVIOR_DEFAULT` behavior.
+- [ ] Visually audit 120 Hz AMOLED `Subtle` vs `Vibrant` ambient glow, 4-slot artwork adaptation (`FRONT_COVER`, `BACK_COVER`, `DISC`, `ARTIST`), and frequency-mapped `Album` Spectrum + multi-color `Kinetic Sparks` with zero jank.

@@ -150,7 +150,8 @@ class LocalDiagnosticLoggerTest {
             DiagnosticLogExporter.resolveFileProviderAuthority("com.cangkir.bitperfectplayer.debug"),
         )
         assertEquals("com.cangkir.bitperfectplayer.debug", BuildConfig.APPLICATION_ID)
-        assertEquals("1.3-dev", BuildConfig.VERSION_NAME)
+        assertEquals("1.4-dev", BuildConfig.VERSION_NAME)
+        assertEquals(5, BuildConfig.VERSION_CODE)
         assertEquals("com.cangkir.bitperfectplayer.debug", context.packageName)
         assertEquals(
             "BitPerfect Dev",
