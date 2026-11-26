@@ -110,9 +110,13 @@ internal fun SwipeableSquareArtwork(
     onNext: () -> Unit,
     artworkSize: androidx.compose.ui.unit.Dp = 272.dp,
     onBoundsInRootChanged: (Rect) -> Unit = {},
+    onBackCoverVisibilityChanged: (Boolean) -> Unit = {},
 ) {
     DisposableEffect(Unit) {
-        onDispose { onBoundsInRootChanged(Rect.Zero) }
+        onDispose {
+            onBoundsInRootChanged(Rect.Zero)
+            onBackCoverVisibilityChanged(false)
+        }
     }
     val swipeThresholdPx = with(LocalDensity.current) { 76.dp.toPx() }
     var artworkDragOffsetPx by remember(track.uriString) { mutableFloatStateOf(0f) }
@@ -141,6 +145,10 @@ internal fun SwipeableSquareArtwork(
     val currentBackBitmap = backCoverBitmap
     val backImageBitmap = remember(currentBackBitmap) {
         if (currentBackBitmap != null && !currentBackBitmap.isRecycled) currentBackBitmap.asImageBitmap() else null
+    }
+    val isBackCoverDisplayed = showBackCover && backImageBitmap != null
+    LaunchedEffect(track.uriString, isBackCoverDisplayed) {
+        onBackCoverVisibilityChanged(isBackCoverDisplayed)
     }
 
     Box(

@@ -80,6 +80,7 @@ import com.cangkir.bitperfectplayer.library.AlbumArtworkLoader
 import com.cangkir.bitperfectplayer.library.ArtistAlbumItem
 import com.cangkir.bitperfectplayer.library.ArtistDetailHelper
 import com.cangkir.bitperfectplayer.library.ArtistPhotoStore
+import com.cangkir.bitperfectplayer.library.EmbeddedArtworkSlot
 import com.cangkir.bitperfectplayer.library.LibraryGroup
 import com.cangkir.bitperfectplayer.library.TrackSortSpec
 import com.cangkir.bitperfectplayer.ui.InlineSortTriggerButton
@@ -289,11 +290,17 @@ internal fun ArtistDetailView(
         }
     }
 
+    val heroSlot = when (resolvedHero.source) {
+        ArtistHeroSource.CUSTOM_PHOTO, ArtistHeroSource.EMBEDDED_ARTIST -> EmbeddedArtworkSlot.ARTIST
+        else -> EmbeddedArtworkSlot.FRONT_COVER
+    }
     ArtistDetailDynamicThemeWrapper(
         enabled = dynamicCoverThemeEnabled,
         isForegroundPage = isForegroundPage,
         themeCacheKey = resolvedHero.themeCacheKey,
+        heroSlot = heroSlot,
         heroBitmap = resolvedHero.bitmap,
+        fallbackAlbumCandidates = orderedAlbumCoverCandidates,
         isHeroResolved = resolvedHero.isResolved,
         coverThemeColorCache = coverThemeColorCache,
         onContextualDynamicThemeChanged = onContextualDynamicThemeChanged,
@@ -901,7 +908,9 @@ private fun ArtistDetailDynamicThemeWrapper(
     enabled: Boolean,
     isForegroundPage: Boolean = true,
     themeCacheKey: String?,
+    heroSlot: EmbeddedArtworkSlot,
     heroBitmap: Bitmap?,
+    fallbackAlbumCandidates: List<PlaybackTrack>,
     isHeroResolved: Boolean,
     coverThemeColorCache: CoverThemeColorCache?,
     onContextualDynamicThemeChanged: ((DynamicThemeTokens?) -> Unit)? = null,
@@ -909,22 +918,38 @@ private fun ArtistDetailDynamicThemeWrapper(
 ) {
     val parentTokens = LocalActiveDynamicTokens.current
     val latestOnThemeChanged by rememberUpdatedState(onContextualDynamicThemeChanged)
-    var lookup by remember(themeCacheKey) {
-        mutableStateOf(
-            if (themeCacheKey != null && coverThemeColorCache != null) {
-                coverThemeColorCache.peekCachedByKey(themeCacheKey)
+    var lookup by remember(themeCacheKey, heroSlot, fallbackAlbumCandidates) {
+        val initialLookup = if (themeCacheKey != null && coverThemeColorCache != null) {
+            val direct = coverThemeColorCache.peekCachedByKey(themeCacheKey, slot = heroSlot)
+            val needsMonochromeBorrow = direct is CoverThemeLookup.Resolved &&
+                direct.tokens == null &&
+                heroSlot == EmbeddedArtworkSlot.ARTIST &&
+                fallbackAlbumCandidates.isNotEmpty()
+            if (needsMonochromeBorrow) {
+                val cachedFallback = fallbackAlbumCandidates.firstNotNullOfOrNull { candidate ->
+                    (coverThemeColorCache.peekCached(candidate) as? CoverThemeLookup.Resolved)?.tokens
+                }
+                if (cachedFallback != null) CoverThemeLookup.Resolved(cachedFallback) else CoverThemeLookup.Pending
             } else {
-                CoverThemeLookup.Pending
-            },
-        )
+                direct
+            }
+        } else {
+            CoverThemeLookup.Pending
+        }
+        mutableStateOf(initialLookup)
     }
 
     val activeCache = coverThemeColorCache?.takeIf { enabled && isForegroundPage }
-    LaunchedEffect(activeCache, themeCacheKey, heroBitmap) {
+    LaunchedEffect(activeCache, themeCacheKey, heroSlot, heroBitmap, fallbackAlbumCandidates) {
         if (activeCache != null && themeCacheKey != null && heroBitmap != null) {
             if (lookup is CoverThemeLookup.Pending) {
                 lookup = CoverThemeLookup.Resolved(
-                    activeCache.resolveTokensFromBitmap(themeCacheKey, heroBitmap),
+                    activeCache.resolveArtistHeroTokens(
+                        heroKey = themeCacheKey,
+                        heroSlot = heroSlot,
+                        heroBitmap = heroBitmap,
+                        fallbackAlbumCandidates = fallbackAlbumCandidates,
+                    ),
                 )
             }
         }

@@ -1,6 +1,7 @@
 package com.cangkir.bitperfectplayer.audio
 
 import com.cangkir.bitperfectplayer.data.SpectrumColorStyle
+import com.cangkir.bitperfectplayer.ui.theme.ArtworkPaletteExtractor
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.exp
@@ -11,18 +12,10 @@ import kotlin.math.roundToInt
 /**
  * Pure-Kotlin, zero-dependency local cover art color extractor for [SpectrumColorStyle.ALBUM_ADAPTIVE].
  *
- * Samples pixels on a coarse stride (~1,200–2,000 pixels, `< 1 ms` on `Dispatchers.Default`),
- * converts RGB to HSL, filters out near-black/near-white/grayscale pixels, buckets hues into 24
- * bins weighted by saturation and visual prominence, selects up to 3 well-separated hues (`>= 36°`
- * apart), and clamps output colors to crisp OLED-readable vibrancy (`S in 0.55..0.90`, `L in 0.52..0.72`).
+ * Delegates directly to the unified perceptual OKLCH K-Means++ engine ([ArtworkPaletteExtractor])
+ * so Dynamic Theme and the Spectrum Visualizer share a single deterministic multi-color pipeline.
  */
 object AlbumPaletteExtractor {
-    private const val HUE_BUCKETS = 24
-    private const val TARGET_SAMPLE_COUNT = 1_600
-    private const val MIN_HUE_SEPARATION_DEG = 36f
-    private const val MIN_LUM = 0.14f
-    private const val MAX_LUM = 0.90f
-    private const val MIN_SAT = 0.18f
 
     /** Fallback Monochrome Studio silver-ivory triad returned when artwork is missing or purely grayscale. */
     val FALLBACK_STUDIO_PALETTE: IntArray = intArrayOf(
@@ -31,171 +24,17 @@ object AlbumPaletteExtractor {
         0xFFF2F2F0.toInt(),
     )
 
-    private class HueHistogram(
-        val weight: FloatArray,
-        val hue: FloatArray,
-        val sat: FloatArray,
-        val lum: FloatArray,
-        val totalWeight: Float,
-    )
-
     /**
      * Extracts 3 harmonious opaque ARGB accent colors `[bassColor, midColor, trebleColor]` from
      * local artwork ARGB [pixels] (`width * height`). Zero external libraries, zero `android.*`.
      */
     fun extractAccentPalette(pixels: IntArray, width: Int, height: Int): IntArray {
-        val totalPixels = minOf(pixels.size, width * height)
-        if (width <= 0 || height <= 0 || totalPixels <= 0) {
-            return FALLBACK_STUDIO_PALETTE.copyOf()
+        val palette = ArtworkPaletteExtractor.extractPalette(pixels, width, height)
+        return if (palette.isMonochrome) {
+            FALLBACK_STUDIO_PALETTE.copyOf()
+        } else {
+            palette.toSpectrumTriad()
         }
-
-        val histogram = accumulateHueHistogram(pixels, totalPixels)
-        if (histogram.totalWeight <= 1e-4f) {
-            return FALLBACK_STUDIO_PALETTE.copyOf()
-        }
-
-        val pickedIndices = IntArray(3) { -1 }
-        val pickedCount = pickSeparatedHueBuckets(histogram, pickedIndices)
-        if (pickedCount == 0) {
-            return FALLBACK_STUDIO_PALETTE.copyOf()
-        }
-        return buildTriadPalette(histogram, pickedIndices, pickedCount)
-    }
-
-    private fun accumulateHueHistogram(pixels: IntArray, totalPixels: Int): HueHistogram {
-        val stride = (totalPixels / TARGET_SAMPLE_COUNT).coerceAtLeast(1)
-        val bucketWeight = FloatArray(HUE_BUCKETS)
-        val bucketHueSin = FloatArray(HUE_BUCKETS)
-        val bucketHueCos = FloatArray(HUE_BUCKETS)
-        val bucketSatWeighted = FloatArray(HUE_BUCKETS)
-        val bucketLumWeighted = FloatArray(HUE_BUCKETS)
-
-        val hsl = FloatArray(3)
-        var totalWeight = 0f
-
-        var i = 0
-        while (i < totalPixels) {
-            val argb = pixels[i]
-            i += stride
-            if (((argb ushr 24) and 0xFF) < 128) continue
-
-            rgbToHsl(
-                r = (argb ushr 16) and 0xFF,
-                g = (argb ushr 8) and 0xFF,
-                b = argb and 0xFF,
-                outHsl = hsl,
-            )
-            val h = hsl[0]
-            val s = hsl[1]
-            val l = hsl[2]
-            if (l < MIN_LUM || l > MAX_LUM || s < MIN_SAT) continue
-
-            val lumProminence = (1.0f - abs(l - 0.52f) * 1.4f).coerceIn(0.20f, 1.0f)
-            val weight = s * s * lumProminence
-            val bucket = (((h / 360f) * HUE_BUCKETS).toInt()).coerceIn(0, HUE_BUCKETS - 1)
-            val rad = h * (PI.toFloat() / 180f)
-
-            bucketWeight[bucket] += weight
-            bucketHueSin[bucket] += kotlin.math.sin(rad) * weight
-            bucketHueCos[bucket] += kotlin.math.cos(rad) * weight
-            bucketSatWeighted[bucket] += s * weight
-            bucketLumWeighted[bucket] += l * weight
-            totalWeight += weight
-        }
-
-        val bucketHue = FloatArray(HUE_BUCKETS)
-        val bucketSat = FloatArray(HUE_BUCKETS)
-        val bucketLum = FloatArray(HUE_BUCKETS)
-        for (b in 0 until HUE_BUCKETS) {
-            val w = bucketWeight[b]
-            if (w > 0f) {
-                var deg = (kotlin.math.atan2(bucketHueSin[b], bucketHueCos[b]) * (180f / PI.toFloat()))
-                if (deg < 0f) deg += 360f
-                bucketHue[b] = deg
-                bucketSat[b] = bucketSatWeighted[b] / w
-                bucketLum[b] = bucketLumWeighted[b] / w
-            }
-        }
-        return HueHistogram(
-            weight = bucketWeight,
-            hue = bucketHue,
-            sat = bucketSat,
-            lum = bucketLum,
-            totalWeight = totalWeight,
-        )
-    }
-
-    /**
-     * Greedily picks up to 3 strongest buckets with minimum circular hue separation >= 36°.
-     */
-    private fun pickSeparatedHueBuckets(histogram: HueHistogram, pickedIndices: IntArray): Int {
-        var pickedCount = 0
-        while (pickedCount < 3) {
-            var bestBucket = -1
-            var bestWeight = 0f
-            for (b in 0 until HUE_BUCKETS) {
-                val w = histogram.weight[b]
-                if (w > bestWeight && isFarEnoughFromPicked(histogram.hue, b, pickedIndices, pickedCount)) {
-                    bestWeight = w
-                    bestBucket = b
-                }
-            }
-            if (bestBucket < 0) break
-            pickedIndices[pickedCount++] = bestBucket
-        }
-        return pickedCount
-    }
-
-    private fun isFarEnoughFromPicked(bucketHue: FloatArray, candidate: Int, pickedIndices: IntArray, pickedCount: Int): Boolean {
-        for (p in 0 until pickedCount) {
-            if (circularHueDistanceDeg(bucketHue[candidate], bucketHue[pickedIndices[p]]) < MIN_HUE_SEPARATION_DEG) {
-                return false
-            }
-        }
-        return true
-    }
-
-    private fun buildTriadPalette(histogram: HueHistogram, pickedIndices: IntArray, pickedCount: Int): IntArray {
-        val h0 = histogram.hue[pickedIndices[0]]
-        val s0 = histogram.sat[pickedIndices[0]].coerceIn(0.55f, 0.90f)
-        val l0 = histogram.lum[pickedIndices[0]].coerceIn(0.52f, 0.66f)
-
-        val out = IntArray(3)
-        when (pickedCount) {
-            1 -> {
-                // Monochromatic cover (e.g. red/black or yellow/black): derive analogous + complementary lift.
-                out[0] = hslToOpaqueArgb(h0, s0, l0)
-                out[1] = hslToOpaqueArgb((h0 + 40f) % 360f, (s0 * 0.95f).coerceIn(0.55f, 0.90f), (l0 + 0.05f).coerceIn(0.52f, 0.70f))
-                out[2] = hslToOpaqueArgb((h0 + 155f) % 360f, (s0 * 0.90f).coerceIn(0.55f, 0.88f), (l0 + 0.10f).coerceIn(0.56f, 0.72f))
-            }
-            2 -> {
-                val h1 = histogram.hue[pickedIndices[1]]
-                val s1 = histogram.sat[pickedIndices[1]].coerceIn(0.55f, 0.90f)
-                val l1 = histogram.lum[pickedIndices[1]].coerceIn(0.54f, 0.68f)
-                // Derive a harmonious third hue separated >= 36° from both h0 and h1.
-                var h2 = (h0 + 180f) % 360f
-                if (circularHueDistanceDeg(h2, h1) < MIN_HUE_SEPARATION_DEG) {
-                    h2 = (h1 + 60f) % 360f
-                }
-                val s2 = ((s0 + s1) * 0.5f).coerceIn(0.55f, 0.88f)
-                val l2 = (maxOf(l0, l1) + 0.06f).coerceIn(0.56f, 0.72f)
-                out[0] = hslToOpaqueArgb(h0, s0, l0)
-                out[1] = hslToOpaqueArgb(h1, s1, l1)
-                out[2] = hslToOpaqueArgb(h2, s2, l2)
-            }
-            else -> {
-                val h1 = histogram.hue[pickedIndices[1]]
-                val s1 = histogram.sat[pickedIndices[1]].coerceIn(0.55f, 0.90f)
-                val l1 = histogram.lum[pickedIndices[1]].coerceIn(0.54f, 0.68f)
-                val h2 = histogram.hue[pickedIndices[2]]
-                val s2 = histogram.sat[pickedIndices[2]].coerceIn(0.55f, 0.90f)
-                val l2 = histogram.lum[pickedIndices[2]].coerceIn(0.56f, 0.72f)
-                out[0] = hslToOpaqueArgb(h0, s0, l0)
-                out[1] = hslToOpaqueArgb(h1, s1, l1)
-                out[2] = hslToOpaqueArgb(h2, s2, l2)
-            }
-        }
-        return out
     }
 
     internal fun circularHueDistanceDeg(h1: Float, h2: Float): Float {
@@ -230,55 +69,6 @@ object AlbumPaletteExtractor {
         outHsl[0] = h
         outHsl[1] = s.coerceIn(0f, 1f)
         outHsl[2] = l.coerceIn(0f, 1f)
-    }
-
-    internal fun hslToOpaqueArgb(hDeg: Float, s: Float, l: Float): Int {
-        val h = ((hDeg % 360f) + 360f) % 360f
-        val sat = s.coerceIn(0f, 1f)
-        val lum = l.coerceIn(0f, 1f)
-        val c = (1f - abs(2f * lum - 1f)) * sat
-        val x = c * (1f - abs(((h / 60f) % 2f) - 1f))
-        val m = lum - c * 0.5f
-
-        val r1: Float
-        val g1: Float
-        val b1: Float
-        when {
-            h < 60f -> {
-                r1 = c
-                g1 = x
-                b1 = 0f
-            }
-            h < 120f -> {
-                r1 = x
-                g1 = c
-                b1 = 0f
-            }
-            h < 180f -> {
-                r1 = 0f
-                g1 = c
-                b1 = x
-            }
-            h < 240f -> {
-                r1 = 0f
-                g1 = x
-                b1 = c
-            }
-            h < 300f -> {
-                r1 = x
-                g1 = 0f
-                b1 = c
-            }
-            else -> {
-                r1 = c
-                g1 = 0f
-                b1 = x
-            }
-        }
-        val r = ((r1 + m) * 255f).roundToInt().coerceIn(0, 255)
-        val g = ((g1 + m) * 255f).roundToInt().coerceIn(0, 255)
-        val b = ((b1 + m) * 255f).roundToInt().coerceIn(0, 255)
-        return (0xFF shl 24) or (r shl 16) or (g shl 8) or b
     }
 }
 

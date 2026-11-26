@@ -80,6 +80,7 @@ import com.cangkir.bitperfectplayer.ui.SleepTimerBottomSheet
 import com.cangkir.bitperfectplayer.ui.SleepTimerTopBarButton
 import com.cangkir.bitperfectplayer.ui.WindowLayoutMetrics
 import com.cangkir.bitperfectplayer.ui.theme.AmberIndicated
+import com.cangkir.bitperfectplayer.ui.theme.CoverThemeColorCache
 import com.cangkir.bitperfectplayer.ui.theme.EmeraldSafe
 import com.cangkir.bitperfectplayer.ui.theme.TextMuted
 import kotlinx.coroutines.Dispatchers
@@ -127,6 +128,8 @@ fun NowPlayingScreen(
     onOpenLyrics: () -> Unit,
     onOpenDiagnostics: () -> Unit,
     isPageActive: Boolean = true,
+    coverThemeColorCache: CoverThemeColorCache? = null,
+    onBackCoverVisibilityChanged: (Boolean) -> Unit = {},
 ) {
     val track = playbackState.activeTrack
     val safetyState = playbackState.engineState.safetyState
@@ -156,16 +159,40 @@ fun NowPlayingScreen(
         }
     }
 
-    // Async local cover-art accent extraction strictly on Dispatchers.Default when Album style is selected.
+    var isBackCoverVisible by remember(track?.uriString, artworkStyle) { mutableStateOf(false) }
+    val latestOnBackCoverVisibilityChanged by rememberUpdatedState(onBackCoverVisibilityChanged)
+    val handleBackCoverVisibilityChanged: (Boolean) -> Unit = remember(track?.uriString, artworkStyle) {
+        { visible ->
+            isBackCoverVisible = visible
+            latestOnBackCoverVisibilityChanged(visible)
+        }
+    }
+
+    // Unified 4-slot OKLCH spectrum triad lookup reusing CoverThemeColorCache off-main when available.
     var albumSpectrumPalette by remember(track?.uriString) {
         mutableStateOf(AlbumPaletteExtractor.FALLBACK_STUDIO_PALETTE)
     }
-    LaunchedEffect(track?.uriString, spectrumVisualizerEnabled, spectrumColorStyle) {
+    LaunchedEffect(
+        track?.uriString,
+        artworkStyle,
+        isBackCoverVisible,
+        spectrumVisualizerEnabled,
+        spectrumColorStyle,
+        coverThemeColorCache,
+    ) {
         if (track == null || !spectrumVisualizerEnabled || spectrumColorStyle != SpectrumColorStyle.ALBUM_ADAPTIVE) {
             return@LaunchedEffect
         }
-        val bitmap = albumArtworkLoader.loadArtwork(track, AlbumArtworkLoader.THUMBNAIL_SIZE_PX)
-        albumSpectrumPalette = withContext(Dispatchers.Default) { extractAlbumPaletteFromBitmap(bitmap) }
+        albumSpectrumPalette = if (coverThemeColorCache != null) {
+            coverThemeColorCache.resolveSpectrumTriad(
+                track = track,
+                artworkStyle = artworkStyle,
+                isBackCoverVisible = isBackCoverVisible,
+            )
+        } else {
+            val bitmap = albumArtworkLoader.loadArtwork(track, AlbumArtworkLoader.THUMBNAIL_SIZE_PX)
+            withContext(Dispatchers.Default) { extractAlbumPaletteFromBitmap(bitmap) }
+        }
     }
 
     var showAudioModeSheet by remember { mutableStateOf(false) }
@@ -390,6 +417,7 @@ fun NowPlayingScreen(
                                     onBeginTurntableScratch = onBeginTurntableScratch,
                                     onUpdateTurntableScratchRate = onUpdateTurntableScratchRate,
                                     onEndTurntableScratch = onEndTurntableScratch,
+                                    onBackCoverVisibilityChanged = handleBackCoverVisibilityChanged,
                                 )
                             }
                             Column(
@@ -457,6 +485,7 @@ fun NowPlayingScreen(
                             onBeginTurntableScratch = onBeginTurntableScratch,
                             onUpdateTurntableScratchRate = onUpdateTurntableScratchRate,
                             onEndTurntableScratch = onEndTurntableScratch,
+                            onBackCoverVisibilityChanged = handleBackCoverVisibilityChanged,
                         )
                         Spacer(modifier = Modifier.height(16.dp))
                         NowPlayingTrackControlsSection(
@@ -536,6 +565,7 @@ private fun NowPlayingHeroCenterpiece(
     onBeginTurntableScratch: () -> Boolean,
     onUpdateTurntableScratchRate: (Float) -> Unit,
     onEndTurntableScratch: (Long?) -> Unit,
+    onBackCoverVisibilityChanged: (Boolean) -> Unit = {},
 ) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         when (artworkStyle) {
@@ -602,6 +632,7 @@ private fun NowPlayingHeroCenterpiece(
                     onNext = onNext,
                     artworkSize = squareArtworkSize,
                     onBoundsInRootChanged = { swipeExclusionBounds.squareArtworkRectInRoot = it },
+                    onBackCoverVisibilityChanged = onBackCoverVisibilityChanged,
                 )
                 if (spectrumVisualizerEnabled) {
                     Spacer(modifier = Modifier.height(8.dp))

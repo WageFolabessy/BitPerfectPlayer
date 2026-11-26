@@ -789,3 +789,28 @@ This file records autonomous architectural, dependency, and environment decision
 
 
 
+
+---
+
+## `D13.5` — Pure-Kotlin OKLCH Multi-Color Extraction Engine, Context-Aware 4-Slot Artwork Palette System, & Unified Spectrum Triad Pipeline (2026-11-26)
+- **Context:**
+  - Dynamic Cover Theme previously relied on a 1D 36-bucket HSL single-hue histogram in `CoverThemePaletteGenerator.kt` (tinting all UI roles from one dominant hue) and a separate duplicated 1D 24-bucket HSL histogram in `SpectrumVisualDsp.kt` (`AlbumPaletteExtractor`), while `CoverThemeColorCache` cached only `FRONT_COVER` tokens rather than perceptual multi-color palettes keyed per displayed artwork metadata slot (`FRONT_COVER`, `BACK_COVER`, `DISC`, `ARTIST`).
+- **Decision:**
+  1. **Zero-Dependency Perceptual OKLCH Math (`ui/theme/OklchColorMath.kt`, pure Kotlin, `0` `android.*` / `androidx.*` imports):**
+     - Implemented exact `sRGB <-> Linear RGB <-> OKLab <-> OKLCH` conversions with 14-step hue-preserving chroma bisection for sRGB gamut clamping (`oklchToSrgbArgb`, `maxInGamutChroma`), plus WCAG 2.1 luminance/contrast solvers (`solveAccessibleDarkThemeAccent`, `solveAccessibleLightText`) with hue-aware lightness bounds so deep blues/violets stay saturated cobalt/violet instead of washing out to chalky pastels and yellows/golds stay luminous warm gold instead of turning muddy olive.
+  2. **Deterministic Center-Weighted OKLab K-Means++ Clustering (`ui/theme/ArtworkPaletteExtractor.kt` + `ui/theme/CoverThemePaletteGenerator.kt`, pure Kotlin):**
+     - Replaced the 1D HSL single-hue histogram with deterministic, seeded, center-weighted OKLab K-Means++ (`k = 5`, `<= 12` iterations on `<= 48x48` pixels, off-main on `Dispatchers.Default`).
+     - Added spatial center weighting (`0.40..1.0`) plus population-dominant primary scoring (`populationShare^0.75`) so tiny neon corner badges/stickers cannot hijack the dominant artwork theme while genuine secondary (`>= 28 deg` hue separation, `>= 4%` share) and tertiary (`>= 36 deg` separation) chromatic clusters produce true multi-color `ArtworkColorPalette` harmony (`canvasTint`, `primaryAccent`, `secondaryAccent`, `highlightPeak`, atmospheric glow stops, and 3-stop OLED spectrum triad).
+     - Added `DynamicThemeIntensity` (`SUBTLE`, `VIBRANT`) and enriched `DynamicThemeTokens` (`typealias BitPerfectDynamicTokens = DynamicThemeTokens`) while keeping all semantic diagnostic tokens (`EmeraldSafe`, `AmberIndicated`, `CoralWarning`) strictly untouched and enforcing WCAG 2.1 contrast (`>= 4.5:1` accents, `>= 7.0:1` primary text, dark background luminance `< 0.05`) across all `0..360 deg` hue angles in both presets.
+  3. **Context-Aware 4-Slot Cache, Lazy Monochrome-Borrow Policy, & `DynamicThemeCoordinator`:**
+     - Extended [`CoverThemeResolver.kt`](app/src/main/java/com/cangkir/bitperfectplayer/ui/theme/CoverThemeResolver.kt) and upgraded [`CoverThemeColorCache.kt`](app/src/main/java/com/cangkir/bitperfectplayer/ui/theme/CoverThemeColorCache.kt) to key its bounded `LruCache` (`160` entries) by `ArtworkThemeCacheKey(sourceKey, EmbeddedArtworkSlot)` storing perceptual `ArtworkColorPalette?` downsampled to `<= 48x48` on `Dispatchers.Default` — switching `SUBTLE`/`VIBRANT` or reading spectrum triads never re-decodes bitmaps, and unrequested slots are never eagerly decoded.
+     - Extracted pure-Kotlin [`DynamicThemeCoordinator.kt`](app/src/main/java/com/cangkir/bitperfectplayer/ui/theme/DynamicThemeCoordinator.kt) (`DynamicThemeSlotPolicy` + reactive `DynamicThemeCoordinator`) out of `MainViewModel.kt`, implementing lazy monochrome borrow:
+       - `Vinyl Disc` mode -> `DISC` slot (lazily borrowing chromatic `FRONT_COVER` only if `DISC` is absent or monochrome; Monochrome Studio if both absent/monochrome),
+       - `Square Cover` mode -> `FRONT_COVER` by default (switching on-demand to `BACK_COVER` when flipped via `SwipeableSquareArtwork`, borrowing `FRONT_COVER` if `BACK_COVER` is monochrome, and resetting race-free by track URI on track skip),
+       - `Artist Detail` -> `ARTIST` slot (`CUSTOM_PHOTO` or `EMBEDDED_ARTIST`), lazily borrowing chromatic oldest-first album `FRONT_COVER` if monochrome/absent before falling back to Monochrome Studio,
+       - `Library` / `Album Detail` / `MiniPlayer` -> `FRONT_COVER`.
+  4. **Unified Spectrum Extractor (`audio/SpectrumVisualDsp.kt` + `ui/nowplaying/NowPlayingScreen.kt`):**
+     - Replaced the duplicated 24-bucket 1D HSL histogram inside `AlbumPaletteExtractor` with direct delegation to `ArtworkPaletteExtractor.extractPalette(...).toSpectrumTriad()`, and wired `NowPlayingScreen` (`SpectrumColorStyle.ALBUM_ADAPTIVE`) directly to `CoverThemeColorCache.resolveSpectrumTriad(track, artworkStyle, isBackCoverVisible)` so the visualizer shares the unified 4-slot OKLCH cache with zero redundant bitmap scans.
+- **Rationale:**
+  - Delivers perceptually faithful multi-color dynamic theming and spectrum accents across all 4 embedded/custom artwork slots with zero external libraries, zero network/storage permissions, strict off-main execution, and clean separation from `MainViewModel` (`AGENTS.md` Section 5).
+- **Rejected Alternatives:** Importing `androidx.palette:palette-ktx` (extra dependency + legacy RGB/HSL median-cut quantization lacking OKLCH chroma-bisection gamut preservation and 4-slot monochrome borrow); eagerly decoding all 4 artwork slots on track switch (wastes I/O and RAM on unviewed back covers/artist art); dumping dynamic theme slot state machine directly into `MainViewModel.kt` or `BitPerfectAppNav.kt`.

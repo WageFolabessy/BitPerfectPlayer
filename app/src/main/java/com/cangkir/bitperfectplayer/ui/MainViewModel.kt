@@ -28,11 +28,12 @@ import com.cangkir.bitperfectplayer.library.PlaylistsUiSnapshot
 import com.cangkir.bitperfectplayer.library.TrackDetailsLoader
 import com.cangkir.bitperfectplayer.library.TrackTechnicalInfo
 import com.cangkir.bitperfectplayer.lyrics.LyricsStore
+import com.cangkir.bitperfectplayer.ui.theme.ArtworkColorPalette
 import com.cangkir.bitperfectplayer.ui.theme.CoverThemeResolver
+import com.cangkir.bitperfectplayer.ui.theme.DynamicThemeCoordinator
 import com.cangkir.bitperfectplayer.ui.theme.DynamicThemeTokens
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
@@ -40,7 +41,6 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -59,8 +59,9 @@ data class MainViewModelMediaServices(
 
 /**
  * Shared presentation ViewModel composing playback transport/DSP controls with cohesive domain
- * coordinators ([library], [playlists], [settings]). Depends strictly on narrow interfaces so all
- * state transitions and coordinator behaviors run under pure JVM unit tests without an application container.
+ * coordinators ([library], [playlists], [settings], [dynamicTheme]). Depends strictly on narrow
+ * interfaces so all state transitions and coordinator behaviors run under pure JVM unit tests
+ * without an application container.
  */
 class MainViewModel(
     private val playbackTransport: PlaybackTransportControl,
@@ -126,20 +127,18 @@ class MainViewModel(
     val dynamicCoverThemeEnabled: StateFlow<Boolean> = settings.dynamicCoverThemeEnabled
     val initialStartupHomepage: StateFlow<DefaultHomepage?> = settings.initialStartupHomepage
 
-    private val playbackDynamicThemeTokensState = MutableStateFlow<DynamicThemeTokens?>(null)
-    private val contextualDynamicThemeBySourceState = MutableStateFlow<Map<String, DynamicThemeTokens>>(emptyMap())
-
-    val globalDynamicThemeTokens: StateFlow<DynamicThemeTokens?> = combine(
-        dynamicCoverThemeEnabled,
-        playbackDynamicThemeTokensState,
-        contextualDynamicThemeBySourceState,
-    ) { enabled, playbackTokens, contextualMap ->
-        if (!enabled) null else contextualMap.values.lastOrNull() ?: playbackTokens
-    }.stateIn(
+    val dynamicTheme = DynamicThemeCoordinator(
         scope = viewModelScope,
-        started = SharingStarted.Eagerly,
-        initialValue = null,
+        coverThemeResolver = mediaServices.coverThemeResolver,
+        dynamicThemeEnabled = dynamicCoverThemeEnabled,
+        activeTrackFlow = playbackState
+            .map { it.activeTrack }
+            .stateIn(scope = viewModelScope, started = SharingStarted.Eagerly, initialValue = playbackState.value.activeTrack),
+        artworkStyleFlow = nowPlayingArtworkStyle,
     )
+
+    val globalDynamicThemeTokens: StateFlow<DynamicThemeTokens?> = dynamicTheme.globalDynamicThemeTokens
+    val activeTrackPalette: StateFlow<ArtworkColorPalette?> = dynamicTheme.activeTrackPalette
 
     val lyricsUiState: StateFlow<LyricsUiState> = library.lyricsUiState
     val trackInfoState: StateFlow<TrackTechnicalInfo?> = library.trackInfoState
@@ -149,7 +148,6 @@ class MainViewModel(
         library.triggerInitialSync()
         observeSessionRestore()
         observeActiveTrackLyrics()
-        observeDynamicTheme()
         observeAdjacentArtworkPreload()
     }
 
@@ -176,23 +174,6 @@ class MainViewModel(
                         playbackState.value.activeTrack?.uriString == targetUri
                     }
                 }
-        }
-    }
-
-    private fun observeDynamicTheme() {
-        val activeTrackForThemeFlow = playbackState
-            .map { it.activeTrack }
-            .distinctUntilChangedBy { track -> track?.let { mediaServices.coverThemeResolver.cacheKeyFor(it) } }
-        viewModelScope.launch {
-            combine(dynamicCoverThemeEnabled, activeTrackForThemeFlow) { enabled, track ->
-                enabled to track
-            }.collectLatest { (enabled, track) ->
-                playbackDynamicThemeTokensState.value = if (!enabled || track == null) {
-                    null
-                } else {
-                    mediaServices.coverThemeResolver.resolveTokens(track)
-                }
-            }
         }
     }
 
@@ -317,9 +298,7 @@ class MainViewModel(
     fun setReplayGainPreventClipping(preventClipping: Boolean) = playbackAudio.setReplayGainPreventClipping(preventClipping)
 
     fun setContextualDynamicTheme(sourceKey: String, tokens: DynamicThemeTokens?) {
-        contextualDynamicThemeBySourceState.update { current ->
-            if (tokens == null) current - sourceKey else current + (sourceKey to tokens)
-        }
+        dynamicTheme.setContextualDynamicTheme(sourceKey, tokens)
     }
 
     fun setSpectrumVisualizerActive(active: Boolean) {

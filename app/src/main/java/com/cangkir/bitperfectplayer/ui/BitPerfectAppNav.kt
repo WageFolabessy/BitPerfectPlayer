@@ -498,6 +498,10 @@ private fun BitPerfectNowPlayingDestination(
         onOpenLyrics = onOpenLyrics,
         onOpenDiagnostics = onOpenDiagnostics,
         isPageActive = isPageActive,
+        coverThemeColorCache = visualAssets.coverThemeColorCache,
+        onBackCoverVisibilityChanged = { visible ->
+            viewModel.dynamicTheme.setNowPlayingBackCoverVisible(visible, activeTrack?.uriString)
+        },
     )
 }
 
