@@ -35,13 +35,32 @@ internal class AudioTrackWriter(
     private val diagnosticLogger: LocalDiagnosticLogger? = null,
     private val safetyModeProvider: () -> AudioOutputMode = { AudioOutputMode.SAFE_VOLUME_MODE },
     private val isUsbConnectedProvider: () -> Boolean = { false },
-) {
+) : AudioSpectrumTap {
     // Strictly read-only, lifecycle-gated PCM tap (~192 KB) for the radial FFT spectrum visualizer.
     // Allocated lazily ONLY when active; released immediately when disabled, backgrounded, or stopped.
     private val spectrumTapActive = AtomicBoolean(false)
 
     @Volatile
     private var spectrumPcmTap: SpectrumPcmTap? = null
+
+    fun asSinkFactory(routeAndMixerManager: AudioRouteAndMixerManager): AudioOutputSinkFactory = object : AudioOutputSinkFactory {
+        override fun tryCreateSinkLocked(pcmFormat: DecodedPcmFormat): Result<AudioOutputSink> =
+            tryCreateConfiguredAudioTrackLocked(pcmFormat, routeAndMixerManager).map { configured ->
+                AndroidAudioOutputSink(
+                    track = configured.track,
+                    actualSampleRateHz = configured.actualSampleRateHz,
+                    actualEncodingLabel = configured.actualEncodingLabel,
+                    isPinnedToPreferredUsbDevice = configured.isPinnedToPreferredUsbDevice,
+                    writer = this@AudioTrackWriter,
+                )
+            }
+
+        override fun isGenerationActive(expectedGeneration: Long): Boolean = this@AudioTrackWriter.isGenerationActive(expectedGeneration)
+
+        override fun applyPlaybackThreadPriority() = this@AudioTrackWriter.applyPlaybackThreadPriority()
+
+        override fun sleepUninterrupted(durationMs: Long): Boolean = this@AudioTrackWriter.sleepUninterrupted(durationMs)
+    }
 
     fun isWorkerActive(): Boolean = !stopWorkerFlag.get() && !releasedFlag.get()
 
@@ -68,23 +87,23 @@ internal class AudioTrackWriter(
         }
     }
 
-    fun setSpectrumTapActive(active: Boolean) {
+    override fun setSpectrumTapActive(active: Boolean) {
         val changed = spectrumTapActive.getAndSet(active) != active
         if (!active && changed) {
             spectrumPcmTap = null
         }
     }
 
-    fun releaseSpectrumTap() {
+    override fun releaseSpectrumTap() {
         spectrumPcmTap = null
     }
 
-    fun deactivateAndReleaseSpectrumTap() {
+    override fun deactivateAndReleaseSpectrumTap() {
         spectrumTapActive.set(false)
         spectrumPcmTap = null
     }
 
-    fun resetSpectrumTap(sampleRateHz: Int, trackFrameCursor: Long) {
+    override fun resetSpectrumTap(sampleRateHz: Int, trackFrameCursor: Long) {
         if (spectrumTapActive.get()) {
             val tap = spectrumPcmTap ?: SpectrumPcmTap().also { spectrumPcmTap = it }
             tap.reset(sampleRateHz, trackFrameCursor)
@@ -93,11 +112,11 @@ internal class AudioTrackWriter(
         }
     }
 
-    fun resetSpectrumTapIfPresent(sampleRateHz: Int, trackFrameCursor: Long) {
+    override fun resetSpectrumTapIfPresent(sampleRateHz: Int, trackFrameCursor: Long) {
         spectrumPcmTap?.reset(sampleRateHz, trackFrameCursor)
     }
 
-    fun tapPcmBytesReadOnly(
+    override fun tapPcmBytesReadOnly(
         sampleRateHz: Int,
         frameStart: Long,
         encoding: PcmEncodingType,
@@ -117,7 +136,7 @@ internal class AudioTrackWriter(
         )
     }
 
-    fun tapInterleavedFloatsReadOnly(
+    override fun tapInterleavedFloatsReadOnly(
         sampleRateHz: Int,
         frameStart: Long,
         srcFloats: FloatArray,
@@ -134,18 +153,15 @@ internal class AudioTrackWriter(
         )
     }
 
-    fun sampleCurrentSpectrumWindow(track: AudioTrack?, isPlayingState: Boolean, outMonoSamples: FloatArray): Int {
+    override fun sampleCurrentSpectrumWindow(sink: AudioOutputSink?, isPlayingState: Boolean, outMonoSamples: FloatArray): Int {
         val isEnginePlaying = isPlayingState && !isPausedFlag.get() && !releasedFlag.get()
         if (!spectrumTapActive.get() || !isEnginePlaying) {
             return 0
         }
         val tap = spectrumPcmTap ?: return 0
-        val activeTrack = track ?: return 0
-        val isTrackPlaying = runCatching {
-            activeTrack.state == AudioTrack.STATE_INITIALIZED && activeTrack.playState == AudioTrack.PLAYSTATE_PLAYING
-        }.getOrDefault(false)
-        if (!isTrackPlaying) return 0
-        val headFrame = readUnsignedPlaybackHeadFrames(activeTrack)
+        val activeSink = sink ?: return 0
+        if (!activeSink.isPlaying()) return 0
+        val headFrame = activeSink.readPlaybackHeadFrames()
         return tap.sampleWindowAtTrackFrame(headFrame, outMonoSamples)
     }
 

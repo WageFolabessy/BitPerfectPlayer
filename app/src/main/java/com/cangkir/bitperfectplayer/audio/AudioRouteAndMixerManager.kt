@@ -50,7 +50,7 @@ internal class AudioRouteAndMixerManager(
     private val currentEngineStatusName: () -> String = { "UNKNOWN" },
     private val isPlaybackActiveOrStarting: () -> Boolean = isCurrentlyPlaying,
     private val onPausedSafeModeRouteRefreshed: (coalesceDiagnostics: Boolean) -> Unit = { onDiagnosticsChanged() },
-) {
+) : AudioRouteControl {
     private data class MixerNegotiationResult(
         val behavior: NegotiatedMixerBehavior,
         val summary: String,
@@ -93,7 +93,7 @@ internal class AudioRouteAndMixerManager(
     private val routeFilterInitialized = AtomicBoolean(false)
 
     @Volatile
-    var activeNegotiatedMixerBehavior: NegotiatedMixerBehavior =
+    override var activeNegotiatedMixerBehavior: NegotiatedMixerBehavior =
         NegotiatedMixerBehavior.NOT_APPLICABLE_SAFE_MODE
         private set
 
@@ -102,22 +102,22 @@ internal class AudioRouteAndMixerManager(
         private set
 
     @Volatile
-    var hasAudioFocus: Boolean = false
+    override var hasAudioFocus: Boolean = false
         private set
 
     @Volatile
-    var resumeAfterTransientFocusLoss: Boolean = false
+    override var resumeAfterTransientFocusLoss: Boolean = false
 
-    val hasActivePreferredMixer: Boolean
+    override val hasActivePreferredMixer: Boolean
         get() = mixerSessionTracker.hasActivePreference
 
-    fun evaluatePlayResume(nowElapsedMs: Long, firstPlayRequestElapsedMs: Long): PlayResumeRouteGuardResult =
+    override fun evaluatePlayResume(nowElapsedMs: Long, firstPlayRequestElapsedMs: Long): PlayResumeRouteGuardResult =
         usbRouteStabilityTracker.evaluatePlayResume(
             nowElapsedMs = nowElapsedMs,
             firstPlayRequestElapsedMs = firstPlayRequestElapsedMs,
         )
 
-    fun isUsbRouteActivelyFlapping(nowElapsedMs: Long): Boolean = usbRouteStabilityTracker.isActivelyFlapping(nowElapsedMs)
+    override fun isUsbRouteActivelyFlapping(nowElapsedMs: Long): Boolean = usbRouteStabilityTracker.isActivelyFlapping(nowElapsedMs)
 
     fun shouldBindPreferredUsbDevice(hasUsbSink: Boolean): Boolean =
         AudioStartPathPolicy.shouldBindPreferredUsbDevice(safetyController.state().mode, hasUsbSink)
@@ -621,7 +621,7 @@ internal class AudioRouteAndMixerManager(
         }
     }
 
-    fun initializeRouteMonitoring() {
+    override fun initializeRouteMonitoring() {
         registerAudioMonitors()
         scheduleAsyncOutputDeviceRefresh(isInitialSync = true)
     }
@@ -654,7 +654,7 @@ internal class AudioRouteAndMixerManager(
         }
     }
 
-    fun unregisterAudioMonitors() {
+    override fun unregisterAudioMonitors() {
         if (receiversRegistered) {
             receiversRegistered = false
             runCatching { audioManager.unregisterAudioDeviceCallback(audioDeviceCallback) }
@@ -670,7 +670,7 @@ internal class AudioRouteAndMixerManager(
         }
     }
 
-    fun requestAudioFocusLocked(forceRequest: Boolean = false): Boolean {
+    override fun requestAudioFocusLocked(forceRequest: Boolean): Boolean {
         if (hasAudioFocus && !forceRequest) return true
         val startMs = SystemClock.elapsedRealtime()
         val res = audioManager.requestAudioFocus(audioFocusRequest)
@@ -689,7 +689,7 @@ internal class AudioRouteAndMixerManager(
         return hasAudioFocus
     }
 
-    fun abandonAudioFocusLocked(): Long {
+    override fun abandonAudioFocusLocked(): Long {
         if (!hasAudioFocus) return 0L
         val startMs = SystemClock.elapsedRealtime()
         runCatching { audioManager.abandonAudioFocusRequest(audioFocusRequest) }
@@ -899,6 +899,14 @@ internal class AudioRouteAndMixerManager(
         activeNegotiatedMixerSummary = "Default System Mixer (Safe Mode)"
     }
 
+    override fun clearPreferredMixerAttributes(async: Boolean) {
+        if (async) {
+            clearPreferredMixerAttributesAsyncOnApi34(null)
+        } else {
+            clearPreferredMixerAttributesOnApi34(null)
+        }
+    }
+
     fun resolveDiagnosticDeviceAndConnection(fallbackDeviceName: String): Pair<String, OutputConnectionType> {
         val device = activeOutputDevice ?: selectPreferredFromCachedSinks()
         val connType = when {
@@ -910,7 +918,7 @@ internal class AudioRouteAndMixerManager(
         return deviceName to connType
     }
 
-    fun buildDiagnosticSnapshot(
+    override fun buildDiagnosticSnapshot(
         safety: AudioSafetyState,
         activeFormat: DecodedPcmFormat?,
         audioTrackSampleRateHz: Int,
@@ -946,7 +954,7 @@ internal class AudioRouteAndMixerManager(
         )
     }
 
-    fun buildPendingTrackDiagnosticsSnapshot(
+    override fun buildPendingTrackDiagnosticsSnapshot(
         safety: AudioSafetyState,
         container: String,
         codec: String,

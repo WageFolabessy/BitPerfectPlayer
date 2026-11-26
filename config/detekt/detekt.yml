@@ -9,7 +9,11 @@ complexity:
     ignoreAnnotated:
       - 'Composable'
   LargeClass:
-    active: false
+    active: true
+    allowedLines: 1550
+    excludes:
+      - '**/test/**'
+      - '**/androidTest/**'
   LongMethod:
     active: true
     allowedLines: 120

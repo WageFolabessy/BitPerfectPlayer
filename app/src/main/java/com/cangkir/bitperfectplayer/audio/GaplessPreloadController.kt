@@ -1,10 +1,7 @@
 package com.cangkir.bitperfectplayer.audio
 
-import android.content.Context
 import android.net.Uri
 import android.util.Log
-import com.cangkir.bitperfectplayer.lyrics.FileChannelSeekableByteSource
-import java.io.FileInputStream
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
@@ -24,15 +21,15 @@ internal data class PreloadedTrack(
  * the main thread.
  */
 internal class GaplessPreloadController(
-    private val appContext: Context,
+    private val decoderFactory: PcmDecoderFactory,
     private val releasedFlag: AtomicBoolean,
     private val loadGeneration: AtomicLong,
     private val shouldReadReplayGain: () -> Boolean = { true },
-) {
-    private val preloadLock = Any()
     private val preloadExecutor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "BitPerfectGaplessPreload").apply { isDaemon = true }
-    }
+    },
+) {
+    private val preloadLock = Any()
 
     @Volatile
     var gaplessEnabled: Boolean = true
@@ -227,23 +224,8 @@ internal class GaplessPreloadController(
         preloadExecutor.shutdownNow()
     }
 
-    fun readReplayGainMetadata(uri: Uri, fileName: String, mimeType: String?): ReplayGainMetadata? = runCatching {
-        val formatHint = AudioFormatClassifier.classify(fileName, mimeType)
-        appContext.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
-            FileInputStream(pfd.fileDescriptor).use { fis ->
-                val channel = fis.channel
-                val size = runCatching { channel.size() }.getOrDefault(-1L)
-                if (size > 0L) {
-                    ReplayGainTagParser.parse(
-                        source = FileChannelSeekableByteSource(channel, size),
-                        formatHint = formatHint,
-                    )
-                } else {
-                    null
-                }
-            }
-        }
-    }.getOrNull()
+    fun readReplayGainMetadata(uri: Uri, fileName: String, mimeType: String?): ReplayGainMetadata? =
+        decoderFactory.readReplayGainMetadata(uri = uri, fileName = fileName, mimeType = mimeType)
 
     private fun isPreloadStillValid(request: EngineTrackRequest, expectedGeneration: Long): Boolean {
         val engineReady = !releasedFlag.get() && gaplessEnabled
@@ -290,11 +272,8 @@ internal class GaplessPreloadController(
     }
 
     private fun openDecoderForPreload(request: EngineTrackRequest, expectedGeneration: Long): PcmAudioDecoder? = try {
-        MediaCodecAudioDecoder.open(
-            context = appContext,
-            uri = request.uri,
-            fileName = request.fileName,
-            mimeHint = request.mimeType,
+        decoderFactory.open(
+            request = request,
             isCancelled = { !isPreloadStillValid(request, expectedGeneration) },
         )
     } catch (_: AudioDecodeException.Cancelled) {
