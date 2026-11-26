@@ -50,6 +50,7 @@ import androidx.compose.ui.unit.dp
 import com.cangkir.bitperfectplayer.data.DefaultHomepage
 import com.cangkir.bitperfectplayer.data.NowPlayingArtworkStyle
 import com.cangkir.bitperfectplayer.data.SpectrumColorStyle
+import com.cangkir.bitperfectplayer.ui.theme.DynamicThemeIntensity
 import com.cangkir.bitperfectplayer.ui.theme.TextMuted
 import com.cangkir.bitperfectplayer.ui.theme.studioSwitchColors
 
@@ -67,6 +68,8 @@ internal fun SettingsDisplaySection(
     onSetSpectrumSparksEnabled: (Boolean) -> Unit,
     dynamicCoverThemeEnabled: Boolean,
     onSetDynamicCoverThemeEnabled: (Boolean) -> Unit,
+    dynamicThemeIntensity: DynamicThemeIntensity = DynamicThemeIntensity.VIBRANT,
+    onSetDynamicThemeIntensity: (DynamicThemeIntensity) -> Unit = {},
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         SettingsSectionHeader("DISPLAY")
@@ -342,6 +345,73 @@ internal fun SettingsDisplaySection(
                         contentDescription = "Toggle dynamic theme"
                     },
                 )
+            }
+
+            if (dynamicCoverThemeEnabled) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 14.dp, end = 14.dp, bottom = 12.dp),
+                ) {
+                    Text(
+                        text = "Theme Intensity",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "Vibrant boosts multi-color artwork richness; Subtle preserves conservative matte studio surfaces.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = TextMuted,
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                        border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.65f)),
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(3.dp),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            DynamicThemeIntensity.entries.forEach { option ->
+                                val selected = dynamicThemeIntensity == option
+                                Button(
+                                    onClick = { onSetDynamicThemeIntensity(option) },
+                                    shape = RoundedCornerShape(8.dp),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .sizeIn(minHeight = 48.dp)
+                                        .semantics {
+                                            contentDescription = "Theme intensity ${option.displayName}"
+                                        },
+                                    colors = if (selected) {
+                                        ButtonDefaults.buttonColors(
+                                            containerColor = MaterialTheme.colorScheme.primary,
+                                            contentColor = MaterialTheme.colorScheme.onPrimary,
+                                        )
+                                    } else {
+                                        ButtonDefaults.textButtonColors(
+                                            contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    },
+                                ) {
+                                    Text(
+                                        text = option.displayName,
+                                        maxLines = 1,
+                                        softWrap = false,
+                                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }

@@ -278,6 +278,25 @@ class CoverThemeColorCache(private val albumArtworkLoader: AlbumArtworkLoader) :
         return DynamicThemeSlotPolicy.toSpectrumTriad(palette)
     }
 
+    /**
+     * Resolves the 4-stop OLED spectrum palette `[spectrumLow, spectrumMid, spectrumHigh, highlightPeak]`
+     * for [SpectrumColorStyle.ALBUM_ADAPTIVE] and multi-color Kinetic Sparks from the unified 4-slot
+     * OKLCH cache for the actively displayed Now Playing slot.
+     */
+    suspend fun resolveSpectrumPalette(
+        track: PlaybackTrack?,
+        artworkStyle: NowPlayingArtworkStyle,
+        isBackCoverVisible: Boolean,
+    ): IntArray {
+        val palette = DynamicThemeSlotPolicy.resolveTrackPaletteWithBorrow(
+            track = track,
+            artworkStyle = artworkStyle,
+            isBackCoverVisible = isBackCoverVisible,
+            loadSlotPalette = { t, slot -> resolvePalette(t, slot) },
+        )
+        return DynamicThemeSlotPolicy.toSpectrumPalette(palette)
+    }
+
     private suspend fun loadSlotBitmap(track: PlaybackTrack, slot: EmbeddedArtworkSlot): Bitmap? = when (slot) {
         EmbeddedArtworkSlot.FRONT_COVER -> albumArtworkLoader.loadArtwork(track, AlbumArtworkLoader.THUMBNAIL_SIZE_PX)
         EmbeddedArtworkSlot.DISC -> albumArtworkLoader.loadTrackSlotBitmap(

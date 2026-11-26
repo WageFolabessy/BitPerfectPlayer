@@ -222,5 +222,51 @@ class LocalBackupCodecTest {
         """.trimIndent()
         val legacyDecoded = LocalBackupCodec.decode(legacyWithoutDynamicTheme).getOrThrow()
         assertFalse(legacyDecoded.dynamicCoverThemeEnabled)
+        assertEquals(
+            com.cangkir.bitperfectplayer.ui.theme.DynamicThemeIntensity.VIBRANT,
+            legacyDecoded.dynamicThemeIntensity,
+        )
+    }
+
+    @Test
+    fun encodeAndDecode_preservesDynamicThemeIntensityAndSupportsLegacyV13Backups() {
+        val subtlePayload = LocalBackupPayload(
+            schemaVersion = LocalBackupCodec.CURRENT_SCHEMA_VERSION,
+            appId = LocalBackupCodec.APP_ID,
+            exportedAtEpochMs = 1_750_000_000_000L,
+            defaultHomepage = DefaultHomepage.ARTISTS,
+            dynamicCoverThemeEnabled = true,
+            dynamicThemeIntensity = com.cangkir.bitperfectplayer.ui.theme.DynamicThemeIntensity.SUBTLE,
+        )
+        val encodedSubtle = LocalBackupCodec.encode(subtlePayload)
+        assertTrue(encodedSubtle.contains("\"dynamicThemeIntensity\": \"SUBTLE\""))
+        val decodedSubtle = LocalBackupCodec.decode(encodedSubtle).getOrThrow()
+        assertTrue(decodedSubtle.dynamicCoverThemeEnabled)
+        assertEquals(
+            com.cangkir.bitperfectplayer.ui.theme.DynamicThemeIntensity.SUBTLE,
+            decodedSubtle.dynamicThemeIntensity,
+        )
+
+        // Legacy v1.3 backup JSON with dynamicCoverThemeEnabled=true but no dynamicThemeIntensity field
+        // must remain 100% compatible and default cleanly to VIBRANT.
+        val legacyV13Json = """
+            {
+              "schemaVersion": 1,
+              "appId": "com.cangkir.bitperfectplayer",
+              "exportedAtEpochMs": 1745000000000,
+              "defaultHomepage": "ALBUMS",
+              "dynamicCoverThemeEnabled": true,
+              "playlists": [],
+              "lyrics": [],
+              "favorites": [],
+              "trackStats": []
+            }
+        """.trimIndent()
+        val decodedV13 = LocalBackupCodec.decode(legacyV13Json).getOrThrow()
+        assertTrue(decodedV13.dynamicCoverThemeEnabled)
+        assertEquals(
+            com.cangkir.bitperfectplayer.ui.theme.DynamicThemeIntensity.VIBRANT,
+            decodedV13.dynamicThemeIntensity,
+        )
     }
 }

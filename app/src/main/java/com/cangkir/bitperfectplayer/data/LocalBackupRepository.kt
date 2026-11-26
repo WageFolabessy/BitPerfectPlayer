@@ -2,6 +2,7 @@ package com.cangkir.bitperfectplayer.data
 
 import android.content.Context
 import android.net.Uri
+import com.cangkir.bitperfectplayer.ui.theme.DynamicThemeIntensity
 import java.io.ByteArrayOutputStream
 import java.io.OutputStreamWriter
 import java.text.SimpleDateFormat
@@ -29,6 +30,7 @@ class LocalBackupRepository(
             val payload = persistenceRepository.exportLocalBackupPayload(
                 defaultHomepage = prefsSnapshot?.defaultHomepage ?: DefaultHomepage.ALL_SONGS,
                 dynamicCoverThemeEnabled = prefsSnapshot?.dynamicCoverThemeEnabled ?: false,
+                dynamicThemeIntensity = prefsSnapshot?.dynamicThemeIntensity ?: DynamicThemeIntensity.VIBRANT,
             )
             val json = LocalBackupCodec.encode(payload)
             val out = appContext.contentResolver.openOutputStream(destinationUri, "wt")
@@ -70,6 +72,7 @@ class LocalBackupRepository(
             val summary = persistenceRepository.importLocalBackupPayload(payload)
             preferencesRepository?.setDefaultHomepage(payload.defaultHomepage)
             preferencesRepository?.setDynamicCoverThemeEnabled(payload.dynamicCoverThemeEnabled)
+            preferencesRepository?.setDynamicThemeIntensity(payload.dynamicThemeIntensity)
             summary
         }
     }

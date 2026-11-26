@@ -3,6 +3,7 @@ package com.cangkir.bitperfectplayer.data
 import com.cangkir.bitperfectplayer.audio.QueueContext
 import com.cangkir.bitperfectplayer.audio.QueueSourceType
 import com.cangkir.bitperfectplayer.library.LibrarySortPreferences
+import com.cangkir.bitperfectplayer.ui.theme.DynamicThemeIntensity
 
 /**
  * Origin of a locally persisted lyrics entry. Strictly offline (manual editor or local `.lrc` file).
@@ -235,6 +236,7 @@ data class UserPreferences(
     val spectrumSparksEnabled: Boolean = true,
     val defaultHomepage: DefaultHomepage = DefaultHomepage.ALL_SONGS,
     val dynamicCoverThemeEnabled: Boolean = false,
+    val dynamicThemeIntensity: DynamicThemeIntensity = DynamicThemeIntensity.VIBRANT,
     val diagnosticLoggingEnabled: Boolean = false,
     val persistedSafTreeUris: Set<String> = emptySet(),
     val persistedSafFileUris: Set<String> = emptySet(),

@@ -168,4 +168,90 @@ class SpectrumVisualDspTest {
         assertEquals("All sparks must fully expire to 0 after max lifetime", 0, remaining)
         assertEquals(0, pool.activeCount)
     }
+
+    @Test
+    fun albumAdaptive4StopPalette_mapsBassMidTrebleAndBlendsPeaksTowardHighlight() {
+        val bassStop = 0xFFE65C4F.toInt() // warm coral bass
+        val midStop = 0xFF3E8EF7.toInt() // cobalt primary mid
+        val trebleStop = 0xFFE8B44A.toInt() // warm gold secondary treble
+        val highlightPeak = 0xFFFFF4C8.toInt() // bright gold-ivory peak
+        val palette4 = intArrayOf(bassStop, midStop, trebleStop, highlightPeak)
+
+        // Exact 3-band frequency stop mapping (ignoring index 3 highlightPeak during base interpolation).
+        assertEquals(bassStop, SpectrumColorMapper.resolveAccentColorArgb(SpectrumColorStyle.ALBUM_ADAPTIVE, 0.0f, palette4))
+        assertEquals(midStop, SpectrumColorMapper.resolveAccentColorArgb(SpectrumColorStyle.ALBUM_ADAPTIVE, 0.5f, palette4))
+        assertEquals(trebleStop, SpectrumColorMapper.resolveAccentColorArgb(SpectrumColorStyle.ALBUM_ADAPTIVE, 1.0f, palette4))
+
+        // High-amplitude treble bar (> 0.72f) blends cleanly toward highlightPeak (brighter than mid-energy treble).
+        val midEnergyTreble = SpectrumColorMapper.resolveBarColorArgb(SpectrumColorStyle.ALBUM_ADAPTIVE, 1.0f, 0.65f, palette4)
+        val peakEnergyTreble = SpectrumColorMapper.resolveBarColorArgb(SpectrumColorStyle.ALBUM_ADAPTIVE, 1.0f, 1.0f, palette4)
+        assertNotEquals(midEnergyTreble, peakEnergyTreble)
+        assertTrue(
+            "Peak treble bar should lift luminance toward highlightPeak",
+            hslOf(peakEnergyTreble)[2] > hslOf(midEnergyTreble)[2],
+        )
+    }
+
+    @Test
+    fun kineticSparkPool_albumModeSparksInheritExactBandColorAndBlendTowardHighlightPeak() {
+        val bassStop = 0xFFE6403A.toInt() // vivid red bass
+        val midStop = 0xFF22B86B.toInt() // vivid emerald mid
+        val trebleStop = 0xFF3B82F6.toInt() // vivid cobalt treble
+        val highlightPeak = 0xFFFDF4C6.toInt() // luminous ivory-gold highlight
+        val palette4 = intArrayOf(bassStop, midStop, trebleStop, highlightPeak)
+
+        val pool = KineticSparkPool()
+        val bands = FloatArray(SpectrumAnalyzerDsp.BAND_COUNT)
+
+        fun firstActiveSparkColor(): Int {
+            val slot = (0 until KineticSparkPool.MAX_SPARKS).first { pool.active[it] }
+            return pool.colorArgb[slot]
+        }
+
+        // Launch a bass transient (bin 0, normPos = 0.0)
+        bands[0] = 0.45f
+        pool.emitFromBands(bands, 0.016f, SpectrumColorStyle.ALBUM_ADAPTIVE, palette4)
+        val bassSparkColor = firstActiveSparkColor()
+        assertTrue(
+            "Bass spark hue should match spectrumLow",
+            AlbumPaletteExtractor.circularHueDistanceDeg(hueOf(bassSparkColor), hueOf(bassStop)) < 15f,
+        )
+
+        // Reset and launch a mid transient (bin 15, normPos ~= 0.484)
+        pool.clear()
+        bands.fill(0f)
+        bands[15] = 0.45f
+        pool.emitFromBands(bands, 0.016f, SpectrumColorStyle.ALBUM_ADAPTIVE, palette4)
+        val midSparkColor = firstActiveSparkColor()
+        assertTrue(
+            "Mid spark hue should match spectrumMid",
+            AlbumPaletteExtractor.circularHueDistanceDeg(hueOf(midSparkColor), hueOf(midStop)) < 18f,
+        )
+
+        // Reset and launch a treble transient (bin 31, normPos = 1.0) at moderate vs intense peak energy
+        pool.clear()
+        bands.fill(0f)
+        bands[31] = 0.45f
+        pool.emitFromBands(bands, 0.016f, SpectrumColorStyle.ALBUM_ADAPTIVE, palette4)
+        val moderateTrebleSpark = firstActiveSparkColor()
+        assertTrue(
+            "Treble spark hue should match spectrumHigh",
+            AlbumPaletteExtractor.circularHueDistanceDeg(hueOf(moderateTrebleSpark), hueOf(trebleStop)) < 15f,
+        )
+
+        pool.clear()
+        bands.fill(0f)
+        bands[31] = 0.98f
+        pool.emitFromBands(bands, 0.016f, SpectrumColorStyle.ALBUM_ADAPTIVE, palette4)
+        val peakTrebleSpark = firstActiveSparkColor()
+        assertNotEquals(moderateTrebleSpark, peakTrebleSpark)
+        assertTrue(
+            "Intense beat peak spark should blend brighter toward highlightPeak",
+            hslOf(peakTrebleSpark)[2] > hslOf(moderateTrebleSpark)[2],
+        )
+
+        // Verify all 3 frequency-band spark colors are genuinely distinct from one another.
+        assertTrue(AlbumPaletteExtractor.circularHueDistanceDeg(hueOf(bassSparkColor), hueOf(midSparkColor)) >= 45f)
+        assertTrue(AlbumPaletteExtractor.circularHueDistanceDeg(hueOf(midSparkColor), hueOf(moderateTrebleSpark)) >= 45f)
+    }
 }

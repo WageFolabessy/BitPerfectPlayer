@@ -5,6 +5,7 @@ import com.cangkir.bitperfectplayer.library.GroupSortScope
 import com.cangkir.bitperfectplayer.library.GroupSortSpec
 import com.cangkir.bitperfectplayer.library.TrackSortScope
 import com.cangkir.bitperfectplayer.library.TrackSortSpec
+import com.cangkir.bitperfectplayer.ui.theme.DynamicThemeIntensity
 import kotlinx.coroutines.flow.Flow
 
 interface UserPreferencesStore {
@@ -27,6 +28,8 @@ interface UserPreferencesStore {
     suspend fun setDefaultHomepage(homepage: DefaultHomepage)
 
     suspend fun setDynamicCoverThemeEnabled(enabled: Boolean)
+
+    suspend fun setDynamicThemeIntensity(intensity: DynamicThemeIntensity)
 
     suspend fun setDiagnosticLoggingEnabled(enabled: Boolean)
 }

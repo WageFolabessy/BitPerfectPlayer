@@ -18,6 +18,7 @@ import com.cangkir.bitperfectplayer.library.GroupSortSpec
 import com.cangkir.bitperfectplayer.library.LibrarySortPreferences
 import com.cangkir.bitperfectplayer.library.TrackSortScope
 import com.cangkir.bitperfectplayer.library.TrackSortSpec
+import com.cangkir.bitperfectplayer.ui.theme.DynamicThemeIntensity
 import java.io.IOException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
@@ -48,6 +49,7 @@ class UserPreferencesRepository(private val dataStore: DataStore<Preferences>) :
         val SPECTRUM_SPARKS_ENABLED = booleanPreferencesKey("spectrum_sparks_enabled")
         val DEFAULT_HOMEPAGE = stringPreferencesKey("default_homepage")
         val DYNAMIC_COVER_THEME_ENABLED = booleanPreferencesKey("dynamic_cover_theme_enabled")
+        val DYNAMIC_THEME_INTENSITY = stringPreferencesKey("dynamic_theme_intensity")
         val DIAGNOSTIC_LOGGING_ENABLED = booleanPreferencesKey("diagnostic_logging_enabled")
         val PERSISTED_SAF_TREE_URIS = stringSetPreferencesKey("persisted_saf_tree_uris")
         val PERSISTED_SAF_FILE_URIS = stringSetPreferencesKey("persisted_saf_file_uris")
@@ -164,6 +166,12 @@ class UserPreferencesRepository(private val dataStore: DataStore<Preferences>) :
     override suspend fun setDynamicCoverThemeEnabled(enabled: Boolean) {
         dataStore.edit { prefs ->
             prefs[Keys.DYNAMIC_COVER_THEME_ENABLED] = enabled
+        }
+    }
+
+    override suspend fun setDynamicThemeIntensity(intensity: DynamicThemeIntensity) {
+        dataStore.edit { prefs ->
+            prefs[Keys.DYNAMIC_THEME_INTENSITY] = intensity.name
         }
     }
 
@@ -307,6 +315,7 @@ class UserPreferencesRepository(private val dataStore: DataStore<Preferences>) :
             spectrumSparksEnabled = prefs[Keys.SPECTRUM_SPARKS_ENABLED] ?: true,
             defaultHomepage = DefaultHomepage.fromStoredName(prefs[Keys.DEFAULT_HOMEPAGE]),
             dynamicCoverThemeEnabled = prefs[Keys.DYNAMIC_COVER_THEME_ENABLED] ?: false,
+            dynamicThemeIntensity = DynamicThemeIntensity.fromStoredName(prefs[Keys.DYNAMIC_THEME_INTENSITY]),
             diagnosticLoggingEnabled = prefs[Keys.DIAGNOSTIC_LOGGING_ENABLED] ?: false,
             persistedSafTreeUris = PersistenceSanitizer.sanitizeUriSet(
                 prefs[Keys.PERSISTED_SAF_TREE_URIS].orEmpty(),

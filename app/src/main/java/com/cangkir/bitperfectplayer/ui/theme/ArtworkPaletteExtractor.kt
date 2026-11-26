@@ -28,6 +28,9 @@ data class ArtworkColorPalette(
     val canvasOklch: Oklch,
 ) {
     fun toSpectrumTriad(): IntArray = intArrayOf(spectrumLowArgb, spectrumMidArgb, spectrumHighArgb)
+
+    /** Returns 4-stop `[spectrumLow, spectrumMid, spectrumHigh, highlightPeak]` for Album-Adaptive spectrum & sparks. */
+    fun toSpectrumPalette(): IntArray = intArrayOf(spectrumLowArgb, spectrumMidArgb, spectrumHighArgb, highlightPeakArgb)
 }
 
 /**
@@ -445,32 +448,32 @@ object ArtworkPaletteExtractor {
     }
 
     private fun buildSpectrumTriad(primary: ScoredCluster, secondary: ScoredCluster?, tertiary: ScoredCluster?): Triple<Int, Int, Int> {
-        val h0 = primary.oklch.hDeg
-        val h1: Float
-        val h2: Float
+        val midHue = primary.oklch.hDeg
+        val lowHue: Float
+        val highHue: Float
         when {
             secondary != null && tertiary != null -> {
-                h1 = secondary.oklch.hDeg
-                h2 = tertiary.oklch.hDeg
+                lowHue = tertiary.oklch.hDeg
+                highHue = secondary.oklch.hDeg
             }
             secondary != null -> {
-                h1 = ensureHueSeparation(secondary.oklch.hDeg, h0, 48f)
-                var derivedH2 = OklchColorMath.normalizeHueDeg(h0 + 180f)
-                if (OklchColorMath.circularHueDistanceDeg(derivedH2, h1) < 48f) {
-                    derivedH2 = OklchColorMath.normalizeHueDeg(h1 + 68f)
+                highHue = ensureHueSeparation(secondary.oklch.hDeg, midHue, 48f)
+                var derivedLow = OklchColorMath.normalizeHueDeg(midHue + 180f)
+                if (OklchColorMath.circularHueDistanceDeg(derivedLow, highHue) < 48f) {
+                    derivedLow = OklchColorMath.normalizeHueDeg(highHue + 68f)
                 }
-                h2 = derivedH2
+                lowHue = derivedLow
             }
             else -> {
-                // +58 deg in OKLCH guarantees >= 40 deg separation even across the compressed warm red->amber HSL arc.
-                h1 = OklchColorMath.normalizeHueDeg(h0 + 58f)
-                h2 = OklchColorMath.normalizeHueDeg(h0 + 168f)
+                // Single-color cover: mid stays true to primaryAccent, high lifts +58 deg, low anchors +168 deg.
+                lowHue = OklchColorMath.normalizeHueDeg(midHue + 168f)
+                highHue = OklchColorMath.normalizeHueDeg(midHue + 58f)
             }
         }
 
-        val low = toOledSpectrumColor(h0, primary.oklch.c, targetLightness = 0.69f)
-        val mid = toOledSpectrumColor(h1, secondary?.oklch?.c ?: primary.oklch.c, targetLightness = 0.72f)
-        val high = toOledSpectrumColor(h2, tertiary?.oklch?.c ?: secondary?.oklch?.c ?: primary.oklch.c, targetLightness = 0.75f)
+        val low = toOledSpectrumColor(lowHue, tertiary?.oklch?.c ?: primary.oklch.c, targetLightness = 0.69f)
+        val mid = toOledSpectrumColor(midHue, primary.oklch.c, targetLightness = 0.72f)
+        val high = toOledSpectrumColor(highHue, secondary?.oklch?.c ?: primary.oklch.c, targetLightness = 0.75f)
         return Triple(low, mid, high)
     }
 

@@ -85,9 +85,11 @@ import com.cangkir.bitperfectplayer.library.LibraryGroup
 import com.cangkir.bitperfectplayer.library.TrackSortSpec
 import com.cangkir.bitperfectplayer.ui.InlineSortTriggerButton
 import com.cangkir.bitperfectplayer.ui.TrackArtworkThumbnail
+import com.cangkir.bitperfectplayer.ui.theme.AmbientArtistHeroWash
 import com.cangkir.bitperfectplayer.ui.theme.BitPerfectPlayerTheme
 import com.cangkir.bitperfectplayer.ui.theme.CoverThemeColorCache
 import com.cangkir.bitperfectplayer.ui.theme.CoverThemeLookup
+import com.cangkir.bitperfectplayer.ui.theme.DynamicThemeIntensity
 import com.cangkir.bitperfectplayer.ui.theme.DynamicThemeTokens
 import com.cangkir.bitperfectplayer.ui.theme.LocalActiveDynamicTokens
 import com.cangkir.bitperfectplayer.ui.theme.TextMuted
@@ -149,6 +151,7 @@ internal fun ArtistDetailView(
     onResetCustomArtistPhoto: (String) -> Unit,
     isForegroundPage: Boolean = true,
     onContextualDynamicThemeChanged: ((DynamicThemeTokens?) -> Unit)? = null,
+    dynamicThemeIntensity: DynamicThemeIntensity = DynamicThemeIntensity.VIBRANT,
 ) {
     val artistName = artistGroup.name
     val artistDetail = remember(artistName, artistGroup.tracks, albumTrackSortSpec) {
@@ -296,6 +299,7 @@ internal fun ArtistDetailView(
     }
     ArtistDetailDynamicThemeWrapper(
         enabled = dynamicCoverThemeEnabled,
+        dynamicThemeIntensity = dynamicThemeIntensity,
         isForegroundPage = isForegroundPage,
         themeCacheKey = resolvedHero.themeCacheKey,
         heroSlot = heroSlot,
@@ -432,17 +436,20 @@ private fun ArtistHeroBanner(
             .height(heroHeight)
             .background(MaterialTheme.colorScheme.surfaceVariant),
     ) {
+        // GPU-friendly atmospheric wash driven by the isolated contextual Artist Dynamic Theme.
+        AmbientArtistHeroWash(modifier = Modifier.fillMaxSize())
+
         if (imageBitmap != null) {
             if (resolvedHero.source == ArtistHeroSource.ALBUM_COVER) {
-                // Keep album covers full & uncropped (ContentScale.Fit) over a matte studio backdrop.
+                // Keep album covers full & uncropped (ContentScale.Fit) over the subtle ambient wash.
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
                         .background(
                             Brush.verticalGradient(
                                 colors = listOf(
-                                    MaterialTheme.colorScheme.surfaceContainerHighest,
-                                    backgroundColor,
+                                    Color.Transparent,
+                                    backgroundColor.copy(alpha = 0.72f),
                                 ),
                             ),
                         ),
@@ -906,6 +913,7 @@ private fun ArtistTracksSectionHeader(trackCount: Int, sortLabel: String, onOpen
 @Composable
 private fun ArtistDetailDynamicThemeWrapper(
     enabled: Boolean,
+    dynamicThemeIntensity: DynamicThemeIntensity = DynamicThemeIntensity.VIBRANT,
     isForegroundPage: Boolean = true,
     themeCacheKey: String?,
     heroSlot: EmbeddedArtworkSlot,
@@ -918,16 +926,25 @@ private fun ArtistDetailDynamicThemeWrapper(
 ) {
     val parentTokens = LocalActiveDynamicTokens.current
     val latestOnThemeChanged by rememberUpdatedState(onContextualDynamicThemeChanged)
-    var lookup by remember(themeCacheKey, heroSlot, fallbackAlbumCandidates) {
+    var lookup by remember(themeCacheKey, heroSlot, fallbackAlbumCandidates, dynamicThemeIntensity) {
         val initialLookup = if (themeCacheKey != null && coverThemeColorCache != null) {
-            val direct = coverThemeColorCache.peekCachedByKey(themeCacheKey, slot = heroSlot)
+            val direct = coverThemeColorCache.peekCachedByKey(
+                key = themeCacheKey,
+                slot = heroSlot,
+                intensity = dynamicThemeIntensity,
+            )
             val needsMonochromeBorrow = direct is CoverThemeLookup.Resolved &&
                 direct.tokens == null &&
                 heroSlot == EmbeddedArtworkSlot.ARTIST &&
                 fallbackAlbumCandidates.isNotEmpty()
             if (needsMonochromeBorrow) {
                 val cachedFallback = fallbackAlbumCandidates.firstNotNullOfOrNull { candidate ->
-                    (coverThemeColorCache.peekCached(candidate) as? CoverThemeLookup.Resolved)?.tokens
+                    (
+                        coverThemeColorCache.peekCached(
+                            track = candidate,
+                            intensity = dynamicThemeIntensity,
+                        ) as? CoverThemeLookup.Resolved
+                        )?.tokens
                 }
                 if (cachedFallback != null) CoverThemeLookup.Resolved(cachedFallback) else CoverThemeLookup.Pending
             } else {
@@ -940,7 +957,7 @@ private fun ArtistDetailDynamicThemeWrapper(
     }
 
     val activeCache = coverThemeColorCache?.takeIf { enabled && isForegroundPage }
-    LaunchedEffect(activeCache, themeCacheKey, heroSlot, heroBitmap, fallbackAlbumCandidates) {
+    LaunchedEffect(activeCache, themeCacheKey, heroSlot, heroBitmap, fallbackAlbumCandidates, dynamicThemeIntensity) {
         if (activeCache != null && themeCacheKey != null && heroBitmap != null) {
             if (lookup is CoverThemeLookup.Pending) {
                 lookup = CoverThemeLookup.Resolved(
@@ -949,6 +966,7 @@ private fun ArtistDetailDynamicThemeWrapper(
                         heroSlot = heroSlot,
                         heroBitmap = heroBitmap,
                         fallbackAlbumCandidates = fallbackAlbumCandidates,
+                        intensity = dynamicThemeIntensity,
                     ),
                 )
             }

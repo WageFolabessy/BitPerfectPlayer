@@ -12,6 +12,7 @@ import com.cangkir.bitperfectplayer.data.UserPreferences
 import com.cangkir.bitperfectplayer.data.UserPreferencesStore
 import com.cangkir.bitperfectplayer.diagnostics.DiagnosticLogExporterContract
 import com.cangkir.bitperfectplayer.diagnostics.DiagnosticLogStats
+import com.cangkir.bitperfectplayer.ui.theme.DynamicThemeIntensity
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -81,6 +82,9 @@ class SettingsAndBackupCoordinator(
     val dynamicCoverThemeEnabled: StateFlow<Boolean> =
         preferenceState(false) { it.dynamicCoverThemeEnabled }
 
+    val dynamicThemeIntensity: StateFlow<DynamicThemeIntensity> =
+        preferenceState(DynamicThemeIntensity.VIBRANT) { it.dynamicThemeIntensity }
+
     // Latched strictly once per ViewModel lifetime so subsequent Settings changes never hijack navigation.
     private val _initialStartupHomepage = MutableStateFlow<DefaultHomepage?>(null)
     val initialStartupHomepage: StateFlow<DefaultHomepage?> = _initialStartupHomepage.asStateFlow()
@@ -117,6 +121,10 @@ class SettingsAndBackupCoordinator(
 
     fun setDynamicCoverThemeEnabled(enabled: Boolean) {
         scope.launch { preferencesStore.setDynamicCoverThemeEnabled(enabled) }
+    }
+
+    fun setDynamicThemeIntensity(intensity: DynamicThemeIntensity) {
+        scope.launch { preferencesStore.setDynamicThemeIntensity(intensity) }
     }
 
     fun setDiagnosticLoggingEnabled(enabled: Boolean) {

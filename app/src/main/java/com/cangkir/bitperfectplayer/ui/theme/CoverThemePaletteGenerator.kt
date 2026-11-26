@@ -15,7 +15,7 @@ enum class DynamicThemeIntensity(val displayName: String) {
 
     companion object {
         fun fromStoredName(raw: String?): DynamicThemeIntensity =
-            entries.firstOrNull { it.name.equals(raw?.trim(), ignoreCase = true) } ?: SUBTLE
+            entries.firstOrNull { it.name.equals(raw?.trim(), ignoreCase = true) } ?: VIBRANT
     }
 }
 

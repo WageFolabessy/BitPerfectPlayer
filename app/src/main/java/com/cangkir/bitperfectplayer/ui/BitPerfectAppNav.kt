@@ -272,6 +272,7 @@ private fun BitPerfectAppRootContent(viewModel: MainViewModel, visualAssets: Mai
         },
         libraryContent = { initialLibraryTab ->
             val dynamicCoverThemeEnabled by viewModel.dynamicCoverThemeEnabled.collectAsStateWithLifecycle()
+            val dynamicThemeIntensity by viewModel.dynamicThemeIntensity.collectAsStateWithLifecycle()
             val artistPhotoRevision by viewModel.artistPhotoRevision.collectAsStateWithLifecycle()
             LibraryScreen(
                 libraryState = libraryState,
@@ -299,6 +300,7 @@ private fun BitPerfectAppRootContent(viewModel: MainViewModel, visualAssets: Mai
                 onOpenQueue = openQueue,
                 initialTab = initialLibraryTab,
                 dynamicCoverThemeEnabled = dynamicCoverThemeEnabled,
+                dynamicThemeIntensity = dynamicThemeIntensity,
                 coverThemeColorCache = visualAssets.coverThemeColorCache,
                 artistPhotoStore = visualAssets.artistPhotoStore,
                 artistPhotoRevision = artistPhotoRevision,
@@ -316,6 +318,7 @@ private fun BitPerfectAppRootContent(viewModel: MainViewModel, visualAssets: Mai
         },
         playlistsContent = {
             val dynamicCoverThemeEnabled by viewModel.dynamicCoverThemeEnabled.collectAsStateWithLifecycle()
+            val dynamicThemeIntensity by viewModel.dynamicThemeIntensity.collectAsStateWithLifecycle()
             PlaylistsScreen(
                 playlistsState = playlistsState,
                 activeTrackUri = playbackState.activeTrack?.uriString,
@@ -348,6 +351,7 @@ private fun BitPerfectAppRootContent(viewModel: MainViewModel, visualAssets: Mai
                 },
                 onCommitPlaylistOrder = viewModel.playlists::commitPlaylistOrder,
                 dynamicCoverThemeEnabled = dynamicCoverThemeEnabled,
+                dynamicThemeIntensity = dynamicThemeIntensity,
                 coverThemeColorCache = visualAssets.coverThemeColorCache,
                 isForegroundPage = rootPagerNavigator.isPlaylistsPageForeground,
                 onDetailViewOpenChanged = { isOpen -> rootPagerNavigator.isPlaylistsDetailOpen = isOpen },
@@ -571,6 +575,7 @@ private fun BitPerfectSettingsDestination(
     val spectrumColorStyle by viewModel.spectrumColorStyle.collectAsStateWithLifecycle()
     val spectrumSparksEnabled by viewModel.spectrumSparksEnabled.collectAsStateWithLifecycle()
     val dynamicCoverThemeEnabled by viewModel.dynamicCoverThemeEnabled.collectAsStateWithLifecycle()
+    val dynamicThemeIntensity by viewModel.dynamicThemeIntensity.collectAsStateWithLifecycle()
     val diagnosticLoggingEnabled by viewModel.diagnosticLoggingEnabled.collectAsStateWithLifecycle()
     val diagnosticLogStats by viewModel.diagnosticLogStats.collectAsStateWithLifecycle()
     SettingsScreen(
@@ -589,6 +594,8 @@ private fun BitPerfectSettingsDestination(
         onSetSpectrumSparksEnabled = viewModel.settings::setSpectrumSparksEnabled,
         dynamicCoverThemeEnabled = dynamicCoverThemeEnabled,
         onSetDynamicCoverThemeEnabled = viewModel.settings::setDynamicCoverThemeEnabled,
+        dynamicThemeIntensity = dynamicThemeIntensity,
+        onSetDynamicThemeIntensity = viewModel.settings::setDynamicThemeIntensity,
         diagnosticLoggingEnabled = diagnosticLoggingEnabled,
         diagnosticLogStats = diagnosticLogStats,
         onSetDiagnosticLoggingEnabled = viewModel.settings::setDiagnosticLoggingEnabled,

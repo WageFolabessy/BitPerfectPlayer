@@ -9,6 +9,7 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
@@ -16,7 +17,38 @@ import androidx.compose.ui.graphics.Color
 
 private const val THEME_TRANSITION_DURATION_MS = 300
 
+/**
+ * Extended multi-color dynamic theme tokens exposed alongside Material 3 [ColorScheme] for
+ * luminous highlights, GPU-friendly ambient atmospheric glow orbs, and album-adaptive accents.
+ *
+ * Semantic safety/diagnostic colors (`EmeraldSafe`, `AmberIndicated`, `CoralWarning`) live outside
+ * this structure and remain strictly invariant across all artwork palettes.
+ */
+@Immutable
+data class BitPerfectExtendedColors(
+    val highlightPeak: Color,
+    val glowPrimary: Color,
+    val glowSecondary: Color,
+    val spectrumLow: Color,
+    val spectrumMid: Color,
+    val spectrumHigh: Color,
+    val isDynamicActive: Boolean,
+    val intensity: DynamicThemeIntensity,
+)
+
+private val DEFAULT_MONOCHROME_EXTENDED_COLORS = BitPerfectExtendedColors(
+    highlightPeak = Color(CoverThemePaletteGenerator.MONOCHROME_STUDIO_TOKENS.highlightPeakArgb),
+    glowPrimary = Color(CoverThemePaletteGenerator.MONOCHROME_STUDIO_TOKENS.glowPrimaryArgb),
+    glowSecondary = Color(CoverThemePaletteGenerator.MONOCHROME_STUDIO_TOKENS.glowSecondaryArgb),
+    spectrumLow = Color(CoverThemePaletteGenerator.MONOCHROME_STUDIO_TOKENS.spectrumLowArgb),
+    spectrumMid = Color(CoverThemePaletteGenerator.MONOCHROME_STUDIO_TOKENS.spectrumMidArgb),
+    spectrumHigh = Color(CoverThemePaletteGenerator.MONOCHROME_STUDIO_TOKENS.spectrumHighArgb),
+    isDynamicActive = false,
+    intensity = DynamicThemeIntensity.SUBTLE,
+)
+
 val LocalActiveDynamicTokens = compositionLocalOf<DynamicThemeTokens?> { null }
+val LocalBitPerfectExtendedColors = compositionLocalOf { DEFAULT_MONOCHROME_EXTENDED_COLORS }
 
 /**
  * High-contrast Monochrome Studio / Dynamic Cover toggle switch colors with unambiguous
@@ -86,9 +118,30 @@ private fun rememberAnimatedColorScheme(tokens: DynamicThemeTokens): ColorScheme
     )
 }
 
+@Composable
+private fun rememberAnimatedExtendedColors(tokens: DynamicThemeTokens, isDynamicActive: Boolean): BitPerfectExtendedColors {
+    val highlightPeak by rememberAnimatedThemeColor(tokens.highlightPeakArgb, "highlightPeak")
+    val glowPrimary by rememberAnimatedThemeColor(tokens.glowPrimaryArgb, "glowPrimary")
+    val glowSecondary by rememberAnimatedThemeColor(tokens.glowSecondaryArgb, "glowSecondary")
+    val spectrumLow by rememberAnimatedThemeColor(tokens.spectrumLowArgb, "spectrumLow")
+    val spectrumMid by rememberAnimatedThemeColor(tokens.spectrumMidArgb, "spectrumMid")
+    val spectrumHigh by rememberAnimatedThemeColor(tokens.spectrumHighArgb, "spectrumHigh")
+    return BitPerfectExtendedColors(
+        highlightPeak = highlightPeak,
+        glowPrimary = glowPrimary,
+        glowSecondary = glowSecondary,
+        spectrumLow = spectrumLow,
+        spectrumMid = spectrumMid,
+        spectrumHigh = spectrumHigh,
+        isDynamicActive = isDynamicActive,
+        intensity = tokens.intensity,
+    )
+}
+
 /**
- * Enforces the Monochrome Studio dark Material 3 theme across all screens, smoothly adapting to
- * contrast-clamped [dynamicTokens] when the opt-in Dynamic Cover Theme layer is active.
+ * Enforces the Monochrome Studio dark Material 3 theme across all screens, smoothly animating
+ * multi-color OKLCH [dynamicTokens] (Material 3 slots + [LocalBitPerfectExtendedColors] glow and
+ * highlight accents) over `300 ms` when the opt-in Dynamic Theme layer is active.
  */
 @Composable
 fun BitPerfectPlayerTheme(
@@ -100,10 +153,15 @@ fun BitPerfectPlayerTheme(
     // System Wallpaper Monet dynamicColor is intentionally ignored so contrast and safety indicators hold.
     @Suppress("UNUSED_VARIABLE")
     val unusedModeFlags = darkTheme || !dynamicColor
+    val isDynamicActive = dynamicTokens != null
     val effectiveTokens = dynamicTokens ?: CoverThemePaletteGenerator.MONOCHROME_STUDIO_TOKENS
     val colorScheme = rememberAnimatedColorScheme(effectiveTokens)
+    val extendedColors = rememberAnimatedExtendedColors(effectiveTokens, isDynamicActive = isDynamicActive)
 
-    CompositionLocalProvider(LocalActiveDynamicTokens provides dynamicTokens) {
+    CompositionLocalProvider(
+        LocalActiveDynamicTokens provides dynamicTokens,
+        LocalBitPerfectExtendedColors provides extendedColors,
+    ) {
         MaterialTheme(
             colorScheme = colorScheme,
             typography = Typography,

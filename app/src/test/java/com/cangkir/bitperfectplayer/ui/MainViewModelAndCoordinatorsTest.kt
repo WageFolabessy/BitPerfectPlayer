@@ -557,6 +557,10 @@ class MainViewModelAndCoordinatorsTest {
             mutablePrefs.update { it.copy(dynamicCoverThemeEnabled = enabled) }
         }
 
+        override suspend fun setDynamicThemeIntensity(intensity: com.cangkir.bitperfectplayer.ui.theme.DynamicThemeIntensity) {
+            mutablePrefs.update { it.copy(dynamicThemeIntensity = intensity) }
+        }
+
         override suspend fun setDiagnosticLoggingEnabled(enabled: Boolean) {
             mutablePrefs.update { it.copy(diagnosticLoggingEnabled = enabled) }
         }

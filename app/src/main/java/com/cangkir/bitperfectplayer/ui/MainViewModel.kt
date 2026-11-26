@@ -125,6 +125,8 @@ class MainViewModel(
     val defaultHomepage: StateFlow<DefaultHomepage> = settings.defaultHomepage
     val diagnosticLoggingEnabled: StateFlow<Boolean> = settings.diagnosticLoggingEnabled
     val dynamicCoverThemeEnabled: StateFlow<Boolean> = settings.dynamicCoverThemeEnabled
+    val dynamicThemeIntensity: StateFlow<com.cangkir.bitperfectplayer.ui.theme.DynamicThemeIntensity> =
+        settings.dynamicThemeIntensity
     val initialStartupHomepage: StateFlow<DefaultHomepage?> = settings.initialStartupHomepage
 
     val dynamicTheme = DynamicThemeCoordinator(
@@ -135,6 +137,8 @@ class MainViewModel(
             .map { it.activeTrack }
             .stateIn(scope = viewModelScope, started = SharingStarted.Eagerly, initialValue = playbackState.value.activeTrack),
         artworkStyleFlow = nowPlayingArtworkStyle,
+        initialIntensity = dynamicThemeIntensity.value,
+        intensityFlow = dynamicThemeIntensity,
     )
 
     val globalDynamicThemeTokens: StateFlow<DynamicThemeTokens?> = dynamicTheme.globalDynamicThemeTokens

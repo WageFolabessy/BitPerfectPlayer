@@ -146,6 +146,8 @@ class LocalPersistenceRepository(
         nowEpochMs: Long = System.currentTimeMillis(),
         defaultHomepage: DefaultHomepage = DefaultHomepage.ALL_SONGS,
         dynamicCoverThemeEnabled: Boolean = false,
+        dynamicThemeIntensity: com.cangkir.bitperfectplayer.ui.theme.DynamicThemeIntensity =
+            com.cangkir.bitperfectplayer.ui.theme.DynamicThemeIntensity.VIBRANT,
     ): LocalBackupPayload {
         val playlists = playlistDao.getAllPlaylists()
         val tracksByPlaylist = playlistDao.getAllPlaylistTracks().groupBy { it.playlistId }
@@ -171,6 +173,7 @@ class LocalPersistenceRepository(
             exportedAtEpochMs = nowEpochMs,
             defaultHomepage = defaultHomepage,
             dynamicCoverThemeEnabled = dynamicCoverThemeEnabled,
+            dynamicThemeIntensity = dynamicThemeIntensity,
             playlists = backupPlaylists,
             lyrics = lyricsDao.getAll().map { it.toDomain() },
             favorites = favoriteTrackDao.getAllFavorites().map { it.toDomain() },

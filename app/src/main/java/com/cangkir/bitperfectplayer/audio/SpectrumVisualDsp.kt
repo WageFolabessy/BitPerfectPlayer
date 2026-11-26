@@ -24,6 +24,14 @@ object AlbumPaletteExtractor {
         0xFFF2F2F0.toInt(),
     )
 
+    /** 4-stop Monochrome Studio fallback `[low, mid, high, highlightPeak]`. */
+    val FALLBACK_STUDIO_PALETTE_4: IntArray = intArrayOf(
+        0xFFB8B8BE.toInt(),
+        0xFFD8D8DC.toInt(),
+        0xFFF2F2F0.toInt(),
+        0xFFFAFAFA.toInt(),
+    )
+
     /**
      * Extracts 3 harmonious opaque ARGB accent colors `[bassColor, midColor, trebleColor]` from
      * local artwork ARGB [pixels] (`width * height`). Zero external libraries, zero `android.*`.
@@ -34,6 +42,19 @@ object AlbumPaletteExtractor {
             FALLBACK_STUDIO_PALETTE.copyOf()
         } else {
             palette.toSpectrumTriad()
+        }
+    }
+
+    /**
+     * Extracts the 4-stop Album-Adaptive spectrum palette
+     * `[spectrumLow, spectrumMid, spectrumHigh, highlightPeak]` from local artwork ARGB [pixels].
+     */
+    fun extractSpectrumPalette(pixels: IntArray, width: Int, height: Int): IntArray {
+        val palette = ArtworkPaletteExtractor.extractPalette(pixels, width, height)
+        return if (palette.isMonochrome) {
+            FALLBACK_STUDIO_PALETTE_4.copyOf()
+        } else {
+            palette.toSpectrumPalette()
         }
     }
 
@@ -75,7 +96,13 @@ object AlbumPaletteExtractor {
 /**
  * Pure-Kotlin ARGB color mapper for the 3 switchable spectrum color palettes:
  * [SpectrumColorStyle.STUDIO], [SpectrumColorStyle.PRISM], and [SpectrumColorStyle.ALBUM_ADAPTIVE].
- * Zero heap allocations inside [resolveBarColorArgb] and [resolveAccentColorArgb].
+ *
+ * In [SpectrumColorStyle.ALBUM_ADAPTIVE], frequency bins map smoothly across:
+ * - Bass (`0.0f`) -> `spectrumLow` (`albumPalette[0]`),
+ * - Mid (`0.5f`) -> `spectrumMid` (`albumPalette[1]`, artwork `primaryAccent`),
+ * - Treble (`1.0f`) -> `spectrumHigh` (`albumPalette[2]`, artwork `secondaryAccent`),
+ * while high-amplitude peaks and kinetic sparks blend smoothly toward `highlightPeak`
+ * (`albumPalette[3]` when supplied, else luminous studio highlight) with zero heap allocations.
  */
 object SpectrumColorMapper {
     const val RESTING_SLATE_ARGB: Int = 0x663D3D47 // #3D3D47 @ 40% alpha
@@ -101,30 +128,35 @@ object SpectrumColorMapper {
         val pos = if (normalizedBandPos.isFinite()) normalizedBandPos.coerceIn(0f, 1f) else 0f
         return when (style) {
             SpectrumColorStyle.STUDIO -> STUDIO_ACCENT_RGB
-            SpectrumColorStyle.PRISM -> sampleMultiStopRgb(PRISM_STOPS, pos)
+            SpectrumColorStyle.PRISM -> sampleMultiStopRgb(PRISM_STOPS, pos, PRISM_STOPS.size)
             SpectrumColorStyle.ALBUM_ADAPTIVE -> {
                 val palette = if (albumPalette.size >= 3) albumPalette else AlbumPaletteExtractor.FALLBACK_STUDIO_PALETTE
-                sampleMultiStopRgb(palette, pos)
+                sampleMultiStopRgb(palette, pos, stopCount = 3)
             }
         }
     }
 
     /**
      * Blends resting matte slate (`#3D3D47`) into the active style's color as [energy] rises, with
-     * a crisp luminous peak lift above `0.72f`.
+     * a crisp luminous peak lift above `0.72f` (blending toward `highlightPeak` in Album mode).
      */
     fun resolveBarColorArgb(style: SpectrumColorStyle, normalizedBandPos: Float, energy: Float, albumPalette: IntArray): Int {
+        val pos = if (normalizedBandPos.isFinite()) normalizedBandPos.coerceIn(0f, 1f) else 0f
         val e = if (energy.isFinite()) energy.coerceIn(0f, 1f) else 0f
-        val accentOpaque = resolveAccentColorArgb(style, normalizedBandPos, albumPalette)
+        val accentOpaque = resolveAccentColorArgb(style, pos, albumPalette)
         val activeBarArgb = (ACTIVE_BAR_ALPHA shl 24) or (accentOpaque and 0x00FFFFFF)
 
         return if (e <= 0.72f) {
             lerpArgb(RESTING_SLATE_ARGB, activeBarArgb, e / 0.72f)
         } else {
-            val peakTarget = if (style == SpectrumColorStyle.STUDIO) {
-                STUDIO_TIP_ARGB
-            } else {
-                lerpArgb(activeBarArgb, BRIGHT_WHITE_TINT, 0.42f)
+            val peakTarget = when (style) {
+                SpectrumColorStyle.STUDIO -> STUDIO_TIP_ARGB
+                SpectrumColorStyle.PRISM -> lerpArgb(activeBarArgb, BRIGHT_WHITE_TINT, 0.42f)
+                SpectrumColorStyle.ALBUM_ADAPTIVE -> {
+                    val highlight = resolveAlbumHighlightArgb(albumPalette)
+                    val trebleBoost = (0.44f + pos * 0.24f).coerceIn(0.44f, 0.68f)
+                    lerpArgb(activeBarArgb, highlight, trebleBoost)
+                }
             }
             lerpArgb(activeBarArgb, peakTarget, (e - 0.72f) / 0.28f)
         }
@@ -135,23 +167,49 @@ object SpectrumColorMapper {
         val e = if (energy.isFinite()) energy.coerceIn(0f, 1f) else 0f
         val tipFraction = ((e - 0.68f) / 0.32f).coerceIn(0f, 1f)
         val alpha = (tipFraction * 0.78f * 255f).roundToInt().coerceIn(0, 255)
-        val baseRgb = if (style == SpectrumColorStyle.STUDIO) {
-            STUDIO_TIP_ARGB and 0x00FFFFFF
-        } else {
-            val accent = resolveAccentColorArgb(style, normalizedBandPos, albumPalette)
-            lerpArgb(accent, BRIGHT_WHITE_TINT, 0.55f) and 0x00FFFFFF
+        val baseRgb = when (style) {
+            SpectrumColorStyle.STUDIO -> STUDIO_TIP_ARGB and 0x00FFFFFF
+            SpectrumColorStyle.PRISM -> {
+                val accent = resolveAccentColorArgb(style, normalizedBandPos, albumPalette)
+                lerpArgb(accent, BRIGHT_WHITE_TINT, 0.55f) and 0x00FFFFFF
+            }
+            SpectrumColorStyle.ALBUM_ADAPTIVE -> {
+                val accent = resolveAccentColorArgb(style, normalizedBandPos, albumPalette)
+                val highlight = resolveAlbumHighlightArgb(albumPalette)
+                lerpArgb(accent, highlight, 0.62f) and 0x00FFFFFF
+            }
         }
         return (alpha shl 24) or baseRgb
     }
 
-    /** Brightened opaque spark color derived cleanly from the launching band's color. */
-    fun resolveSparkColorArgb(style: SpectrumColorStyle, normalizedBandPos: Float, albumPalette: IntArray): Int {
+    /**
+     * Resolves the opaque launch color for a kinetic spark spawned at [normalizedBandPos] and peak
+     * [energy], inheriting the exact frequency-band color (`spectrumLow`/`spectrumMid`/`spectrumHigh`)
+     * and blending smoothly toward `highlightPeak` as beat-peak energy rises. Zero allocations.
+     */
+    fun resolveSparkColorArgb(style: SpectrumColorStyle, normalizedBandPos: Float, albumPalette: IntArray, energy: Float = 0.5f): Int {
+        val e = if (energy.isFinite()) energy.coerceIn(0f, 1f) else 0.5f
         val accent = resolveAccentColorArgb(style, normalizedBandPos, albumPalette)
-        return (0xFF shl 24) or (lerpArgb(accent, BRIGHT_WHITE_TINT, 0.28f) and 0x00FFFFFF)
+        val blended = when (style) {
+            SpectrumColorStyle.ALBUM_ADAPTIVE -> {
+                val highlight = resolveAlbumHighlightArgb(albumPalette)
+                val peakWeight = ((e - 0.28f) / 0.72f).coerceIn(0f, 1f) * 0.58f
+                lerpArgb(accent, highlight, peakWeight)
+            }
+            else -> lerpArgb(accent, BRIGHT_WHITE_TINT, 0.28f)
+        }
+        return (0xFF shl 24) or (blended and 0x00FFFFFF)
     }
 
-    private fun sampleMultiStopRgb(stops: IntArray, pos: Float): Int {
-        val lastIdx = stops.size - 1
+    private fun resolveAlbumHighlightArgb(albumPalette: IntArray): Int = if (albumPalette.size >= 4) {
+        (0xFA shl 24) or (albumPalette[3] and 0x00FFFFFF)
+    } else {
+        BRIGHT_WHITE_TINT
+    }
+
+    private fun sampleMultiStopRgb(stops: IntArray, pos: Float, stopCount: Int): Int {
+        val effectiveCount = min(stops.size, stopCount)
+        val lastIdx = effectiveCount - 1
         if (lastIdx <= 0) return stops.firstOrNull() ?: STUDIO_ACCENT_RGB
         val scaled = pos * lastIdx
         val idx0 = scaled.toInt().coerceIn(0, lastIdx)
@@ -233,7 +291,7 @@ class KineticSparkPool {
             ) {
                 bandCooldownSec[i] = BAND_COOLDOWN_SEC
                 val normPos = i.toFloat() / denom
-                val sparkColor = SpectrumColorMapper.resolveSparkColorArgb(style, normPos, albumPalette)
+                val sparkColor = SpectrumColorMapper.resolveSparkColorArgb(style, normPos, albumPalette, energy)
                 val intensity = ((delta + energy) * 0.55f).coerceIn(0f, 1f)
                 val spawnCount = if (delta > 0.24f || energy > 0.72f) 2 else 1
 
@@ -294,6 +352,7 @@ class KineticSparkPool {
         radialVelDp.fill(0f)
         tangentVelDp.fill(0f)
         ageSec.fill(0f)
+        nextSlotCursor = 0
         activeCount = 0
     }
 

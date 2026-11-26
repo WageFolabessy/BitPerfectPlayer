@@ -182,6 +182,7 @@ class AppContainer(context: Context) {
             "spectrumStyle" to prefs.spectrumColorStyle.name,
             "spectrumSparks" to prefs.spectrumSparksEnabled,
             "dynamicCoverTheme" to prefs.dynamicCoverThemeEnabled,
+            "dynamicThemeIntensity" to prefs.dynamicThemeIntensity.name,
         )
     }
 }

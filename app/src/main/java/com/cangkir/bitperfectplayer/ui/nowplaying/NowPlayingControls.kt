@@ -83,7 +83,7 @@ internal const val NOW_PLAYING_SQUARE_ARTWORK_TEST_TAG = "now_playing_square_art
 
 internal fun extractAlbumPaletteFromBitmap(bitmap: Bitmap?): IntArray {
     val validBitmap = bitmap?.takeIf { !it.isRecycled && it.width > 0 && it.height > 0 }
-        ?: return AlbumPaletteExtractor.FALLBACK_STUDIO_PALETTE
+        ?: return AlbumPaletteExtractor.FALLBACK_STUDIO_PALETTE_4
     return runCatching {
         val readableBitmap = if (validBitmap.config == Bitmap.Config.HARDWARE) {
             validBitmap.copy(Bitmap.Config.ARGB_8888, false)
@@ -95,11 +95,11 @@ internal fun extractAlbumPaletteFromBitmap(bitmap: Bitmap?): IntArray {
             val h = readableBitmap.height
             val pixels = IntArray(w * h)
             readableBitmap.getPixels(pixels, 0, w, 0, 0, w, h)
-            AlbumPaletteExtractor.extractAccentPalette(pixels, w, h)
+            AlbumPaletteExtractor.extractSpectrumPalette(pixels, w, h)
         } finally {
             if (readableBitmap !== validBitmap) readableBitmap.recycle()
         }
-    }.getOrDefault(AlbumPaletteExtractor.FALLBACK_STUDIO_PALETTE)
+    }.getOrDefault(AlbumPaletteExtractor.FALLBACK_STUDIO_PALETTE_4)
 }
 
 @Composable

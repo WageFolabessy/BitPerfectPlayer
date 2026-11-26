@@ -1,5 +1,7 @@
 package com.cangkir.bitperfectplayer.data
 
+import com.cangkir.bitperfectplayer.ui.theme.DynamicThemeIntensity
+
 /**
  * Portable, schema-versioned local backup payload covering all user-created and local-only
  * application data: Playlists, Saved Lyrics (keyed by SHA-256), Favorites, and Track Listening Stats.
@@ -20,6 +22,7 @@ data class LocalBackupPayload(
     val exportedAtEpochMs: Long = 0L,
     val defaultHomepage: DefaultHomepage = DefaultHomepage.ALL_SONGS,
     val dynamicCoverThemeEnabled: Boolean = false,
+    val dynamicThemeIntensity: DynamicThemeIntensity = DynamicThemeIntensity.VIBRANT,
     val playlists: List<BackupPlaylist> = emptyList(),
     val lyrics: List<LyricsRecord> = emptyList(),
     val favorites: List<FavoriteTrackRecord> = emptyList(),
@@ -54,6 +57,9 @@ object LocalBackupCodec {
         appendJsonString(sb, payload.defaultHomepage.name)
         sb.append(",\n")
         sb.append("  \"dynamicCoverThemeEnabled\": ").append(payload.dynamicCoverThemeEnabled).append(",\n")
+        sb.append("  \"dynamicThemeIntensity\": ")
+        appendJsonString(sb, payload.dynamicThemeIntensity.name)
+        sb.append(",\n")
 
         appendPlaylistsJson(sb, payload.playlists)
         appendLyricsJson(sb, payload.lyrics)
@@ -202,6 +208,7 @@ object LocalBackupCodec {
         val exportedAt = root.optionalLong("exportedAtEpochMs")?.coerceAtLeast(0L) ?: 0L
         val defaultHomepage = DefaultHomepage.fromStoredName(root.optionalString("defaultHomepage"))
         val dynamicCoverThemeEnabled = root.optionalBoolean("dynamicCoverThemeEnabled") ?: false
+        val dynamicThemeIntensity = DynamicThemeIntensity.fromStoredName(root.optionalString("dynamicThemeIntensity"))
 
         LocalBackupPayload(
             schemaVersion = schemaVersion,
@@ -209,6 +216,7 @@ object LocalBackupCodec {
             exportedAtEpochMs = exportedAt,
             defaultHomepage = defaultHomepage,
             dynamicCoverThemeEnabled = dynamicCoverThemeEnabled,
+            dynamicThemeIntensity = dynamicThemeIntensity,
             playlists = decodePlaylists(root.requireArray("playlists")),
             lyrics = decodeLyrics(root.requireArray("lyrics")),
             favorites = decodeFavorites(root.requireArray("favorites")),

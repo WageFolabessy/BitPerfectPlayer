@@ -110,6 +110,13 @@ object DynamicThemeSlotPolicy {
     } else {
         AlbumPaletteExtractor.FALLBACK_STUDIO_PALETTE.copyOf()
     }
+
+    /** Maps [palette] into a 4-stop OLED spectrum palette `[low, mid, high, highlightPeak]`. */
+    fun toSpectrumPalette(palette: ArtworkColorPalette?): IntArray = if (palette != null && !palette.isMonochrome) {
+        palette.toSpectrumPalette()
+    } else {
+        AlbumPaletteExtractor.FALLBACK_STUDIO_PALETTE_4.copyOf()
+    }
 }
 
 /**
@@ -125,6 +132,7 @@ class DynamicThemeCoordinator(
     private val activeTrackFlow: StateFlow<PlaybackTrack?>,
     private val artworkStyleFlow: StateFlow<NowPlayingArtworkStyle>,
     initialIntensity: DynamicThemeIntensity = DynamicThemeIntensity.SUBTLE,
+    private val intensityFlow: StateFlow<DynamicThemeIntensity>? = null,
 ) {
     private data class PlaybackThemeRequest(
         val enabled: Boolean,
@@ -134,7 +142,7 @@ class DynamicThemeCoordinator(
         val requestIdentityKey: String,
     )
 
-    private val intensityState = MutableStateFlow(initialIntensity)
+    private val intensityState = MutableStateFlow(intensityFlow?.value ?: initialIntensity)
     val intensity: StateFlow<DynamicThemeIntensity> = intensityState.asStateFlow()
 
     // Keyed by track URI so track skips immediately reset back-cover visibility without a race window.
@@ -188,6 +196,13 @@ class DynamicThemeCoordinator(
     )
 
     init {
+        intensityFlow?.let { externalFlow ->
+            scope.launch {
+                externalFlow.collect { persisted ->
+                    intensityState.value = persisted
+                }
+            }
+        }
         observePlaybackTheme()
     }
 

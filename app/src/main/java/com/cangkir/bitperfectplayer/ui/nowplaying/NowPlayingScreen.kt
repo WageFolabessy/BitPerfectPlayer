@@ -52,6 +52,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -80,6 +81,7 @@ import com.cangkir.bitperfectplayer.ui.SleepTimerBottomSheet
 import com.cangkir.bitperfectplayer.ui.SleepTimerTopBarButton
 import com.cangkir.bitperfectplayer.ui.WindowLayoutMetrics
 import com.cangkir.bitperfectplayer.ui.theme.AmberIndicated
+import com.cangkir.bitperfectplayer.ui.theme.AmbientNowPlayingGlow
 import com.cangkir.bitperfectplayer.ui.theme.CoverThemeColorCache
 import com.cangkir.bitperfectplayer.ui.theme.EmeraldSafe
 import com.cangkir.bitperfectplayer.ui.theme.TextMuted
@@ -168,9 +170,9 @@ fun NowPlayingScreen(
         }
     }
 
-    // Unified 4-slot OKLCH spectrum triad lookup reusing CoverThemeColorCache off-main when available.
+    // Unified 4-slot OKLCH spectrum palette ([low, mid, high, highlightPeak]) reusing CoverThemeColorCache off-main.
     var albumSpectrumPalette by remember(track?.uriString) {
-        mutableStateOf(AlbumPaletteExtractor.FALLBACK_STUDIO_PALETTE)
+        mutableStateOf(AlbumPaletteExtractor.FALLBACK_STUDIO_PALETTE_4)
     }
     LaunchedEffect(
         track?.uriString,
@@ -184,7 +186,7 @@ fun NowPlayingScreen(
             return@LaunchedEffect
         }
         albumSpectrumPalette = if (coverThemeColorCache != null) {
-            coverThemeColorCache.resolveSpectrumTriad(
+            coverThemeColorCache.resolveSpectrumPalette(
                 track = track,
                 artworkStyle = artworkStyle,
                 isBackCoverVisible = isBackCoverVisible,
@@ -578,18 +580,44 @@ private fun NowPlayingHeroCenterpiece(
                     swipeExclusionBounds.vinylDiscCenterInRoot = rect.center
                     swipeExclusionBounds.vinylDiscRadiusPx = minOf(rect.width, rect.height) / 2f
                 }
-                if (spectrumVisualizerEnabled) {
-                    RadialSpectrumRing(
-                        isEnabled = true,
-                        isPlaying = isPlaying,
-                        sampleSpectrumWindow = onSampleSpectrumWindow,
-                        containerDiameter = discContainerDiameter,
-                        vinylDiameter = vinylDiscDiameter,
-                        colorStyle = spectrumColorStyle,
-                        sparksEnabled = spectrumSparksEnabled,
-                        albumPalette = albumSpectrumPalette,
-                        trackKey = track.uriString,
-                    ) {
+                Box(contentAlignment = Alignment.Center) {
+                    AmbientNowPlayingGlow(
+                        modifier = Modifier
+                            .matchParentSize()
+                            .graphicsLayer {
+                                scaleX = 1.24f
+                                scaleY = 1.24f
+                            },
+                    )
+                    if (spectrumVisualizerEnabled) {
+                        RadialSpectrumRing(
+                            isEnabled = true,
+                            isPlaying = isPlaying,
+                            sampleSpectrumWindow = onSampleSpectrumWindow,
+                            containerDiameter = discContainerDiameter,
+                            vinylDiameter = vinylDiscDiameter,
+                            colorStyle = spectrumColorStyle,
+                            sparksEnabled = spectrumSparksEnabled,
+                            albumPalette = albumSpectrumPalette,
+                            trackKey = track.uriString,
+                        ) {
+                            InteractiveVinylDisc(
+                                track = track,
+                                isPlaying = isPlaying,
+                                isSafeMode = isSafeMode,
+                                durationMs = durationMs,
+                                playbackPositionMsFlow = playbackPositionMsFlow,
+                                scrubPreviewMsState = vinylScrubPreviewMs,
+                                albumArtworkLoader = albumArtworkLoader,
+                                onSeekTo = onSeekTo,
+                                modifier = vinylBoundsModifier,
+                                discDiameter = vinylDiscDiameter,
+                                onBeginTurntableScratch = onBeginTurntableScratch,
+                                onUpdateTurntableScratchRate = onUpdateTurntableScratchRate,
+                                onEndTurntableScratch = onEndTurntableScratch,
+                            )
+                        }
+                    } else {
                         InteractiveVinylDisc(
                             track = track,
                             isPlaying = isPlaying,
@@ -606,34 +634,28 @@ private fun NowPlayingHeroCenterpiece(
                             onEndTurntableScratch = onEndTurntableScratch,
                         )
                     }
-                } else {
-                    InteractiveVinylDisc(
-                        track = track,
-                        isPlaying = isPlaying,
-                        isSafeMode = isSafeMode,
-                        durationMs = durationMs,
-                        playbackPositionMsFlow = playbackPositionMsFlow,
-                        scrubPreviewMsState = vinylScrubPreviewMs,
-                        albumArtworkLoader = albumArtworkLoader,
-                        onSeekTo = onSeekTo,
-                        modifier = vinylBoundsModifier,
-                        discDiameter = vinylDiscDiameter,
-                        onBeginTurntableScratch = onBeginTurntableScratch,
-                        onUpdateTurntableScratchRate = onUpdateTurntableScratchRate,
-                        onEndTurntableScratch = onEndTurntableScratch,
-                    )
                 }
             }
             NowPlayingArtworkStyle.SQUARE_COVER -> {
-                SwipeableSquareArtwork(
-                    track = track,
-                    albumArtworkLoader = albumArtworkLoader,
-                    onPrevious = onPrevious,
-                    onNext = onNext,
-                    artworkSize = squareArtworkSize,
-                    onBoundsInRootChanged = { swipeExclusionBounds.squareArtworkRectInRoot = it },
-                    onBackCoverVisibilityChanged = onBackCoverVisibilityChanged,
-                )
+                Box(contentAlignment = Alignment.Center) {
+                    AmbientNowPlayingGlow(
+                        modifier = Modifier
+                            .matchParentSize()
+                            .graphicsLayer {
+                                scaleX = 1.22f
+                                scaleY = 1.22f
+                            },
+                    )
+                    SwipeableSquareArtwork(
+                        track = track,
+                        albumArtworkLoader = albumArtworkLoader,
+                        onPrevious = onPrevious,
+                        onNext = onNext,
+                        artworkSize = squareArtworkSize,
+                        onBoundsInRootChanged = { swipeExclusionBounds.squareArtworkRectInRoot = it },
+                        onBackCoverVisibilityChanged = onBackCoverVisibilityChanged,
+                    )
+                }
                 if (spectrumVisualizerEnabled) {
                     Spacer(modifier = Modifier.height(8.dp))
                     CompactSpectrumBarStrip(

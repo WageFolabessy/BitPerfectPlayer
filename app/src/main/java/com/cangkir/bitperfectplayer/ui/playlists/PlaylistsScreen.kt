@@ -87,6 +87,8 @@ fun PlaylistsScreen(
     onRemovePlaylistEntryWithTitle: ((Long, Long, String, String) -> Unit)? = null,
     onCommitPlaylistOrder: (Long, List<Long>) -> Unit = { _, _ -> },
     dynamicCoverThemeEnabled: Boolean = false,
+    dynamicThemeIntensity: com.cangkir.bitperfectplayer.ui.theme.DynamicThemeIntensity =
+        com.cangkir.bitperfectplayer.ui.theme.DynamicThemeIntensity.VIBRANT,
     coverThemeColorCache: CoverThemeColorCache? = null,
     isForegroundPage: Boolean = true,
     onDetailViewOpenChanged: (Boolean) -> Unit = {},
@@ -122,6 +124,7 @@ fun PlaylistsScreen(
     }
     LaunchedEffect(
         dynamicCoverThemeEnabled,
+        dynamicThemeIntensity,
         isForegroundPage,
         openedPlaylist?.id,
         playlistThemeCandidates,
@@ -134,12 +137,15 @@ fun PlaylistsScreen(
             return@LaunchedEffect
         }
         val peeked = playlistThemeCandidates.firstNotNullOfOrNull {
-            (coverThemeColorCache.peekCached(it) as? CoverThemeLookup.Resolved)?.tokens
+            (coverThemeColorCache.peekCached(it, intensity = dynamicThemeIntensity) as? CoverThemeLookup.Resolved)?.tokens
         }
         if (peeked != null) {
             cb(peeked)
         }
-        val resolved = coverThemeColorCache.resolveFirstChromaticTokens(playlistThemeCandidates)
+        val resolved = coverThemeColorCache.resolveFirstChromaticTokens(
+            candidates = playlistThemeCandidates,
+            intensity = dynamicThemeIntensity,
+        )
         cb(resolved)
     }
     DisposableEffect(Unit) {

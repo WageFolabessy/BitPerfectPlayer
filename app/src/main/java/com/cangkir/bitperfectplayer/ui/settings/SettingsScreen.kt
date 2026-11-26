@@ -64,6 +64,7 @@ import com.cangkir.bitperfectplayer.ui.WindowLayoutMetrics
 import com.cangkir.bitperfectplayer.ui.nowplaying.LocalSwipeExclusionBounds
 import com.cangkir.bitperfectplayer.ui.nowplaying.NowPlayingSwipeExclusionBounds
 import com.cangkir.bitperfectplayer.ui.theme.AmberIndicated
+import com.cangkir.bitperfectplayer.ui.theme.DynamicThemeIntensity
 import com.cangkir.bitperfectplayer.ui.theme.EmeraldSafe
 import kotlinx.coroutines.flow.StateFlow
 
@@ -85,6 +86,8 @@ fun SettingsScreen(
     onSetSpectrumSparksEnabled: (Boolean) -> Unit = {},
     dynamicCoverThemeEnabled: Boolean = false,
     onSetDynamicCoverThemeEnabled: (Boolean) -> Unit = {},
+    dynamicThemeIntensity: DynamicThemeIntensity = DynamicThemeIntensity.VIBRANT,
+    onSetDynamicThemeIntensity: (DynamicThemeIntensity) -> Unit = {},
     diagnosticLoggingEnabled: Boolean = false,
     diagnosticLogStats: DiagnosticLogStats = DiagnosticLogStats(),
     onSetDiagnosticLoggingEnabled: (Boolean) -> Unit = {},
@@ -309,6 +312,8 @@ fun SettingsScreen(
                         onSetSpectrumSparksEnabled = onSetSpectrumSparksEnabled,
                         dynamicCoverThemeEnabled = dynamicCoverThemeEnabled,
                         onSetDynamicCoverThemeEnabled = onSetDynamicCoverThemeEnabled,
+                        dynamicThemeIntensity = dynamicThemeIntensity,
+                        onSetDynamicThemeIntensity = onSetDynamicThemeIntensity,
                     )
                 }
 

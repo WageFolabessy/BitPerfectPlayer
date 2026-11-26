@@ -263,5 +263,39 @@ class PersistenceAndPreferencesTest {
         DefaultHomepage.entries.forEach { option ->
             assertEquals(option, DefaultHomepage.fromStoredName(option.name))
         }
+
+        assertEquals(
+            com.cangkir.bitperfectplayer.ui.theme.DynamicThemeIntensity.VIBRANT,
+            com.cangkir.bitperfectplayer.ui.theme.DynamicThemeIntensity.fromStoredName(null),
+        )
+        assertEquals(
+            com.cangkir.bitperfectplayer.ui.theme.DynamicThemeIntensity.VIBRANT,
+            com.cangkir.bitperfectplayer.ui.theme.DynamicThemeIntensity.fromStoredName("CORRUPTED"),
+        )
+        assertEquals(
+            com.cangkir.bitperfectplayer.ui.theme.DynamicThemeIntensity.SUBTLE,
+            com.cangkir.bitperfectplayer.ui.theme.DynamicThemeIntensity.fromStoredName(" subtle "),
+        )
+    }
+
+    @Test
+    fun dynamicThemeIntensity_persistsSubtleAndVibrantInDataStoreWithVibrantDefault() = runTest(UnconfinedTestDispatcher()) {
+        val repo = createTestRepository(this)
+        assertEquals(
+            com.cangkir.bitperfectplayer.ui.theme.DynamicThemeIntensity.VIBRANT,
+            repo.getSnapshot().dynamicThemeIntensity,
+        )
+
+        repo.setDynamicThemeIntensity(com.cangkir.bitperfectplayer.ui.theme.DynamicThemeIntensity.SUBTLE)
+        assertEquals(
+            com.cangkir.bitperfectplayer.ui.theme.DynamicThemeIntensity.SUBTLE,
+            repo.getSnapshot().dynamicThemeIntensity,
+        )
+
+        repo.setDynamicThemeIntensity(com.cangkir.bitperfectplayer.ui.theme.DynamicThemeIntensity.VIBRANT)
+        assertEquals(
+            com.cangkir.bitperfectplayer.ui.theme.DynamicThemeIntensity.VIBRANT,
+            repo.getSnapshot().dynamicThemeIntensity,
+        )
     }
 }

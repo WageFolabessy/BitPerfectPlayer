@@ -91,6 +91,8 @@ fun LibraryScreen(
     onOpenQueue: () -> Unit = {},
     initialTab: LibraryTab = LibraryTab.ALL_SONGS,
     dynamicCoverThemeEnabled: Boolean = false,
+    dynamicThemeIntensity: com.cangkir.bitperfectplayer.ui.theme.DynamicThemeIntensity =
+        com.cangkir.bitperfectplayer.ui.theme.DynamicThemeIntensity.VIBRANT,
     coverThemeColorCache: CoverThemeColorCache? = null,
     artistPhotoStore: ArtistPhotoStore? = null,
     artistPhotoRevision: Int = 0,
@@ -289,6 +291,7 @@ fun LibraryScreen(
 
     AlbumDetailDynamicThemeWrapper(
         enabled = dynamicCoverThemeEnabled && isAnyAlbumDetailOpen,
+        dynamicThemeIntensity = dynamicThemeIntensity,
         isForegroundPage = isForegroundPage && !isArtistDetailOpen,
         manageHostContextualTheme = !isArtistDetailOpen,
         candidates = albumThemeCandidates,
@@ -328,6 +331,7 @@ fun LibraryScreen(
                 artistPhotoStore = artistPhotoStore,
                 artistPhotoRevision = artistPhotoRevision,
                 dynamicCoverThemeEnabled = dynamicCoverThemeEnabled,
+                dynamicThemeIntensity = dynamicThemeIntensity,
                 coverThemeColorCache = coverThemeColorCache,
                 onBack = {
                     openedArtistAlbumName = null
@@ -702,6 +706,7 @@ private fun LibraryPagerPageContent(
 @Composable
 private fun AlbumDetailDynamicThemeWrapper(
     enabled: Boolean,
+    dynamicThemeIntensity: com.cangkir.bitperfectplayer.ui.theme.DynamicThemeIntensity,
     isForegroundPage: Boolean,
     manageHostContextualTheme: Boolean,
     candidates: List<PlaybackTrack>,
@@ -714,11 +719,13 @@ private fun AlbumDetailDynamicThemeWrapper(
     val cacheKeys = remember(candidates, coverThemeColorCache) {
         if (coverThemeColorCache == null) emptyList() else candidates.map { coverThemeColorCache.cacheKeyFor(it) }
     }
-    var resolvedPair by remember(enabled, cacheKeys) {
+    var resolvedPair by remember(enabled, dynamicThemeIntensity, cacheKeys) {
         val peeked = if (enabled && coverThemeColorCache != null && candidates.isNotEmpty()) {
-            val allCached = candidates.all { coverThemeColorCache.peekCached(it) is CoverThemeLookup.Resolved }
+            val allCached = candidates.all {
+                coverThemeColorCache.peekCached(it, intensity = dynamicThemeIntensity) is CoverThemeLookup.Resolved
+            }
             val firstChromatic = candidates.firstNotNullOfOrNull {
-                (coverThemeColorCache.peekCached(it) as? CoverThemeLookup.Resolved)?.tokens
+                (coverThemeColorCache.peekCached(it, intensity = dynamicThemeIntensity) as? CoverThemeLookup.Resolved)?.tokens
             }
             if (firstChromatic != null) {
                 CoverThemeLookup.Resolved(firstChromatic)
@@ -734,10 +741,13 @@ private fun AlbumDetailDynamicThemeWrapper(
     }
 
     val activeCache = coverThemeColorCache?.takeIf { enabled && candidates.isNotEmpty() }
-    LaunchedEffect(activeCache, isForegroundPage, cacheKeys) {
+    LaunchedEffect(activeCache, dynamicThemeIntensity, isForegroundPage, cacheKeys) {
         if (activeCache != null && resolvedPair is CoverThemeLookup.Pending) {
             resolvedPair = CoverThemeLookup.Resolved(
-                activeCache.resolveFirstChromaticTokens(candidates),
+                activeCache.resolveFirstChromaticTokens(
+                    candidates = candidates,
+                    intensity = dynamicThemeIntensity,
+                ),
             )
         }
     }
